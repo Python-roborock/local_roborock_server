@@ -808,11 +808,13 @@ class RuntimeState:
 
         connected = bool(vac.get("connected"))
         if not connected and last_message_at:
-            parsed = _parse_iso(last_message_at)
-            if parsed is not None:
-                delta = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
-                if delta.total_seconds() <= 180:
-                    connected = True
+            last_mqtt_at = str(vac.get("last_mqtt_at") or "")
+            if last_mqtt_at:
+                parsed = _parse_iso(last_mqtt_at)
+                if parsed is not None:
+                    delta = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+                    if delta.total_seconds() <= 180:
+                        connected = True
 
         return {
             "duid": duid,

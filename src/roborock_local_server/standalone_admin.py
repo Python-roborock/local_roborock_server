@@ -58,12 +58,7 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           <button id="fetchData">Fetch Data</button>
           <pre id="cloudResult">No cloud request yet.</pre>
         </section>
-        <section><h2>Pair Device</h2>
-          <button id="pairDevice">Pair Device</button>
-          <div id="pairingMessage" style="margin-top:8px">No pairing session started.</div>
-          <div id="pairingTarget" style="margin-top:8px;color:#555"></div>
-          <div id="pairingSteps" style="display:grid;gap:6px;margin-top:12px"></div>
-        </section>
+
         <section><h2>Health</h2><pre id="health"></pre></section>
         <section><h2>Vacuums</h2><pre id="vacuums"></pre></section>
         <script>
@@ -133,28 +128,10 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
             container.appendChild(card);
           }}
         }}
-        function renderPairing(pairing) {{
-          const payload = pairing || {{}};
-          const steps = Array.isArray(payload.steps) ? payload.steps : [];
-          const target = payload.target || {{}};
-          document.getElementById("pairingMessage").textContent = payload.message || "No pairing session started.";
-          const targetIdentity = target.name || target.did || target.duid || "";
-          document.getElementById("pairingTarget").textContent = targetIdentity
-            ? `Tracking: ${{targetIdentity}}`
-            : "";
-          const container = document.getElementById("pairingSteps");
-          container.innerHTML = "";
-          for (const step of steps) {{
-            const row = document.createElement("div");
-            const detail = step.detail ? ` ${{step.detail}}` : "";
-            row.innerHTML = `${{step.checked ? "&#10003;" : "&#9633;"}} ${{step.label}}${{detail}}`;
-            container.appendChild(row);
-          }}
-        }}
+
         async function refresh() {{
           const status = await fetchJson("/admin/api/status");
           document.getElementById("overall").textContent = status.health.overall_ok ? "Healthy" : "Needs Attention";
-          renderPairing(status.pairing);
           document.getElementById("health").textContent = JSON.stringify(status.health, null, 2);
           const vacuums = await fetchJson("/admin/api/vacuums");
           renderVacuumSummary(vacuums.vacuums);
@@ -187,14 +164,7 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
             document.getElementById("cloudResult").textContent = error.message;
           }}
         }});
-        document.getElementById("pairDevice").addEventListener("click", async () => {{
-          try {{
-            const payload = await fetchJson("/admin/api/pair-device", {{method:"POST"}});
-            renderPairing(payload.pairing);
-          }} catch (error) {{
-            document.getElementById("pairingMessage").textContent = error.message;
-          }}
-        }});
+
         document.getElementById("logout").addEventListener("click", async () => {{
           await fetch("/admin/api/logout", {{method:"POST"}});
           window.location.reload();
@@ -255,11 +225,6 @@ def register_standalone_admin_routes(
         supervisor._require_admin(request)
         return JSONResponse(supervisor._vacuums_payload())
 
-    @app.post("/admin/api/pair-device")
-    async def admin_pair_device(request: Request) -> JSONResponse:
-        supervisor._require_admin(request)
-        pairing = supervisor.runtime_state.start_pairing_session()
-        return JSONResponse({"ok": True, "pairing": pairing})
 
     @app.post("/admin/api/cloud/request-code")
     async def admin_cloud_request_code(request: Request) -> JSONResponse:

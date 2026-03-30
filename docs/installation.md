@@ -1,20 +1,26 @@
 # Installation
 
-## Requirements:
+## Requirements
 
 - Docker
-- Python
-- Two machines (one to run the server and one to do the onboarding)
+- Python (I recommend installing [uv](https://docs.astral.sh/uv/getting-started/installation/))
+- Two machines — one to run the server and one to do the onboarding
 - A domain name that you own
-- A machine that can host this with the following ports exposed (INTERNALLY in YOUR network):
-```
-443
-8883
-```
+- A machine that can host this with ports `443` and `8883` exposed internally on your network
+
+## Network Setup
+
+1. Pick a URL for this application. It needs to be a subdomain of a domain you own, and it **must** start with `api-`. It does NOT need to be accessible outside your network — in fact, I strongly recommend you keep it internal only for now.
+
+   For example, if you own `example.com`, I'd recommend `api-roborock.example.com`. Throughout the rest of the docs we'll refer to this as the **FQDN**. If you follow this format, you can just replace `example.com` with your real domain wherever you see it.
+
+2. Your network **must** handle its own DNS for the network the vacuum connects to. If it uses an external DNS server like `8.8.8.8`, this will not work.
+
+3. Create DNS records pointing to your server's local IP address for both `api-roborock.example.com` and `mqtt-roborock.example.com`.
 
 ## Docker Setup
 
-1. You should clone this repository:
+1. Clone this repository:
 
 `git clone https://github.com/Python-roborock/local_roborock_server`
 
@@ -24,7 +30,7 @@
 cd roborock_local_server
 ```
 
-3. Install the local project environment.
+3. Install the project dependencies.
 
 ```bash
 uv sync
@@ -33,29 +39,30 @@ uv sync
 4. Run the setup wizard.
 
 ```bash
-uv run roborock-local-server configure
+uv run --no-project src/roborock_local_server/configure.py
 ```
 
 The wizard asks only for:
 
-- your `stack_fqdn` (this is your URL for your server. It MUST start with 'api-')
+- your `stack_fqdn` (the URL for your server — must start with `api-`)
 - embedded MQTT or your own broker
 - whether to use Cloudflare DNS-01 auto-renew
 - your admin password
 
-It then writes `config.toml` for you, generates `admin.password_hash`, generates `admin.session_secret`, and if you chose Cloudflare it also writes `secrets/cloudflare_token`.
+It then writes `config.toml`, generates `admin.password_hash` and `admin.session_secret`, and if you chose Cloudflare it also writes `secrets/cloudflare_token`.
 
 5. If you chose external MQTT, fill in `broker.host` in `config.toml` before starting the stack. See: [Custom MQTT](#Custom_mqtt)
 
 6. If you skipped Cloudflare, put your certificate files in `data/certs/fullchain.pem` and `data/certs/privkey.pem`. See: [Custom cert](#custom_cert)
 
-7. Decide on your url. it must start with 'api-'. Set the DNS record on your network to resolve your url to your server.
+7. Start the container:
 
-If your server is 'api-roborock.example.com', you should set the following DNS records to resolve to your server ip:
-'api-roborock.example.com'
-'mqtt-roborock.example.com'
+   ```bash
+   docker-compose up -d --build
+   ```
 
-7. Now you can start the container by running:
-`docker-compose up -d --build`
+8. Go to the admin dashboard: https://api-roborock.example.com/admin (Replace with your real domain.)
 
-8.
+9. Import your data from the cloud so things like routines and rooms will work. Enter your email in under cloud import, then hit send code. Once the code is returned enter the code and hit fetch data.
+
+Please look at Onboarding for how to onboard a new device

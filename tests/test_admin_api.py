@@ -189,7 +189,7 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
     dashboard_page = client.get("/admin")
     assert dashboard_page.status_code == 200
     assert "Cloud Import" in dashboard_page.text
-    assert "Pair Device" in dashboard_page.text
+
     assert "Num query samples" in dashboard_page.text
     assert "Public Key determined" in dashboard_page.text
     assert "Mqtt connected" in dashboard_page.text
@@ -274,97 +274,6 @@ def test_ui_api_health_and_vacuums_return_runtime_payload_without_auth(tmp_path:
     assert s7["name"] == "S7"
     assert s7["connected"] is True
 
-
-def test_admin_pair_device_flow_tracks_region_nc_public_key_and_connected(tmp_path: Path) -> None:
-    config_file = write_release_config(tmp_path)
-    config = load_config(config_file)
-    paths = resolve_paths(config_file, config)
-    supervisor = ReleaseSupervisor(config=config, paths=paths)
-
-    client = TestClient(supervisor.app)
-    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
-    assert login.status_code == 200
-
-    start_pairing = client.post("/admin/api/pair-device")
-    assert start_pairing.status_code == 200
-    pairing_payload = start_pairing.json()["pairing"]
-    assert pairing_payload["active"] is True
-    assert pairing_payload["message"] == "Waiting for device to pair - please use the onboarding script"
-    assert pairing_payload["checks"] == {
-        "region": False,
-        "nc": False,
-        "public_key": False,
-        "connected": False,
-    }
-    public_key_step = next(step for step in pairing_payload["steps"] if step["key"] == "public_key")
-    assert public_key_step["detail"] == "(0 samples)"
-
-    region_response = client.get("/region")
-    assert region_response.status_code == 200
-    pairing_after_region = client.get("/admin/api/status").json()["pairing"]
-    assert pairing_after_region["checks"]["region"] is True
-    assert pairing_after_region["checks"]["nc"] is False
-
-    did = "1234567890123"
-    nc_response = client.get(f"/api/v1/nc/prepare?did={did}")
-    assert nc_response.status_code == 200
-    pairing_after_nc = client.get("/admin/api/status").json()["pairing"]
-    assert pairing_after_nc["checks"]["nc"] is True
-    assert pairing_after_nc["target"]["did"] == did
-
-    started_at = datetime.fromisoformat(pairing_payload["started_at"])
-    recovered_at = (started_at + timedelta(seconds=1)).isoformat()
-    paths.device_key_state_path.write_text(
-        json.dumps(
-            {
-                "devices": {
-                    did: {
-                        "samples": [
-                            {
-                                "canonical": "foo=bar",
-                                "signature_b64": "QUJD",
-                            }
-                        ],
-                        "modulus_hex": "abcd",
-                        "recovery": {
-                            "state": "recovered",
-                            "note": "Public key is available.",
-                            "finished_at": recovered_at,
-                        },
-                    }
-                }
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    pairing_after_key = client.get("/admin/api/status").json()["pairing"]
-    assert pairing_after_key["checks"]["public_key"] is True
-    public_key_step = next(step for step in pairing_after_key["steps"] if step["key"] == "public_key")
-    assert public_key_step["detail"] == "(1 sample)"
-
-    supervisor.runtime_state.record_mqtt_connection(conn_id="pair-1", client_ip="testclient", client_port=1883)
-    supervisor.runtime_state.record_mqtt_message(
-        conn_id="pair-1",
-        direction="c2b",
-        topic=f"rr/d/i/{did}/mqtt-user",
-        payload_preview="{}",
-    )
-
-    pairing_after_connect = client.get("/admin/api/status").json()["pairing"]
-    assert pairing_after_connect["checks"] == {
-        "region": True,
-        "nc": True,
-        "public_key": True,
-        "connected": True,
-    }
-    assert pairing_after_connect["complete"] is True
-
-    supervisor.runtime_state.record_mqtt_disconnect(conn_id="pair-1")
-    pairing_after_disconnect = client.get("/admin/api/status").json()["pairing"]
-    assert pairing_after_disconnect["checks"]["connected"] is False
-    assert pairing_after_disconnect["complete"] is False
 
 
 def test_admin_status_health_deduplicates_split_runtime_and_inventory_entries(tmp_path: Path) -> None:

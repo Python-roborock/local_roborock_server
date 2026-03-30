@@ -1,9 +1,17 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """Interactive config.toml writer for opinionated local-server setups."""
 
 from __future__ import annotations
 
+import argparse
+import base64
 from dataclasses import dataclass
 from getpass import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,7 +19,19 @@ import re
 import secrets
 from urllib.parse import urlsplit
 
-from .security import hash_password
+
+def _urlsafe_b64encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def hash_password(password: str, *, iterations: int = 600_000) -> str:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return (
+        f"pbkdf2_sha256${iterations}$"
+        f"{_urlsafe_b64encode(salt)}$"
+        f"{_urlsafe_b64encode(digest)}"
+    )
 
 
 _HOST_RE = re.compile(r"^[a-z0-9.-]+$")
@@ -105,7 +125,7 @@ def _prompt_password() -> str:
 def collect_configure_answers() -> ConfigureAnswers:
     print("This writes a small config.toml with opinionated defaults.")
     stack_fqdn = _prompt_hostname(
-        "Stack FQDN (hostname only; it does not need to start with api-): ",
+        "Stack FQDN (hostname only (no 'https://'); it needs to start with api-): ",
         field_name="stack_fqdn",
     )
     use_external_broker = _prompt_yes_no("Use your own MQTT broker instead of the embedded one?", default=False)
@@ -261,3 +281,23 @@ def write_config_setup(
 def run_configure(*, config_file: str | Path, force: bool = False) -> ConfigureResult:
     answers = collect_configure_answers()
     return write_config_setup(config_file=config_file, answers=answers, force=force)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Generate config.toml for roborock-local-server")
+    parser.add_argument("--config", default="config.toml", help="Output path (default: config.toml)")
+    parser.add_argument("--force", action="store_true", help="Overwrite existing files")
+    args = parser.parse_args()
+
+    result = run_configure(config_file=args.config, force=args.force)
+
+    print(f"\nWrote {result.config_file}")
+    if result.cloudflare_token_file:
+        print(f"Wrote {result.cloudflare_token_file}")
+    if result.broker_template_needs_edit:
+        print("NOTE: You chose an external broker — edit config.toml to set broker.host before starting.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

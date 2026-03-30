@@ -7,3 +7,4 @@ data/
 site/
 secrets/
 config.toml
+mitm_logs

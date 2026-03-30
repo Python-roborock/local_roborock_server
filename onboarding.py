@@ -119,9 +119,8 @@ def sanitize_server(url: str) -> str:
     return url
 
 
-def main() -> int:
-    args = build_parser().parse_args()
-    args.server = sanitize_server(args.server)
+def onboard_once(args: argparse.Namespace) -> bool:
+    """Run a single onboarding attempt. Returns True on success, False on failure."""
     token_s = f"S_TOKEN_{secrets.token_hex(16)}"
     token_t = f"T_TOKEN_{secrets.token_hex(16)}"
 
@@ -137,7 +136,7 @@ def main() -> int:
         hello_resp = recv_with_timeout(s, CFGWIFI_TIMEOUT_SECONDS)
         if not hello_resp:
             print("HELLO: no response")
-            return 2
+            return False
 
         cmd = parse_cmd(hello_resp)
         dec = rsa_decrypt_blocks(parse_payload(hello_resp), priv).decode(errors="replace")
@@ -147,7 +146,7 @@ def main() -> int:
         session_key = parsed["params"]["key"]
         if not isinstance(session_key, str) or len(session_key) != 16:
             print("HELLO: session key invalid")
-            return 3
+            return False
         print(f"SESSION_KEY={session_key}")
 
         body = {
@@ -172,13 +171,31 @@ def main() -> int:
         wifi_resp = recv_with_timeout(s, CFGWIFI_TIMEOUT_SECONDS)
         if wifi_resp is None:
             print("WIFI_RESP: none")
-            return 0
-
-        print(f"WIFI_RESP_CMD={parse_cmd(wifi_resp)}")
-        print(f"WIFI_RESP_HEX={wifi_resp.hex()[:800]}")
-        return 0
+        else:
+            print(f"WIFI_RESP_CMD={parse_cmd(wifi_resp)}")
+            print(f"WIFI_RESP_HEX={wifi_resp.hex()[:800]}")
+        return True
     finally:
         s.close()
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    args.server = sanitize_server(args.server)
+
+    while True:
+        print("\n--- Reset the Vacuum's Wifi and connect to its wifi network ---")
+        user_input = input("Press Enter to send onboarding message (or type 'exit' to quit): ")
+        if user_input.strip().lower() == "exit":
+            print("Exiting.")
+            return 0
+
+        print()
+        success = onboard_once(args)
+        if success:
+            print("\nOnboarding message sent successfully.")
+        else:
+            print("\nOnboarding failed. You can try again.")
 
 
 if __name__ == "__main__":
