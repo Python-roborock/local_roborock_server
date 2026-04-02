@@ -1,5 +1,3 @@
-"""Route handler for bootstrap time resolution."""
-
 from __future__ import annotations
 
 import time
@@ -14,11 +12,10 @@ def match(path: str) -> bool:
 
 
 def build(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
+    _ctx: ServerContext,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = ctx, query_params, body_params, clean_path
     return wrap_response(int(time.time()))
 

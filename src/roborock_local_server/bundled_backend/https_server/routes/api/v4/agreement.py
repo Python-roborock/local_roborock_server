@@ -1,5 +1,3 @@
-"""Route handler for /api/v4/app/agreement/latest."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -57,10 +55,9 @@ def match(path: str) -> bool:
 
 
 def build(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
+    _ctx: ServerContext,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = ctx, query_params, body_params, clean_path
     return ok(_AGREEMENT_LATEST_DATA)

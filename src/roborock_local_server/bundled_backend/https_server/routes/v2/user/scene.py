@@ -1,5 +1,3 @@
-"""Route handler for POST /v2/user/scene."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -16,10 +14,9 @@ def match(path: str, method: str = "GET") -> bool:
 
 def build(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
+    _query_params: dict[str, list[str]],
     body_params: dict[str, list[str]],
-    clean_path: str,
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params, clean_path
     return wrap_response(create_scene(ctx, body_params))
 

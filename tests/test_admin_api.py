@@ -206,6 +206,109 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
     assert status_after_logout.status_code == 401
 
 
+def test_admin_onboarding_endpoints_require_auth_and_manage_session(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps(
+            {
+                "devices": [
+                    {
+                        "duid": "cloud-q7-a",
+                        "did": "1103821560705",
+                        "name": "Q7 Upstairs",
+                        "model": "roborock.vacuum.sc05",
+                        "product_id": "product-q7-a",
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    paths.runtime_credentials_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "devices": [
+                    {
+                        "did": "1103821560705",
+                        "duid": "cloud-q7-a",
+                        "name": "Q7 Upstairs",
+                        "model": "roborock.vacuum.sc05",
+                        "product_id": "product-q7-a",
+                        "localkey": "local-key-a",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    paths.device_key_state_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.device_key_state_path.write_text(
+        json.dumps(
+            {
+                "devices": {
+                    "1103821560705": {
+                        "pid": "roborock.vacuum.sc05",
+                        "modulus_hex": "aa",
+                        "samples": [
+                            {"canonical": "a=1", "signature_b64": "AQ=="},
+                            {"canonical": "a=2", "signature_b64": "Ag=="},
+                        ],
+                    }
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    supervisor.refresh_inventory_state()
+    client = TestClient(supervisor.app)
+
+    assert client.get("/admin/api/onboarding/devices").status_code == 401
+    assert client.post("/admin/api/onboarding/sessions", json={"duid": "cloud-q7-a"}).status_code == 401
+
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
+
+    devices = client.get("/admin/api/onboarding/devices")
+    assert devices.status_code == 200
+    devices_payload = devices.json()
+    assert [item["duid"] for item in devices_payload["devices"]] == ["cloud-q7-a"]
+    assert devices_payload["devices"][0]["name"] == "Q7 Upstairs"
+    assert devices_payload["devices"][0]["onboarding"]["has_public_key"] is True
+    assert devices_payload["devices"][0]["onboarding"]["key_state"]["query_samples"] == 2
+
+    started = client.post("/admin/api/onboarding/sessions", json={"duid": "cloud-q7-a"})
+    assert started.status_code == 200
+    session_payload = started.json()
+    session_id = session_payload["session_id"]
+    assert session_payload["target"]["duid"] == "cloud-q7-a"
+    assert session_payload["target"]["did"] == "1103821560705"
+    assert session_payload["has_public_key"] is True
+    assert session_payload["public_key_state"] == "ready"
+
+    fetched = client.get(f"/admin/api/onboarding/sessions/{session_id}")
+    assert fetched.status_code == 200
+    assert fetched.json()["session_id"] == session_id
+
+    missing = client.get("/admin/api/onboarding/sessions/not-the-session")
+    assert missing.status_code == 404
+
+    deleted = client.delete(f"/admin/api/onboarding/sessions/{session_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+
+    deleted_missing = client.get(f"/admin/api/onboarding/sessions/{session_id}")
+    assert deleted_missing.status_code == 404
+
+
 def test_core_only_mode_disables_standalone_admin_routes(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)

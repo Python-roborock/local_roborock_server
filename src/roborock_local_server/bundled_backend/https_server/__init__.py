@@ -1,4 +1,3 @@
-"""HTTPS endpoint rules used by the release package."""
 
 from .endpoint_rules import EndpointRule, default_endpoint_rules, resolve_route
 

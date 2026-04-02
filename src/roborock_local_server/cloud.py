@@ -27,10 +27,6 @@ from .backend import (
 )
 
 
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _to_jsonable(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -165,7 +161,7 @@ class CloudImportManager:
         )
         snapshot = {
             "meta": {
-                "generated_at_utc": _utcnow_iso(),
+                "generated_at_utc": datetime.now(timezone.utc).isoformat(),
                 "username": session_data.email,
                 "base_url": session_data.base_url,
                 "source": "admin_email_code_login",

@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse, Response
 import uvicorn
 
 from .certs import CertificateManager
+from .bundled_backend.shared.data_helpers import utcnow_iso
 from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIRED_ONBOARDING_STEPS
 from .cloud import CloudImportManager
 from .config import AppConfig, AppPaths, load_config, resolve_paths
@@ -65,10 +66,6 @@ PROJECT_SUPPORT = {
         {"label": "Amazon Affiliate", "url": "https://amzn.to/4bGfG6B"},
     ],
 }
-
-
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _request_query_params(request: Request) -> dict[str, list[str]]:
@@ -282,6 +279,7 @@ class ReleaseSupervisor:
         self.runtime_state = RuntimeState(
             log_dir=self.paths.runtime_dir,
             key_state_file=self.paths.device_key_state_path,
+            runtime_credentials=self.runtime_credentials,
         )
         self.runtime_state.set_service(
             "https_server",
@@ -461,7 +459,7 @@ class ReleaseSupervisor:
         client_host = request.client.host if request.client else "-"
         client_port = request.client.port if request.client else 0
         entry: dict[str, object] = {
-            "time": _utcnow_iso(),
+            "time": utcnow_iso(),
             "server": group,
             "host": host,
             "method": request.method,
@@ -634,6 +632,68 @@ class ReleaseSupervisor:
             "inventory_path": str(self.paths.inventory_path),
             "vacuums": vacuums,
         }
+
+    def _onboarding_devices_payload(self) -> dict[str, Any]:
+        devices: list[dict[str, Any]] = []
+        for vac in self._vacuums_payload()["vacuums"]:
+            inventory_source = str(vac.get("inventory_source") or "").strip()
+            if not inventory_source:
+                continue
+            onboarding = dict(vac.get("onboarding") or {})
+            key_state = dict(onboarding.get("key_state") or {})
+            devices.append(
+                {
+                    "duid": str(vac.get("duid") or "").strip(),
+                    "did": str(vac.get("did") or "").strip(),
+                    "name": str(vac.get("name") or vac.get("duid") or "").strip(),
+                    "connected": bool(vac.get("connected")),
+                    "onboarding": {
+                        "has_public_key": bool(onboarding.get("has_public_key")),
+                        "status": str(onboarding.get("status") or "").strip(),
+                        "guidance": str(onboarding.get("guidance") or "").strip(),
+                        "key_state": {
+                            "query_samples": int(key_state.get("query_samples") or 0),
+                        },
+                    },
+                }
+            )
+        return {
+            "devices": devices,
+            "generated_at": utcnow_iso(),
+        }
+
+    def start_onboarding_session(self, *, duid: str) -> dict[str, Any]:
+        normalized_duid = str(duid or "").strip()
+        if not normalized_duid:
+            raise ValueError("duid is required")
+        devices = self._onboarding_devices_payload()["devices"]
+        matched = next((item for item in devices if item["duid"] == normalized_duid), None)
+        if matched is None:
+            raise KeyError(normalized_duid)
+        return self.runtime_state.start_onboarding_session(
+            target_duid=normalized_duid,
+            target_name=str(matched.get("name") or ""),
+            target_did=str(matched.get("did") or ""),
+        )
+
+    def onboarding_session_snapshot(self, *, session_id: str) -> dict[str, Any]:
+        snapshot = self.runtime_state.onboarding_session_snapshot()
+        normalized_session_id = str(session_id or "").strip()
+        if not snapshot.get("active"):
+            raise KeyError(normalized_session_id)
+        if normalized_session_id and snapshot.get("session_id") != normalized_session_id:
+            raise KeyError(normalized_session_id)
+        return snapshot
+
+    def clear_onboarding_session(self, *, session_id: str) -> dict[str, Any]:
+        snapshot = self.runtime_state.onboarding_session_snapshot()
+        normalized_session_id = str(session_id or "").strip()
+        if not snapshot.get("active"):
+            raise KeyError(normalized_session_id)
+        if normalized_session_id and snapshot.get("session_id") != normalized_session_id:
+            raise KeyError(normalized_session_id)
+        cleared = self.runtime_state.clear_onboarding_session()
+        return {"ok": True, "session": cleared}
 
     def _ui_health_payload(self) -> dict[str, Any]:
         runtime_state = self.runtime_state

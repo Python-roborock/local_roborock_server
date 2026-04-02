@@ -53,7 +53,7 @@ _STATUS_POLL_INTERVAL_SECONDS = 5.0
 _ROUTINE_READY_STATES = {3, 8, 100}
 _POST_STEP_SETTLE_SECONDS = 15.0
 _POST_STEP_SETTLE_TIMEOUT_SECONDS = 10 * 60
-_WEB_API_INVENTORY_FILE = "web_api_inventory.json"
+from .inventory_io import WEB_API_INVENTORY_FILE
 _SUPPORTED_METHODS = {
     "do_scenes_app_start",
     "do_scenes_segments",
@@ -805,7 +805,7 @@ class RoutineRunner:
                 seen.add(tid)
                 tids.append(tid)
 
-        inventory_path = self._context.http_jsonl.parent / _WEB_API_INVENTORY_FILE
+        inventory_path = self._context.http_jsonl.parent / WEB_API_INVENTORY_FILE
         try:
             parsed = json.loads(inventory_path.read_text(encoding="utf-8"))
         except (FileNotFoundError, OSError, json.JSONDecodeError):

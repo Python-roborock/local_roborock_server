@@ -1,13 +1,23 @@
 # Using the Roborock App
 
-1. Log out of the app on your phone
+Use this after [Installation](installation.md) and [Onboarding](onboarding.md) if you want the official Roborock app to talk to your local stack.
 
-2. On a machine that is not running the server, run our MITM script:
-`uv run mitm_redirect.py --local-api api-roborock.luke-lashley.com`
+1. Log out of the app on your phone.
 
-3. Install the Wireguard app on your phone. Then hit the Plus on the wireguard app, add from QR code and scan the code on
-`http://127.0.0.1:8081/#/capture`
+2. On a machine that is not running the server, run the MITM script:
 
-4. Open `mitm.it` in your web browser. Follow the instructions there for your device. Note on iphone you must open it in Safari. Make sure you follow all of the device specific steps (including installing the cert, trusting it, etc.)
+   ```bash
+   uv run mitm_redirect.py --local-api api-roborock.example.com
+   ```
 
-5. Once Mitm is configured properly, open the Roborock app, log back in, enter your verification code and the server should automatically show you the vacuums you have on your server. Turn off wireguard, disable the mitm certificate, and then click on one of your devices and you should see the map!
+3. Install the WireGuard app on your phone. Then tap the plus button in WireGuard, choose to add from QR code, and scan the code at `http://127.0.0.1:8081/#/capture`.
+
+4. Open `mitm.it` in your web browser. Follow the instructions there for your device. On iPhone, open it in Safari and complete all device-specific steps, including installing and trusting the certificate.
+
+5. Once the MITM setup is working, open the Roborock app, log back in, enter your verification code, and the server should automatically show the vacuums already known to your local stack. Turn off WireGuard, disable the MITM certificate, and then open one of your devices to confirm the map loads.
+
+## Related Docs
+
+- [Installation](installation.md)
+- [Onboarding](onboarding.md)
+- [Home Assistant](home_assistant.md)

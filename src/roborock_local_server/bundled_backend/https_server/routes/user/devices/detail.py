@@ -1,5 +1,3 @@
-"""Route handlers for /user/devices/{id} and /user/devices/{id}/extra."""
-
 from __future__ import annotations
 
 import re
@@ -27,11 +25,10 @@ def match(path: str) -> bool:
 
 def build(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
     clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params, body_params
     device_id = _device_id_from_path(clean_path)
     return wrap_response(device_detail_payload(ctx, device_id))
 
@@ -43,11 +40,10 @@ def match_extra(path: str) -> bool:
 
 def build_extra(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
     clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params, body_params
     device_id = _device_id_from_path(clean_path)
     payload = device_detail_payload(ctx, device_id)
     return wrap_response(payload.get("extra", "{}") or "{}")

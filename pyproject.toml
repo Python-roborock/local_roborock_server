@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 roborock-local-server = "roborock_local_server.__main__:main"
+start_onboarding = "roborock_local_server.onboarding_cli:main"
 
 [build-system]
 requires = ["hatchling"]

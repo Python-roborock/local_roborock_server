@@ -18,6 +18,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 import gmpy2  # type: ignore
 
+from .data_helpers import utcnow_iso
+
 
 LOG = logging.getLogger("real_stack.device_key_recovery")
 DEFAULT_RSA_E = 65537
@@ -27,10 +29,6 @@ MAX_HEADER_SAMPLE_COUNT = 64
 SAVE_REPLACE_RETRIES = 8
 SAVE_REPLACE_RETRY_SEC = 0.05
 _MP_CTX = multiprocessing.get_context("spawn")
-
-
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def split_signed_query(query: str) -> tuple[str, str] | None:
@@ -436,7 +434,7 @@ class DeviceKeyCache:
                 did,
                 state="recovered",
                 note="Public key loaded from PEM.",
-                finished_at=_utcnow_iso(),
+                finished_at=utcnow_iso(),
             )
             self._save_safe_locked()
 
@@ -555,7 +553,7 @@ class DeviceKeyCache:
                 return
 
             self._recovering.add(did)
-            started_at = _utcnow_iso()
+            started_at = utcnow_iso()
             self._set_recovery_meta_locked(
                 did,
                 state="recovering",
@@ -586,7 +584,7 @@ class DeviceKeyCache:
                     raise RuntimeError(f"Recovery subprocess exited with code {process.exitcode}.")
                 if error:
                     raise RuntimeError(error)
-                finished_at = _utcnow_iso()
+                finished_at = utcnow_iso()
                 with self._lock:
                     if not modulus:
                         self._set_recovery_meta_locked(
@@ -618,7 +616,7 @@ class DeviceKeyCache:
                         state="failed",
                         note="Recovery raised an exception.",
                         error=str(exc),
-                        finished_at=_utcnow_iso(),
+                        finished_at=utcnow_iso(),
                     )
                     self._save_safe_locked()
                 LOG.warning("Failed recovering public key for did=%s: %s", did, exc)

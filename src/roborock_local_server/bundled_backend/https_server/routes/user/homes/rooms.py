@@ -1,5 +1,3 @@
-"""Route handlers for /user/homes/{id}/rooms."""
-
 from __future__ import annotations
 
 import re
@@ -19,11 +17,10 @@ def match(path: str) -> bool:
 
 def build(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params, body_params, clean_path
     return wrap_response(home_rooms_payload(ctx))
 
 
@@ -33,11 +30,10 @@ def match_post(path: str, method: str = "GET") -> bool:
 
 def build_post(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
+    _query_params: dict[str, list[str]],
     body_params: dict[str, list[str]],
     clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params
     room_name = ""
     for key in ("name", "roomName"):
         values = body_params.get(key) or []

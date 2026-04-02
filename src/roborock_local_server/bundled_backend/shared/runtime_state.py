@@ -8,9 +8,15 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import secrets
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs
+
+from .data_helpers import utcnow_iso
+
+if TYPE_CHECKING:
+    from .runtime_credentials import RuntimeCredentialsStore
 
 REQUIRED_ONBOARDING_STEPS = ("region", "nc_prepare")
 ONBOARDING_STEP_LABELS = {
@@ -29,14 +35,9 @@ _D_TOPIC_RE = re.compile(r"^rr/d/[io]/([^/]+)/([^/]+)$")
 _M_TOPIC_RE = re.compile(r"^rr/m/[io]/[^/]+/[^/]+/([^/]+)$")
 
 
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _extract_ip(remote: str | None) -> str:
     if not remote:
         return ""
-    # Handles "ip:port" and bare host values.
     if remote.count(":") == 1:
         return remote.split(":", 1)[0].strip()
     return remote.strip()
@@ -74,9 +75,16 @@ def _is_same_or_newer_timestamp(candidate: str | None, current: str | None) -> b
 class RuntimeState:
     """Stores mutable runtime state for UI/health endpoints."""
 
-    def __init__(self, *, log_dir: Path, key_state_file: Path | None) -> None:
+    def __init__(
+        self,
+        *,
+        log_dir: Path,
+        key_state_file: Path | None,
+        runtime_credentials: RuntimeCredentialsStore | None = None,
+    ) -> None:
         self.log_dir = log_dir
         self.key_state_file = key_state_file
+        self.runtime_credentials = runtime_credentials
 
         self._lock = threading.RLock()
         self._services: dict[str, dict[str, Any]] = {}
@@ -109,7 +117,7 @@ class RuntimeState:
                 "required": bool(required),
                 "enabled": bool(enabled),
                 "detail": existing.get("detail", "") if detail is None else detail,
-                "updated_at": _utcnow_iso(),
+                "updated_at": utcnow_iso(),
             }
 
     def upsert_vacuum(
@@ -219,7 +227,7 @@ class RuntimeState:
             )
 
     def record_mqtt_connection(self, *, conn_id: str, client_ip: str, client_port: int) -> None:
-        now = _utcnow_iso()
+        now = utcnow_iso()
         with self._lock:
             self._mqtt_connections[conn_id] = {
                 "conn_id": conn_id,
@@ -240,7 +248,7 @@ class RuntimeState:
             )
 
     def record_mqtt_disconnect(self, *, conn_id: str) -> None:
-        now = _utcnow_iso()
+        now = utcnow_iso()
         with self._lock:
             self._mqtt_connections.pop(conn_id, None)
             vacs = self._conn_to_vacuums.pop(conn_id, set())
@@ -261,7 +269,7 @@ class RuntimeState:
         topic: str,
         payload_preview: str,
     ) -> None:
-        now = _utcnow_iso()
+        now = utcnow_iso()
         device_id, id_kind = self._extract_identity_from_topic(topic)
         did = device_id if id_kind == "did" else ""
         duid = device_id if id_kind == "duid" else ""
@@ -316,7 +324,7 @@ class RuntimeState:
         with self._lock:
             self._cloud_request = {
                 **result,
-                "time": _utcnow_iso(),
+                "time": utcnow_iso(),
             }
 
     def vacuum_snapshot(self) -> list[dict[str, Any]]:
@@ -340,7 +348,7 @@ class RuntimeState:
             vacuums = self.vacuum_snapshot()
             connected = [vac for vac in vacuums if vac.get("connected")]
             return {
-                "generated_at": _utcnow_iso(),
+                "generated_at": utcnow_iso(),
                 "overall_ok": overall_ok,
                 "services": services,
                 "connected_vacuums": connected,
@@ -350,26 +358,46 @@ class RuntimeState:
                 "last_cloud_request": self._cloud_request,
             }
 
-    def start_pairing_session(self) -> dict[str, Any]:
+    def start_onboarding_session(
+        self,
+        *,
+        target_duid: str = "",
+        target_name: str = "",
+        target_did: str = "",
+    ) -> dict[str, Any]:
         with self._lock:
-            now = _utcnow_iso()
+            now = utcnow_iso()
             self._pairing_session = {
                 "active": True,
+                "session_id": secrets.token_hex(8),
                 "started_at": now,
                 "updated_at": now,
                 "region_at": "",
                 "nc_at": "",
                 "public_key_at": "",
                 "connected_at": "",
-                "target_did": "",
-                "target_duid": "",
+                "target_did": str(target_did or "").strip(),
+                "target_duid": str(target_duid or "").strip(),
                 "target_ip": "",
+                "selected_name": str(target_name or "").strip(),
+                "identity_conflict": "",
             }
             return self._pairing_snapshot_locked()
 
-    def pairing_snapshot(self) -> dict[str, Any]:
+    def start_pairing_session(self) -> dict[str, Any]:
+        return self.start_onboarding_session()
+
+    def clear_onboarding_session(self) -> dict[str, Any]:
+        with self._lock:
+            self._pairing_session = None
+            return self._pairing_snapshot_locked()
+
+    def onboarding_session_snapshot(self) -> dict[str, Any]:
         with self._lock:
             return self._pairing_snapshot_locked()
+
+    def pairing_snapshot(self) -> dict[str, Any]:
+        return self.onboarding_session_snapshot()
 
     def recent_events(self, *, limit: int = 200) -> list[dict[str, Any]]:
         with self._lock:
@@ -418,71 +446,177 @@ class RuntimeState:
         self._vacuums[normalized] = created
         return created
 
+    @staticmethod
+    def _vacuum_effectively_connected_locked(vac: dict[str, Any] | None) -> bool:
+        if vac is None:
+            return False
+        if bool(vac.get("connected")):
+            return True
+        last_mqtt_at = str(vac.get("last_mqtt_at") or "")
+        if not last_mqtt_at:
+            return False
+        parsed = _parse_iso(last_mqtt_at)
+        if parsed is None:
+            return False
+        delta = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+        return delta.total_seconds() <= 180
+
+    def _idle_pairing_snapshot_locked(self) -> dict[str, Any]:
+        step_details = self._pairing_step_details_locked("")
+        return {
+            "active": False,
+            "session_id": "",
+            "started_at": "",
+            "updated_at": "",
+            "status": "idle",
+            "message": "No onboarding session started.",
+            "guidance": "No onboarding session started.",
+            "complete": False,
+            "query_samples": 0,
+            "has_public_key": False,
+            "public_key_state": "missing",
+            "connected": False,
+            "identity_conflict": "",
+            "checks": {key: False for key in PAIRING_STEP_LABELS},
+            "steps": [
+                {
+                    "key": key,
+                    "label": label,
+                    "detail": step_details.get(key, ""),
+                    "checked": False,
+                    "checked_at": "",
+                }
+                for key, label in PAIRING_STEP_LABELS.items()
+            ],
+            "selected": {
+                "did": "",
+                "duid": "",
+                "name": "",
+                "last_ip": "",
+                "connected": False,
+            },
+            "target": {
+                "did": "",
+                "duid": "",
+                "name": "",
+                "last_ip": "",
+                "connected": False,
+            },
+        }
+
+    def _session_key_state_locked(self, did: str, duid: str = "") -> dict[str, Any]:
+        _key_dids, _key_models, key_details = self._load_key_state_locked()
+        for candidate in (str(did or "").strip(), str(duid or "").strip()):
+            if candidate and candidate in key_details:
+                return dict(key_details[candidate])
+        return {}
+
     def _pairing_snapshot_locked(self) -> dict[str, Any]:
         session = self._pairing_session
         if session is None or not session.get("active"):
-            step_details = self._pairing_step_details_locked("")
-            return {
-                "active": False,
-                "started_at": "",
-                "updated_at": "",
-                "status": "idle",
-                "message": "No pairing session started.",
-                "complete": False,
-                "checks": {key: False for key in PAIRING_STEP_LABELS},
-                "steps": [
-                    {
-                        "key": key,
-                        "label": label,
-                        "detail": step_details.get(key, ""),
-                        "checked": False,
-                        "checked_at": "",
-                    }
-                    for key, label in PAIRING_STEP_LABELS.items()
-                ],
-                "target": {
-                    "did": "",
-                    "duid": "",
-                    "name": "",
-                    "last_ip": "",
-                    "connected": False,
-                },
-            }
+            return self._idle_pairing_snapshot_locked()
 
         self._refresh_pairing_session_locked(session)
-        target_vac = self._resolve_pairing_target_locked(session)
-        target = self._pairing_target_snapshot_locked(session, target_vac)
-        mqtt_connected = self._pairing_is_mqtt_connected_locked(target_vac)
-        target_did = str(target.get("did") or session.get("target_did") or "").strip()
-        step_details = self._pairing_step_details_locked(target_did)
+        selected_duid = str(session.get("target_duid") or "").strip()
+        target_did = str(session.get("target_did") or "").strip()
+        selected_vac = self._find_vacuum_by_identity_locked(duid=selected_duid) if selected_duid else None
+        observed_vac = self._find_vacuum_by_identity_locked(did=target_did) if target_did else None
+
+        best_did = (
+            target_did
+            or str((selected_vac or {}).get("did") or "").strip()
+            or str((observed_vac or {}).get("did") or "").strip()
+        )
+        best_duid = (
+            selected_duid
+            or str((selected_vac or {}).get("duid") or "").strip()
+            or str((observed_vac or {}).get("duid") or "").strip()
+        )
+        best_name = (
+            str((selected_vac or {}).get("name") or "").strip()
+            or str(session.get("selected_name") or "").strip()
+            or str((observed_vac or {}).get("name") or "").strip()
+            or best_duid
+            or best_did
+        )
+        last_ip = (
+            str(session.get("target_ip") or "").strip()
+            or str((selected_vac or {}).get("last_ip") or "").strip()
+            or str((observed_vac or {}).get("last_ip") or "").strip()
+        )
+        connected = self._vacuum_effectively_connected_locked(selected_vac) or self._vacuum_effectively_connected_locked(
+            observed_vac
+        )
+        key_state = self._session_key_state_locked(best_did, best_duid)
+        query_samples = int(key_state.get("query_samples") or 0)
+        has_public_key = bool(key_state.get("has_modulus"))
+        recovery_state = str(key_state.get("recovery_state") or "").strip()
+        if has_public_key:
+            public_key_state = "ready"
+        elif recovery_state == "recovering":
+            public_key_state = "recovering"
+        elif query_samples > 0:
+            public_key_state = "collecting"
+        else:
+            public_key_state = "missing"
+
+        step_details = self._pairing_step_details_locked(best_did)
         step_times = {
             "region": str(session.get("region_at") or ""),
             "nc": str(session.get("nc_at") or ""),
-            "public_key": str(session.get("public_key_at") or ""),
-            "connected": str(session.get("connected_at") or "") if mqtt_connected else "",
+            "public_key": str(session.get("public_key_at") or "") if has_public_key else "",
+            "connected": str(session.get("connected_at") or "") if connected else "",
         }
         checks = {key: bool(value) for key, value in step_times.items()}
-        complete = all(checks.values())
-        if complete:
+
+        identity_conflict = str(session.get("identity_conflict") or "").strip()
+        complete = bool(connected and has_public_key)
+        if identity_conflict:
+            status = "conflict"
+            guidance = identity_conflict
+        elif complete:
             status = "complete"
-            message = "Device paired and connected."
-        elif not any(checks.values()):
-            status = "waiting"
-            message = "Waiting for device to pair - please use the onboarding script"
-        else:
+            guidance = "Device paired and connected."
+        elif has_public_key:
             status = "in_progress"
-            remaining = [PAIRING_STEP_LABELS[key] for key, checked in checks.items() if not checked]
-            if remaining:
-                message = f"Pairing in progress. Waiting for: {', '.join(remaining)}."
-            else:
-                message = "Pairing in progress."
+            guidance = "Public key is ready. Run one more pairing cycle so the vacuum connects."
+        elif recovery_state == "recovering":
+            status = "in_progress"
+            guidance = "Public key recovery is running. Wait for it to finish or retry if it stalls."
+        elif query_samples > 0:
+            status = "in_progress"
+            guidance = (
+                "Signed requests were captured, but the public key is not ready yet. "
+                "Wait for the sample count to increase, then retry pairing."
+            )
+        elif checks["region"] or checks["nc"]:
+            status = "in_progress"
+            guidance = "Onboarding traffic was captured. Rejoin your normal Wi-Fi and wait for new server queries."
+        else:
+            status = "waiting"
+            guidance = "Waiting for onboarding traffic from the selected vacuum."
+
+        target_payload = {
+            "did": best_did,
+            "duid": best_duid,
+            "name": best_name,
+            "last_ip": last_ip,
+            "connected": connected,
+        }
         return {
             "active": True,
+            "session_id": str(session.get("session_id") or ""),
             "started_at": str(session.get("started_at") or ""),
             "updated_at": str(session.get("updated_at") or ""),
             "status": status,
-            "message": message,
+            "message": guidance,
+            "guidance": guidance,
             "complete": complete,
+            "query_samples": query_samples,
+            "has_public_key": has_public_key,
+            "public_key_state": public_key_state,
+            "connected": connected,
+            "identity_conflict": identity_conflict,
             "checks": checks,
             "steps": [
                 {
@@ -494,7 +628,8 @@ class RuntimeState:
                 }
                 for key, label in PAIRING_STEP_LABELS.items()
             ],
-            "target": target,
+            "selected": dict(target_payload),
+            "target": dict(target_payload),
         }
 
     def _pairing_step_details_locked(self, target_did: str) -> dict[str, str]:
@@ -508,14 +643,28 @@ class RuntimeState:
         }
 
     def _refresh_pairing_session_locked(self, session: dict[str, Any]) -> None:
-        target_vac = self._resolve_pairing_target_locked(session)
-        if target_vac is None:
+        changed = False
+        selected_duid = str(session.get("target_duid") or "").strip()
+        selected_vac = self._find_vacuum_by_identity_locked(duid=selected_duid) if selected_duid else None
+        observed_did = str(session.get("target_did") or "").strip()
+        observed_vac = self._find_vacuum_by_identity_locked(did=observed_did) if observed_did else None
+        if selected_vac is None and observed_vac is None:
             return
 
-        changed = False
-        target_did = str(target_vac.get("did") or session.get("target_did") or "").strip()
-        target_duid = str(target_vac.get("duid") or session.get("target_duid") or "").strip()
-        target_ip = str(target_vac.get("last_ip") or "").strip()
+        target_did = (
+            observed_did
+            or str((selected_vac or {}).get("did") or "").strip()
+            or str((observed_vac or {}).get("did") or "").strip()
+        )
+        target_duid = (
+            selected_duid
+            or str((selected_vac or {}).get("duid") or "").strip()
+            or str((observed_vac or {}).get("duid") or "").strip()
+        )
+        target_ip = (
+            str((selected_vac or {}).get("last_ip") or "").strip()
+            or str((observed_vac or {}).get("last_ip") or "").strip()
+        )
         if target_did and session.get("target_did") != target_did:
             session["target_did"] = target_did
             changed = True
@@ -525,9 +674,24 @@ class RuntimeState:
         if target_ip and session.get("target_ip") != target_ip:
             session["target_ip"] = target_ip
             changed = True
+        selected_name = (
+            str((selected_vac or {}).get("name") or "").strip()
+            or str(session.get("selected_name") or "").strip()
+            or str((observed_vac or {}).get("name") or "").strip()
+        )
+        if selected_name and session.get("selected_name") != selected_name:
+            session["selected_name"] = selected_name
+            changed = True
 
         started_at = str(session.get("started_at") or "")
-        last_mqtt_at = str(target_vac.get("last_mqtt_at") or "")
+        last_mqtt_candidates = [
+            str((selected_vac or {}).get("last_mqtt_at") or ""),
+            str((observed_vac or {}).get("last_mqtt_at") or ""),
+        ]
+        last_mqtt_at = ""
+        for candidate in last_mqtt_candidates:
+            if _is_newer_timestamp(candidate, last_mqtt_at):
+                last_mqtt_at = candidate
         if (
             last_mqtt_at
             and not session.get("connected_at")
@@ -550,34 +714,11 @@ class RuntimeState:
                     changed = True
 
         if changed:
-            session["updated_at"] = _utcnow_iso()
-
-    def _pairing_target_snapshot_locked(
-        self,
-        session: dict[str, Any],
-        target_vac: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        if target_vac is None:
-            return {
-                "did": str(session.get("target_did") or ""),
-                "duid": str(session.get("target_duid") or ""),
-                "name": "",
-                "last_ip": str(session.get("target_ip") or ""),
-                "connected": False,
-            }
-        return {
-            "did": str(target_vac.get("did") or session.get("target_did") or ""),
-            "duid": str(target_vac.get("duid") or session.get("target_duid") or ""),
-            "name": str(target_vac.get("name") or ""),
-            "last_ip": str(target_vac.get("last_ip") or session.get("target_ip") or ""),
-            "connected": self._pairing_is_mqtt_connected_locked(target_vac),
-        }
+            session["updated_at"] = utcnow_iso()
 
     @staticmethod
     def _pairing_is_mqtt_connected_locked(target_vac: dict[str, Any] | None) -> bool:
-        if target_vac is None:
-            return False
-        return bool(target_vac.get("connected"))
+        return RuntimeState._vacuum_effectively_connected_locked(target_vac)
 
     def _pairing_public_key_sample_count_locked(self, target_did: str) -> int:
         normalized_did = target_did.strip()
@@ -588,8 +729,13 @@ class RuntimeState:
         return int(key_state.get("query_samples") or 0)
 
     def _resolve_pairing_target_locked(self, session: dict[str, Any]) -> dict[str, Any] | None:
-        target_did = str(session.get("target_did") or "").strip()
         target_duid = str(session.get("target_duid") or "").strip()
+        if target_duid:
+            matched = self._find_vacuum_by_identity_locked(duid=target_duid)
+            if matched is not None:
+                return matched
+
+        target_did = str(session.get("target_did") or "").strip()
         if target_did or target_duid:
             matched = self._find_vacuum_by_identity_locked(did=target_did, duid=target_duid)
             if matched is not None:
@@ -638,6 +784,50 @@ class RuntimeState:
             timestamps.extend(str(value or "") for value in onboarding_steps.values())
         return any(_is_same_or_newer_timestamp(candidate, started_at) for candidate in timestamps if candidate)
 
+    def _adopt_pairing_did_locked(
+        self,
+        *,
+        session: dict[str, Any],
+        did: str,
+        event_time: str,
+    ) -> bool:
+        normalized_did = did.strip()
+        if not normalized_did:
+            return False
+
+        changed = False
+        target_duid = str(session.get("target_duid") or "").strip()
+        selected_name = str(session.get("selected_name") or "").strip()
+        if self.runtime_credentials is not None and target_duid:
+            merged, conflict = self.runtime_credentials.link_did_to_duid(
+                did=normalized_did,
+                duid=target_duid,
+                name=selected_name,
+            )
+            if conflict:
+                if session.get("identity_conflict") != conflict:
+                    session["identity_conflict"] = conflict
+                    changed = True
+                if changed:
+                    session["updated_at"] = event_time
+                return changed
+            if session.get("identity_conflict"):
+                session["identity_conflict"] = ""
+                changed = True
+            if merged is not None and target_duid:
+                vac = self._ensure_vacuum_locked(target_duid)
+                vac["did"] = normalized_did
+                vac["id_kind"] = "duid"
+                if selected_name and not vac.get("name"):
+                    vac["name"] = selected_name
+
+        if session.get("target_did") != normalized_did:
+            session["target_did"] = normalized_did
+            changed = True
+        if changed:
+            session["updated_at"] = event_time
+        return changed
+
     def _record_pairing_http_event_locked(
         self,
         *,
@@ -668,10 +858,13 @@ class RuntimeState:
         normalized_identifier = identifier.strip()
         if normalized_identifier:
             kind = self._resolve_identity_kind_locked(normalized_identifier)
-            if kind == "did" and session.get("target_did") != normalized_identifier:
-                session["target_did"] = normalized_identifier
-                changed = True
-            elif kind == "duid" and session.get("target_duid") != normalized_identifier:
+            if kind == "did":
+                changed = self._adopt_pairing_did_locked(
+                    session=session,
+                    did=normalized_identifier,
+                    event_time=event_time,
+                ) or changed
+            elif not session.get("target_duid") and session.get("target_duid") != normalized_identifier:
                 session["target_duid"] = normalized_identifier
                 changed = True
 
@@ -700,9 +893,12 @@ class RuntimeState:
         changed = False
         normalized_did = did.strip()
         normalized_duid = duid.strip()
-        if normalized_did and not session.get("target_did"):
-            session["target_did"] = normalized_did
-            changed = True
+        if normalized_did:
+            changed = self._adopt_pairing_did_locked(
+                session=session,
+                did=normalized_did,
+                event_time=event_time,
+            ) or changed
         if normalized_duid and not session.get("target_duid"):
             session["target_duid"] = normalized_duid
             changed = True
@@ -712,7 +908,7 @@ class RuntimeState:
 
         target_did = str(session.get("target_did") or "").strip()
         target_duid = str(session.get("target_duid") or "").strip()
-        if (
+        if not session.get("identity_conflict") and (
             (normalized_did and normalized_did == target_did)
             or (normalized_duid and normalized_duid == target_duid)
             or (not target_did and not target_duid and (normalized_did or normalized_duid))

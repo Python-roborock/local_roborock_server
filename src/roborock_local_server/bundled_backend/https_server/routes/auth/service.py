@@ -1,13 +1,10 @@
-"""Shared auth-state services for login endpoints."""
-
 from __future__ import annotations
 
 import json
 from typing import Any
 
 from shared.context import ServerContext
-
-_WEB_API_INVENTORY_FILE = "web_api_inventory.json"
+from shared.inventory_io import WEB_API_INVENTORY_FILE
 _WEB_API_FULL_SNAPSHOT_SUFFIX = "_full_snapshot.json"
 
 
@@ -16,7 +13,7 @@ def ok(data: Any) -> dict[str, Any]:
 
 
 def cloud_snapshot_path(ctx: ServerContext):
-    inventory_path = ctx.http_jsonl.parent / _WEB_API_INVENTORY_FILE
+    inventory_path = ctx.http_jsonl.parent / WEB_API_INVENTORY_FILE
     return inventory_path.with_name(f"{inventory_path.stem}{_WEB_API_FULL_SNAPSHOT_SUFFIX}")
 
 
@@ -123,6 +120,42 @@ def cloud_login_data_required_response(
     if missing_fields:
         payload["missing_fields"] = missing_fields
     return {"code": 41201, "msg": "cloud_user_data_required", "data": payload}
+
+
+def build_code_send_response(
+    _ctx: ServerContext,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
+) -> dict[str, Any]:
+    return ok({"sent": True, "validForSec": 300})
+
+
+def build_code_validate_response(
+    _ctx: ServerContext,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
+) -> dict[str, Any]:
+    return ok({"valid": True})
+
+
+def build_login_submit_response(
+    ctx: ServerContext,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
+) -> dict[str, Any]:
+    return build_login_data_response(ctx)
+
+
+def build_password_reset_response(
+    _ctx: ServerContext,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
+) -> dict[str, Any]:
+    return ok(None)
 
 
 def build_login_data_response(ctx: ServerContext) -> dict[str, Any]:

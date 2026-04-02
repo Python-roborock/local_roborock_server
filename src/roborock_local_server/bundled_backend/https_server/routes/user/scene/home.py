@@ -1,5 +1,3 @@
-"""Route handler for /user/scene/home/{id}."""
-
 from __future__ import annotations
 
 import re
@@ -18,11 +16,10 @@ def match(path: str) -> bool:
 
 def build(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
     clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params, body_params
     requested_home_id = clean_path.rstrip("/").split("/")[-1]
     return wrap_response(list_scenes_for_home(ctx, requested_home_id))
 

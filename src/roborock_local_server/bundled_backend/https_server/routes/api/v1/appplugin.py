@@ -1,16 +1,11 @@
-"""Route handler for /api/v1/appplugin."""
-
 from __future__ import annotations
 
 from typing import Any
 
 from shared.context import ServerContext
 
+from ...auth.service import ok
 from ...plugin.common import APPPLUGIN_LIST, proxied_plugin_records
-
-
-def _ok(data: Any) -> dict[str, Any]:
-    return {"code": 200, "msg": "success", "data": data}
 
 
 def match(path: str) -> bool:
@@ -19,10 +14,9 @@ def match(path: str) -> bool:
 
 def build(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params, body_params, clean_path
-    return _ok(proxied_plugin_records(ctx, APPPLUGIN_LIST))
+    return ok(proxied_plugin_records(ctx, APPPLUGIN_LIST))
 

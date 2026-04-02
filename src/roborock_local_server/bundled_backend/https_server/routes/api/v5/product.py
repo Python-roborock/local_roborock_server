@@ -1,5 +1,3 @@
-"""Route handler for /api/v5/product."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -16,9 +14,8 @@ def match(path: str) -> bool:
 
 def build(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params, body_params, clean_path
     return ok(build_product_response(ctx))

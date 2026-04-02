@@ -1,5 +1,3 @@
-"""Route handler for bootstrap nc prepare resolution."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -18,9 +16,8 @@ def build(
     ctx: ServerContext,
     query_params: dict[str, list[str]],
     body_params: dict[str, list[str]],
-    clean_path: str,
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = clean_path
     nc_data = ctx.nc_payload(query_params, body_params)
     did = str(nc_data.get("d") or ctx.extract_did(query_params, body_params))
     explicit_did = extract_explicit_did(query_params, body_params)

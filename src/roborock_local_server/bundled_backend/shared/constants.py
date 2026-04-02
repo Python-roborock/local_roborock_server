@@ -1,4 +1,11 @@
-"""Constants used across server packages."""
+DEFAULT_HOME_NAME = "Local Home"
+DEFAULT_TIMEZONE = "America/New_York"
+
+MODEL_PRODUCT_ID_OVERRIDES = {
+    "roborock.vacuum.a87": 110,
+    "roborock.vacuum.a15": 23,
+    "roborock.vacuum.sc05": 10001,
+}
 
 MQTT_TYPES = {
     1: "CONNECT",

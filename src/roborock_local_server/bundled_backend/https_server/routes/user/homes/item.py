@@ -1,5 +1,3 @@
-"""Route handler for /user/homes/{id}."""
-
 from __future__ import annotations
 
 import re
@@ -18,10 +16,9 @@ def match(path: str) -> bool:
 
 def build(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params, body_params, clean_path
     return wrap_response(home_payload(ctx))
 

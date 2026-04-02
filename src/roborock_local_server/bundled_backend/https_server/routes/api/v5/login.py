@@ -1,12 +1,11 @@
-"""Route handlers for /api/v5 login/auth endpoints."""
-
 from __future__ import annotations
 
-from typing import Any
-
-from shared.context import ServerContext
-
-from ...auth.service import build_login_data_response, ok
+from ...auth.service import (
+    build_code_send_response,
+    build_code_validate_response,
+    build_login_submit_response,
+    build_password_reset_response,
+)
 
 
 def match_login_email_code_send(path: str) -> bool:
@@ -49,61 +48,9 @@ def match_login_password_reset(path: str) -> bool:
     }
 
 
-def build_login_email_code_send(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
-) -> dict[str, Any]:
-    _ = ctx, query_params, body_params, clean_path
-    return ok({"sent": True, "validForSec": 300})
-
-
-def build_login_sms_code_send(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
-) -> dict[str, Any]:
-    _ = ctx, query_params, body_params, clean_path
-    return ok({"sent": True, "validForSec": 300})
-
-
-def build_login_code_validate(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
-) -> dict[str, Any]:
-    _ = ctx, query_params, body_params, clean_path
-    return ok({"valid": True})
-
-
-def build_login_code_submit(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
-) -> dict[str, Any]:
-    _ = query_params, body_params, clean_path
-    return build_login_data_response(ctx)
-
-
-def build_login_password_submit(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
-) -> dict[str, Any]:
-    _ = query_params, body_params, clean_path
-    return build_login_data_response(ctx)
-
-
-def build_login_password_reset(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
-) -> dict[str, Any]:
-    _ = ctx, query_params, body_params, clean_path
-    return ok(None)
+build_login_email_code_send = build_code_send_response
+build_login_sms_code_send = build_code_send_response
+build_login_code_validate = build_code_validate_response
+build_login_code_submit = build_login_submit_response
+build_login_password_submit = build_login_submit_response
+build_login_password_reset = build_password_reset_response

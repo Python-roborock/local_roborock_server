@@ -1,35 +1,12 @@
-"""Shared product-state services for /api/v4/product and /api/v5/product."""
-
 from __future__ import annotations
 
-import hashlib
 from typing import Any
 
+from shared.constants import MODEL_PRODUCT_ID_OVERRIDES
 from shared.context import ServerContext
+from shared.data_helpers import as_int, default_product_name, stable_int
 
 from ..user.homes.service import home_payload
-
-_MODEL_PRODUCT_ID_OVERRIDES = {
-    "roborock.vacuum.a87": 110,
-    "roborock.vacuum.a15": 23,
-    "roborock.vacuum.sc05": 10001,
-}
-
-
-def _as_int(value: Any, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _default_product_name(model: str) -> str:
-    short_model = model.split(".")[-1].upper() if model else "VACUUM"
-    return f"Roborock {short_model}"
-
-
-def _stable_int(seed: str) -> int:
-    return int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12], 16)
 
 
 def build_product_response(ctx: ServerContext) -> dict[str, Any]:
@@ -54,13 +31,13 @@ def build_product_response(ctx: ServerContext) -> dict[str, Any]:
             }
         model = str(product.get("model") or "roborock.vacuum.a117")
         model_key = model.strip().lower()
-        product_id = _MODEL_PRODUCT_ID_OVERRIDES.get(
+        product_id = MODEL_PRODUCT_ID_OVERRIDES.get(
             model_key,
-            _as_int(raw_product_id, _stable_int(raw_product_id or category_name) % 1_000_000),
+            as_int(raw_product_id, stable_int(raw_product_id or category_name) % 1_000_000),
         )
         product_entry = {
             "id": product_id,
-            "name": str(product.get("name") or _default_product_name(model)),
+            "name": str(product.get("name") or default_product_name(model)),
             "model": model,
             "packagename": f"com.roborock.{model.split('.')[-1]}",
             "ncMode": "global",

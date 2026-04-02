@@ -1,5 +1,3 @@
-"""Route handlers for /api/v1/country endpoints."""
-
 from __future__ import annotations
 
 import base64
@@ -74,20 +72,18 @@ def match_country_list(path: str) -> bool:
 
 
 def build_country_version(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
+    _ctx: ServerContext,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = ctx, query_params, body_params, clean_path
     return ok({"v": 0})
 
 
 def build_country_list(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
+    _ctx: ServerContext,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = ctx, query_params, body_params, clean_path
     return ok({"d": _COUNTRY_LIST_D})

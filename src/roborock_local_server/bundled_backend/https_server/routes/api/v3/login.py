@@ -1,12 +1,10 @@
-"""Route handlers for /api/v3 login/auth endpoints."""
-
 from __future__ import annotations
 
 from typing import Any
 
 from shared.context import ServerContext
 
-from ...auth.service import build_login_data_response, ok
+from ...auth.service import build_code_send_response, build_login_submit_response, ok
 
 _LOGIN_SIGN_KEY = "DnNAYQHCVFIdHSKx"
 
@@ -29,30 +27,13 @@ def match_login_password_submit(path: str) -> bool:
 
 
 def build_login_key_sign(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
+    _ctx: ServerContext,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = ctx, query_params, body_params, clean_path
     return ok({"k": _LOGIN_SIGN_KEY})
 
 
-def build_login_sms_code_send(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
-) -> dict[str, Any]:
-    _ = ctx, query_params, body_params, clean_path
-    return ok({"sent": True, "validForSec": 300})
-
-
-def build_login_password_submit(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
-    clean_path: str,
-) -> dict[str, Any]:
-    _ = query_params, body_params, clean_path
-    return build_login_data_response(ctx)
+build_login_sms_code_send = build_code_send_response
+build_login_password_submit = build_login_submit_response

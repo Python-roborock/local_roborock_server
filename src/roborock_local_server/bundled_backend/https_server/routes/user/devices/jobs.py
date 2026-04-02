@@ -1,5 +1,3 @@
-"""Route handler for /user/devices/{id}/jobs."""
-
 from __future__ import annotations
 
 import re
@@ -18,11 +16,10 @@ def match(path: str) -> bool:
 
 def build(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
     clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params, body_params
     parts = [part for part in clean_path.rstrip("/").split("/") if part]
     device_id = parts[-2] if len(parts) >= 2 else ""
     return wrap_response(device_jobs_payload(ctx, device_id))

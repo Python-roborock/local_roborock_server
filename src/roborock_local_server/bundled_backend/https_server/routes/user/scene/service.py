@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any, Callable, Sequence
 
 from shared.context import ServerContext
+from shared.data_helpers import as_bool, as_int, default_home_id, get_value, stable_int
+from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory, write_inventory
 from shared.routine_runner import RoutineExecutionError, RoutineRunner
-
-_WEB_API_INVENTORY_FILE = "web_api_inventory.json"
 
 
 def _first_non_empty(values: Sequence[str]) -> str:
@@ -19,72 +18,13 @@ def _first_non_empty(values: Sequence[str]) -> str:
     return ""
 
 
-def _get_value(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
-    for key in keys:
-        value = data.get(key)
-        if value is None:
-            continue
-        if isinstance(value, str) and value.strip() == "":
-            continue
-        return value
-    return default
-
-
-def _as_int(value: Any, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _as_bool(value: Any, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "y", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "n", "off"}:
-            return False
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return default
-
-
-def _stable_int(seed: str) -> int:
-    return int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12], 16)
-
-
-def _default_home_id(ctx: ServerContext) -> int:
-    return _stable_int(f"{ctx.duid}:home")
-
-
-def _load_inventory(ctx: ServerContext) -> dict[str, Any]:
-    path = ctx.http_jsonl.parent / _WEB_API_INVENTORY_FILE
-    if not path.exists():
-        return {}
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
-
-
-def _write_inventory(ctx: ServerContext, inventory: dict[str, Any]) -> None:
-    path = ctx.http_jsonl.parent / _WEB_API_INVENTORY_FILE
-    try:
-        path.write_text(json.dumps(inventory, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError:
-        return
-
-
 def _scene_state(ctx: ServerContext) -> dict[str, Any]:
-    inventory = _load_inventory(ctx)
+    inventory = load_inventory(ctx)
     home_value = inventory.get("home")
     home = home_value if isinstance(home_value, dict) else {}
-    home_id = _as_int(
-        _get_value(home, "rr_home_id", "rrHomeId", "home_id", "id", default=_default_home_id(ctx)),
-        _default_home_id(ctx),
+    home_id = as_int(
+        get_value(home, "rr_home_id", "rrHomeId", "home_id", "id", default=default_home_id(ctx)),
+        default_home_id(ctx),
     )
     scenes_value = inventory.get("scenes")
     scenes = scenes_value if isinstance(scenes_value, list) else []
@@ -128,7 +68,7 @@ def _scene_param_json_string(param_payload: dict[str, Any]) -> str:
 def _scene_param_payload(scene_request: dict[str, Any]) -> dict[str, Any]:
     if isinstance(scene_request, dict) and isinstance(scene_request.get("action"), dict):
         return scene_request
-    param_value = _get_value(scene_request, "param", default={})
+    param_value = get_value(scene_request, "param", default={})
     if isinstance(param_value, dict):
         return param_value
     if isinstance(param_value, str) and param_value.strip():
@@ -152,7 +92,7 @@ def _scene_zone_range(raw_zone: dict[str, Any]) -> list[int] | None:
     range_value = raw_zone.get("range")
     if not isinstance(range_value, list) or len(range_value) < 4:
         return None
-    return [_as_int(value, 0) for value in range_value[:4]]
+    return [as_int(value, 0) for value in range_value[:4]]
 
 
 def _merge_scene_zone_ranges_from_request(
@@ -179,7 +119,7 @@ def _merge_scene_zone_ranges_from_request(
             if not isinstance(zone, dict):
                 continue
             range_value = _scene_zone_range(zone)
-            key = _scene_zone_key(tid, _as_int(zone.get("zid"), -1))
+            key = _scene_zone_key(tid, as_int(zone.get("zid"), -1))
             if key is None or range_value is None:
                 continue
             zone_ranges[key] = range_value
@@ -212,7 +152,7 @@ def _merge_scene_zone_ranges_from_response(
                 continue
             result_zone = result_zones[index] if index < len(result_zones) and isinstance(result_zones[index], dict) else {}
             range_value = _scene_zone_range(request_zone)
-            key = _scene_zone_key(tid, _as_int(result_zone.get("zid", request_zone.get("zid")), -1))
+            key = _scene_zone_key(tid, as_int(result_zone.get("zid", request_zone.get("zid")), -1))
             if key is None or range_value is None:
                 continue
             zone_ranges[key] = range_value
@@ -353,7 +293,7 @@ def _hydrate_scene_param_with_zone_ranges(
                 if not isinstance(zone, dict):
                     new_zones.append(zone)
                     continue
-                range_value = zone_ranges.get((tid, _as_int(zone.get("zid"), -1)))
+                range_value = zone_ranges.get((tid, as_int(zone.get("zid"), -1)))
                 if range_value is None:
                     new_zones.append(zone)
                     continue
@@ -382,29 +322,29 @@ def build_scene_payload(
     home_id: int | None,
     include_device_context: bool,
 ) -> dict[str, Any]:
-    scene_id = _as_int(_get_value(scene, "id", default=0), 0)
+    scene_id = as_int(get_value(scene, "id", default=0), 0)
     payload: dict[str, Any] = {
         "id": scene_id,
-        "name": str(_get_value(scene, "name", default=f"Routine {scene_id}" if scene_id else "Routine")),
-        "enabled": _as_bool(_get_value(scene, "enabled", default=True), True),
-        "type": str(_get_value(scene, "type", default="WORKFLOW")),
+        "name": str(get_value(scene, "name", default=f"Routine {scene_id}" if scene_id else "Routine")),
+        "enabled": as_bool(get_value(scene, "enabled", default=True), True),
+        "type": str(get_value(scene, "type", default="WORKFLOW")),
     }
     if home_id is not None:
         payload["homeId"] = home_id
     if include_device_context:
-        scene_device = str(_get_value(scene, "device_id", "deviceId", "duid", default="")).strip()
+        scene_device = str(get_value(scene, "device_id", "deviceId", "duid", default="")).strip()
         if scene_device:
             payload["deviceId"] = scene_device
-        scene_device_name = str(_get_value(scene, "device_name", "deviceName", default="")).strip()
+        scene_device_name = str(get_value(scene, "device_name", "deviceName", default="")).strip()
         if scene_device_name:
             payload["deviceName"] = scene_device_name
-    param = _get_value(scene, "param")
+    param = get_value(scene, "param")
     if param is not None or "param" in scene:
         payload["param"] = param
-    extra = scene.get("extra") if "extra" in scene else _get_value(scene, "extra")
+    extra = scene.get("extra") if "extra" in scene else get_value(scene, "extra")
     if extra is not None or "extra" in scene:
         payload["extra"] = extra
-    tag_id = _get_value(scene, "tagId", "tag_id")
+    tag_id = get_value(scene, "tagId", "tag_id")
     if tag_id is not None:
         payload["tagId"] = str(tag_id)
     return payload
@@ -413,14 +353,14 @@ def build_scene_payload(
 def _inventory_home_id(ctx: ServerContext, inventory: dict[str, Any]) -> int:
     home_value = inventory.get("home")
     home = home_value if isinstance(home_value, dict) else {}
-    return _as_int(
-        _get_value(home, "id", "home_id", "rrHomeId", "rr_home_id", default=_default_home_id(ctx)),
-        _default_home_id(ctx),
+    return as_int(
+        get_value(home, "id", "home_id", "rrHomeId", "rr_home_id", default=default_home_id(ctx)),
+        default_home_id(ctx),
     )
 
 
 def _scene_device_id(scene_request: dict[str, Any], inventory: dict[str, Any], ctx: ServerContext) -> str:
-    explicit_device_id = str(_get_value(scene_request, "deviceId", "device_id", default="")).strip()
+    explicit_device_id = str(get_value(scene_request, "deviceId", "device_id", default="")).strip()
     if explicit_device_id:
         return explicit_device_id
 
@@ -431,7 +371,7 @@ def _scene_device_id(scene_request: dict[str, Any], inventory: dict[str, Any], c
         for item in items:
             if not isinstance(item, dict):
                 continue
-            entity_id = str(_get_value(item, "entityId", "entity_id", default="")).strip()
+            entity_id = str(get_value(item, "entityId", "entity_id", default="")).strip()
             if entity_id:
                 return entity_id
 
@@ -441,7 +381,7 @@ def _scene_device_id(scene_request: dict[str, Any], inventory: dict[str, Any], c
         for device in devices:
             if not isinstance(device, dict):
                 continue
-            candidate = str(_get_value(device, "duid", "did", "device_id", "deviceId", default="")).strip()
+            candidate = str(get_value(device, "duid", "did", "device_id", "deviceId", default="")).strip()
             if candidate:
                 return candidate
     return ctx.duid
@@ -455,10 +395,10 @@ def _scene_device_name(inventory: dict[str, Any], device_id: str) -> str:
         for device in devices:
             if not isinstance(device, dict):
                 continue
-            candidate = str(_get_value(device, "duid", "did", "device_id", "deviceId", default="")).strip()
+            candidate = str(get_value(device, "duid", "did", "device_id", "deviceId", default="")).strip()
             if candidate != normalized_device_id:
                 continue
-            name = str(_get_value(device, "name", "device_name", default="")).strip()
+            name = str(get_value(device, "name", "device_name", default="")).strip()
             if name:
                 return name
     return ""
@@ -470,7 +410,7 @@ def _replace_inventory_scene(
     scene_id: int,
     scene_updater: Callable[[dict[str, Any], dict[str, Any]], None],
 ) -> tuple[dict[str, Any], int]:
-    inventory = _load_inventory(ctx)
+    inventory = load_inventory(ctx)
     if not isinstance(inventory, dict):
         inventory = {}
 
@@ -478,7 +418,7 @@ def _replace_inventory_scene(
     scenes = [dict(scene) for scene in scenes_source if isinstance(scene, dict)] if isinstance(scenes_source, list) else []
     updated_scene: dict[str, Any] | None = None
     for index, scene in enumerate(scenes):
-        if _as_int(_get_value(scene, "id", default=0), 0) != scene_id:
+        if as_int(get_value(scene, "id", default=0), 0) != scene_id:
             continue
         candidate = dict(scene)
         scene_updater(candidate, inventory)
@@ -496,12 +436,12 @@ def _replace_inventory_scene(
         for scene in scenes
         if isinstance(scene, dict)
     ]
-    _write_inventory(ctx, inventory)
+    write_inventory(ctx, inventory)
     return updated_scene, home_id
 
 
 def _hydrate_inventory_scene_ranges(ctx: ServerContext, scene: dict[str, Any]) -> dict[str, Any]:
-    scene_id = _as_int(_get_value(scene, "id", default=0), 0)
+    scene_id = as_int(get_value(scene, "id", default=0), 0)
     if scene_id <= 0:
         return scene
     param_payload = _scene_param_payload(scene)
@@ -518,32 +458,32 @@ def _hydrate_inventory_scene_ranges(ctx: ServerContext, scene: dict[str, Any]) -
 
 
 def _create_inventory_scene(ctx: ServerContext, scene_request: dict[str, Any]) -> dict[str, Any]:
-    inventory = _load_inventory(ctx)
+    inventory = load_inventory(ctx)
     if not isinstance(inventory, dict):
         inventory = {}
 
     scenes_source = inventory.get("scenes")
     scenes = [dict(scene) for scene in scenes_source if isinstance(scene, dict)] if isinstance(scenes_source, list) else []
 
-    home_id = _as_int(_get_value(scene_request, "homeId", default=_default_home_id(ctx)), _default_home_id(ctx))
-    scene_name = str(_get_value(scene_request, "name", default=f"Routine {len(scenes) + 1}")).strip() or f"Routine {len(scenes) + 1}"
-    scene_id = max((_as_int(_get_value(scene, "id", default=0), 0) for scene in scenes), default=0) + 1
+    home_id = as_int(get_value(scene_request, "homeId", default=default_home_id(ctx)), default_home_id(ctx))
+    scene_name = str(get_value(scene_request, "name", default=f"Routine {len(scenes) + 1}")).strip() or f"Routine {len(scenes) + 1}"
+    scene_id = max((as_int(get_value(scene, "id", default=0), 0) for scene in scenes), default=0) + 1
     if scene_id <= 0:
-        scene_id = (_stable_int(f"{home_id}:{scene_name}") % 9_000_000) + 1_000_000
+        scene_id = (stable_int(f"{home_id}:{scene_name}") % 9_000_000) + 1_000_000
 
     param_payload = _scene_param_payload(scene_request)
     param_payload, _ = _hydrate_scene_param_with_zone_ranges(ctx, param_payload)
     device_id = _scene_device_id(scene_request, inventory, ctx)
     device_name = _scene_device_name(inventory, device_id)
-    tag_id = _get_value(scene_request, "tagId", default=_get_value(param_payload, "tagId"))
+    tag_id = get_value(scene_request, "tagId", default=get_value(param_payload, "tagId"))
 
     scene_record: dict[str, Any] = {
         "id": scene_id,
         "name": scene_name,
         "param": _scene_param_json_string(param_payload),
-        "enabled": _as_bool(_get_value(scene_request, "enabled", default=True), True),
+        "enabled": as_bool(get_value(scene_request, "enabled", default=True), True),
         "extra": scene_request.get("extra") if isinstance(scene_request, dict) and "extra" in scene_request else None,
-        "type": str(_get_value(scene_request, "type", default="WORKFLOW")),
+        "type": str(get_value(scene_request, "type", default="WORKFLOW")),
         "device_id": device_id,
         "device_name": device_name,
     }
@@ -555,9 +495,9 @@ def _create_inventory_scene(ctx: ServerContext, scene_request: dict[str, Any]) -
 
     scene_order_value = inventory.get("scene_order")
     if isinstance(scene_order_value, list):
-        scene_order = [_as_int(value, 0) for value in scene_order_value if _as_int(value, 0) > 0]
+        scene_order = [as_int(value, 0) for value in scene_order_value if as_int(value, 0) > 0]
     else:
-        scene_order = [_as_int(_get_value(scene, "id", default=0), 0) for scene in scenes[:-1] if _as_int(_get_value(scene, "id", default=0), 0) > 0]
+        scene_order = [as_int(get_value(scene, "id", default=0), 0) for scene in scenes[:-1] if as_int(get_value(scene, "id", default=0), 0) > 0]
     scene_order.append(scene_id)
     inventory["scene_order"] = scene_order
 
@@ -568,10 +508,10 @@ def _create_inventory_scene(ctx: ServerContext, scene_request: dict[str, Any]) -
 
     home_value = inventory.get("home")
     home = dict(home_value) if isinstance(home_value, dict) else {}
-    if _get_value(home, "id", "home_id", "rrHomeId", "rr_home_id") is None and home_id > 0:
+    if get_value(home, "id", "home_id", "rrHomeId", "rr_home_id") is None and home_id > 0:
         home["id"] = home_id
     inventory["home"] = home
-    _write_inventory(ctx, inventory)
+    write_inventory(ctx, inventory)
     return scene_record
 
 
@@ -599,7 +539,7 @@ def list_scenes_for_device(ctx: ServerContext, device_id: str) -> list[dict[str,
     for scene in scenes:
         if not isinstance(scene, dict):
             continue
-        scene_device = _get_value(scene, "device_id", "deviceId", "duid")
+        scene_device = get_value(scene, "device_id", "deviceId", "duid")
         if scene_device and str(scene_device) != str(device_id):
             continue
         filtered.append(build_scene_payload(scene, home_id=None, include_device_context=False))
@@ -609,7 +549,7 @@ def list_scenes_for_device(ctx: ServerContext, device_id: str) -> list[dict[str,
 def list_scenes_for_home(ctx: ServerContext, requested_home_id: Any) -> list[dict[str, Any]]:
     state = _scene_state(ctx)
     home_id = state["home_id"]
-    requested_id = _as_int(requested_home_id, 0)
+    requested_id = as_int(requested_home_id, 0)
     if requested_id and requested_id != home_id:
         return []
     return [
@@ -621,37 +561,37 @@ def list_scenes_for_home(ctx: ServerContext, requested_home_id: Any) -> list[dic
 
 def scene_order(ctx: ServerContext, query_params: dict[str, list[str]]) -> list[int]:
     state = _scene_state(ctx)
-    requested_home_id = _as_int(_split_param_values(query_params.get("homeId", []))[0] if query_params.get("homeId") else 0, 0)
+    requested_home_id = as_int(_split_param_values(query_params.get("homeId", []))[0] if query_params.get("homeId") else 0, 0)
     home_id = state["home_id"]
     if requested_home_id and requested_home_id != home_id:
         return []
     allowed_device_ids = set(_split_param_values(query_params.get("duids", [])))
     scenes_by_id = {
-        _as_int(_get_value(scene, "id", default=0), 0): scene
+        as_int(get_value(scene, "id", default=0), 0): scene
         for scene in state["scenes"]
-        if isinstance(scene, dict) and _as_int(_get_value(scene, "id", default=0), 0) > 0
+        if isinstance(scene, dict) and as_int(get_value(scene, "id", default=0), 0) > 0
     }
     ordered_scene_ids: list[int] = []
     existing_scene_order = state.get("scene_order")
     if isinstance(existing_scene_order, list):
         for raw_scene_id in existing_scene_order:
-            scene_id = _as_int(raw_scene_id, 0)
+            scene_id = as_int(raw_scene_id, 0)
             if scene_id <= 0 or scene_id in ordered_scene_ids:
                 continue
             scene = scenes_by_id.get(scene_id)
             if not isinstance(scene, dict):
                 continue
-            scene_device = str(_get_value(scene, "device_id", "deviceId", "duid", default="")).strip()
+            scene_device = str(get_value(scene, "device_id", "deviceId", "duid", default="")).strip()
             if allowed_device_ids and scene_device not in allowed_device_ids:
                 continue
             ordered_scene_ids.append(scene_id)
     for scene in state["scenes"]:
         if not isinstance(scene, dict):
             continue
-        scene_device = str(_get_value(scene, "device_id", "deviceId", "duid", default="")).strip()
+        scene_device = str(get_value(scene, "device_id", "deviceId", "duid", default="")).strip()
         if allowed_device_ids and scene_device not in allowed_device_ids:
             continue
-        scene_id = _as_int(_get_value(scene, "id", default=0), 0)
+        scene_id = as_int(get_value(scene, "id", default=0), 0)
         if scene_id > 0 and scene_id not in ordered_scene_ids:
             ordered_scene_ids.append(scene_id)
     return ordered_scene_ids
@@ -660,7 +600,7 @@ def scene_order(ctx: ServerContext, query_params: dict[str, list[str]]) -> list[
 def create_scene(ctx: ServerContext, body_params: dict[str, list[str]]) -> dict[str, Any]:
     scene_request = scene_request_from_body(body_params)
     created_scene = _create_inventory_scene(ctx, scene_request)
-    home_id = _as_int(_get_value(scene_request, "homeId", default=_default_home_id(ctx)), _default_home_id(ctx))
+    home_id = as_int(get_value(scene_request, "homeId", default=default_home_id(ctx)), default_home_id(ctx))
     return build_scene_payload(created_scene, home_id=home_id, include_device_context=True)
 
 
@@ -670,7 +610,7 @@ def execute_scene(ctx: ServerContext, scene_id: int) -> Any:
         (
             dict(candidate)
             for candidate in state["scenes"]
-            if isinstance(candidate, dict) and _as_int(_get_value(candidate, "id", default=0), 0) == scene_id
+            if isinstance(candidate, dict) and as_int(get_value(candidate, "id", default=0), 0) == scene_id
         ),
         None,
     )
@@ -684,7 +624,7 @@ def update_scene_name(ctx: ServerContext, scene_id: int, body_params: dict[str, 
     scene_name = _first_non_empty(body_params.get("name") or [])
     if not scene_name:
         scene_request = scene_request_from_body(body_params)
-        scene_name = str(_get_value(scene_request, "name", default="")).strip()
+        scene_name = str(get_value(scene_request, "name", default="")).strip()
     if not scene_name:
         raise RoutineExecutionError(f"Scene {scene_id} name is required")
 
@@ -712,12 +652,12 @@ def update_scene_param(ctx: ServerContext, scene_id: int, body_params: dict[str,
             if device_name:
                 updated_scene["device_name"] = device_name
         if "enabled" in scene_request:
-            updated_scene["enabled"] = _as_bool(_get_value(scene_request, "enabled", default=True), True)
+            updated_scene["enabled"] = as_bool(get_value(scene_request, "enabled", default=True), True)
         if "type" in scene_request:
-            updated_scene["type"] = str(_get_value(scene_request, "type", default="WORKFLOW"))
+            updated_scene["type"] = str(get_value(scene_request, "type", default="WORKFLOW"))
         if "extra" in scene_request:
             updated_scene["extra"] = scene_request.get("extra")
-        tag_id = _get_value(scene_request, "tagId", default=_get_value(param_payload, "tagId"))
+        tag_id = get_value(scene_request, "tagId", default=get_value(param_payload, "tagId"))
         if tag_id is not None:
             updated_scene["tagId"] = str(tag_id)
 

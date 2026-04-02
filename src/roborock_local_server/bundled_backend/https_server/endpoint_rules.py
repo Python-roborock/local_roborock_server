@@ -1,5 +1,3 @@
-"""Declarative endpoint behavior rules for the FastAPI HTTPS server."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,8 +7,11 @@ import re
 import time
 from typing import Any, Callable, Sequence
 
+from shared.constants import DEFAULT_HOME_NAME, DEFAULT_TIMEZONE, MODEL_PRODUCT_ID_OVERRIDES
 from shared.context import ServerContext
+from shared.data_helpers import as_bool, as_int, default_home_id, default_product_name, get_value, stable_int
 from shared.http_helpers import wrap_response
+from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory, write_inventory
 
 from .routes.api.v1.appfeatureplugin import build as _build_app_feature_plugin
 from .routes.api.v1.appfeatureplugin import match as _match_app_feature_plugin
@@ -131,15 +132,7 @@ from .routes.v2.user.scene import match as _match_post_scene_create
 RouteMatcher = Callable[..., bool]
 RouteResponseFactory = Callable[[ServerContext, dict[str, list[str]], dict[str, list[str]], str], dict[str, Any]]
 
-_WEB_API_INVENTORY_FILE = "web_api_inventory.json"
-_DEFAULT_HOME_NAME = "Local Home"
-_DEFAULT_TIMEZONE = "America/New_York"
 _RSA_OAEP_SHA1_MAX_PLAINTEXT = 214
-_MODEL_PRODUCT_ID_OVERRIDES = {
-    "roborock.vacuum.a87": 110,
-    "roborock.vacuum.a15": 23,
-    "roborock.vacuum.sc05": 10001,
-}
 _AGREEMENT_LATEST_DATA = {
     "userAgreement": {
         "version": "16.0",
@@ -189,51 +182,6 @@ def _ok(data: Any) -> dict[str, Any]:
     return {"code": 200, "msg": "success", "data": data}
 
 
-def _get_value(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
-    for key in keys:
-        value = data.get(key)
-        if value is None:
-            continue
-        if isinstance(value, str) and value.strip() == "":
-            continue
-        return value
-    return default
-
-
-def _as_int(value: Any, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _as_bool(value: Any, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "y", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "n", "off"}:
-            return False
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return default
-
-
-def _stable_int(seed: str) -> int:
-    return int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12], 16)
-
-
-def _default_home_id(ctx: ServerContext) -> int:
-    return _stable_int(f"{ctx.duid}:home")
-
-
-def _default_product_name(model: str) -> str:
-    short_model = model.split(".")[-1].upper() if model else "VACUUM"
-    return f"Roborock {short_model}"
-
-
 def _runtime_connected_identity_set(ctx: ServerContext) -> tuple[set[str], bool]:
     """Return runtime-connected device identities keyed by DUID/DID."""
     runtime_state = getattr(ctx, "runtime_state", None)
@@ -252,7 +200,7 @@ def _runtime_connected_identity_set(ctx: ServerContext) -> tuple[set[str], bool]
     for vac in snapshot:
         if not isinstance(vac, dict):
             continue
-        if not _as_bool(vac.get("connected"), False):
+        if not as_bool(vac.get("connected"), False):
             continue
         for key in ("duid", "did"):
             value = vac.get(key)
@@ -276,7 +224,7 @@ def _runtime_connected_identity_set(ctx: ServerContext) -> tuple[set[str], bool]
     # Runtime MQTT topics often identify devices by numeric DID while cloud
     # inventory uses DUID. Link connected runtime devices back to inventory
     # entries via unique model when possible.
-    inventory = _load_inventory(ctx)
+    inventory = load_inventory(ctx)
     inventory_sources: list[dict[str, Any]] = []
     for source_key in ("devices", "received_devices", "receivedDevices"):
         source_list = inventory.get(source_key)
@@ -288,16 +236,16 @@ def _runtime_connected_identity_set(ctx: ServerContext) -> tuple[set[str], bool]
 
     model_counts: dict[str, int] = {}
     for raw in inventory_sources:
-        model = str(_get_value(raw, "model", default="")).strip().lower()
+        model = str(get_value(raw, "model", default="")).strip().lower()
         if not model:
             continue
         model_counts[model] = model_counts.get(model, 0) + 1
 
     for raw in inventory_sources:
-        model = str(_get_value(raw, "model", default="")).strip().lower()
+        model = str(get_value(raw, "model", default="")).strip().lower()
         if not model or model_counts.get(model, 0) != 1 or model not in connected_models:
             continue
-        inventory_duid = str(_get_value(raw, "duid", "did", "device_id", default="")).strip()
+        inventory_duid = str(get_value(raw, "duid", "did", "device_id", default="")).strip()
         if inventory_duid:
             connected_ids.add(inventory_duid)
     return connected_ids, bool(connected_ids)
@@ -320,25 +268,6 @@ def _runtime_online_for_device(
     return False
 
 
-def _load_inventory(ctx: ServerContext) -> dict[str, Any]:
-    path = ctx.http_jsonl.parent / _WEB_API_INVENTORY_FILE
-    if not path.exists():
-        return {}
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
-
-
-def _write_inventory(ctx: ServerContext, inventory: dict[str, Any]) -> None:
-    path = ctx.http_jsonl.parent / _WEB_API_INVENTORY_FILE
-    try:
-        path.write_text(json.dumps(inventory, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError:
-        return
-
-
 def _normalize_devices(
     ctx: ServerContext,
     devices_raw: list[dict[str, Any]],
@@ -354,41 +283,41 @@ def _normalize_devices(
     for index, raw in enumerate(devices_raw):
         raw_item = raw if isinstance(raw, dict) else {}
         fallback_duid = ctx.duid if index == 0 else f"{ctx.duid}_{index + 1}"
-        duid = str(_get_value(raw_item, "duid", "did", "device_id", default=fallback_duid))
+        duid = str(get_value(raw_item, "duid", "did", "device_id", default=fallback_duid))
         local_key = ctx.resolve_device_localkey(
-            did=str(_get_value(raw_item, "did", "device_did", default="")),
+            did=str(get_value(raw_item, "did", "device_did", default="")),
             duid=duid,
-            model=str(_get_value(raw_item, "model", default="")),
-            name=str(_get_value(raw_item, "name", "device_name", default="")),
-            product_id=str(_get_value(raw_item, "product_id", "productId", default="")),
+            model=str(get_value(raw_item, "model", default="")),
+            name=str(get_value(raw_item, "name", "device_name", default="")),
+            product_id=str(get_value(raw_item, "product_id", "productId", default="")),
             source="web_home_data",
             assign_if_missing=True,
         )
-        product_id = str(_get_value(raw_item, "product_id", "productId", default=f"product_{index + 1}"))
-        model = str(_get_value(raw_item, "model", default="roborock.vacuum.a117"))
-        category = str(_get_value(raw_item, "category", default="robot.vacuum.cleaner"))
-        product_name = str(_get_value(raw_item, "product_name", "productName", default=_default_product_name(model)))
-        timezone = str(_get_value(raw_item, "timezone", "timeZoneId", "time_zone_id", default=_DEFAULT_TIMEZONE))
-        room_id_value = _get_value(raw_item, "room_id", "roomId")
-        room_id = _as_int(room_id_value, 0) if room_id_value is not None else None
+        product_id = str(get_value(raw_item, "product_id", "productId", default=f"product_{index + 1}"))
+        model = str(get_value(raw_item, "model", default="roborock.vacuum.a117"))
+        category = str(get_value(raw_item, "category", default="robot.vacuum.cleaner"))
+        product_name = str(get_value(raw_item, "product_name", "productName", default=default_product_name(model)))
+        timezone = str(get_value(raw_item, "timezone", "timeZoneId", "time_zone_id", default=DEFAULT_TIMEZONE))
+        room_id_value = get_value(raw_item, "room_id", "roomId")
+        room_id = as_int(room_id_value, 0) if room_id_value is not None else None
         runtime_online = _runtime_online_for_device(
             raw_item,
             runtime_connected_ids=connected_ids,
         )
-        inventory_online = _as_bool(_get_value(raw_item, "online", default=True), True)
+        inventory_online = as_bool(get_value(raw_item, "online", default=True), True)
         resolved_online = runtime_online if runtime_online_authoritative else (inventory_online or runtime_online)
         device = {
             "duid": duid,
-            "name": str(_get_value(raw_item, "name", "device_name", default=f"{default_name_prefix} {index + 1}")),
+            "name": str(get_value(raw_item, "name", "device_name", default=f"{default_name_prefix} {index + 1}")),
             "localKey": local_key,
             "productId": product_id,
-            "fv": str(_get_value(raw_item, "fv", "firmware", "firmware_version", default="02.33.88")),
-            "pv": str(_get_value(raw_item, "pv", "protocol_version", default="1.0")),
-            "activeTime": _as_int(_get_value(raw_item, "active_time", "activeTime", default=now_ts), now_ts),
+            "fv": str(get_value(raw_item, "fv", "firmware", "firmware_version", default="02.33.88")),
+            "pv": str(get_value(raw_item, "pv", "protocol_version", default="1.0")),
+            "activeTime": as_int(get_value(raw_item, "active_time", "activeTime", default=now_ts), now_ts),
             "timeZoneId": timezone,
             "online": resolved_online,
             "sn": str(
-                _get_value(
+                get_value(
                     raw_item,
                     "sn",
                     "serial_number",
@@ -398,10 +327,10 @@ def _normalize_devices(
         }
         if room_id is not None and room_id > 0:
             device["roomId"] = room_id
-        feature_set = _get_value(raw_item, "feature_set", "featureSet")
+        feature_set = get_value(raw_item, "feature_set", "featureSet")
         if feature_set is not None:
             device["featureSet"] = str(feature_set)
-        new_feature_set = _get_value(raw_item, "new_feature_set", "newFeatureSet")
+        new_feature_set = get_value(raw_item, "new_feature_set", "newFeatureSet")
         if new_feature_set is not None:
             device["newFeatureSet"] = str(new_feature_set)
         devices.append(device)
@@ -411,13 +340,13 @@ def _normalize_devices(
                 "name": product_name,
                 "model": model,
                 "category": category,
-                "code": str(_get_value(raw_item, "code", default=model.split(".")[-1] if model else "a117")),
-                "iconUrl": str(_get_value(raw_item, "icon_url", "iconUrl", default="")),
+                "code": str(get_value(raw_item, "code", default=model.split(".")[-1] if model else "a117")),
+                "iconUrl": str(get_value(raw_item, "icon_url", "iconUrl", default="")),
             }
-            capability = _get_value(raw_item, "capability")
+            capability = get_value(raw_item, "capability")
             if capability is not None:
                 product["capability"] = capability
-            schema = _get_value(raw_item, "schema")
+            schema = get_value(raw_item, "schema")
             if isinstance(schema, list):
                 product["schema"] = schema
             products_by_id[product_id] = product
@@ -425,7 +354,7 @@ def _normalize_devices(
 
 
 def _build_web_state(ctx: ServerContext) -> dict[str, Any]:
-    inventory = _load_inventory(ctx)
+    inventory = load_inventory(ctx)
     home_value = inventory.get("home")
     home_data = home_value if isinstance(home_value, dict) else {}
     now_ts = int(time.time())
@@ -439,7 +368,7 @@ def _build_web_state(ctx: ServerContext) -> dict[str, Any]:
         runtime_connected_ids=runtime_connected_ids,
         runtime_online_authoritative=any_runtime_connected,
     )
-    raw_received = _get_value(inventory, "received_devices", "receivedDevices", default=[])
+    raw_received = get_value(inventory, "received_devices", "receivedDevices", default=[])
     received_source = raw_received if isinstance(raw_received, list) else []
     received_devices, received_products = _normalize_devices(
         ctx,
@@ -454,11 +383,11 @@ def _build_web_state(ctx: ServerContext) -> dict[str, Any]:
         if all(existing["id"] != product_id for existing in products):
             products.append(product)
 
-    home_id = _as_int(
-        _get_value(home_data, "rr_home_id", "rrHomeId", "home_id", "id", default=_default_home_id(ctx)),
-        _default_home_id(ctx),
+    home_id = as_int(
+        get_value(home_data, "rr_home_id", "rrHomeId", "home_id", "id", default=default_home_id(ctx)),
+        default_home_id(ctx),
     )
-    home_name = str(_get_value(home_data, "name", "home_name", default=_DEFAULT_HOME_NAME))
+    home_name = str(get_value(home_data, "name", "home_name", default=DEFAULT_HOME_NAME))
     rooms = _normalize_rooms(inventory)
     home_payload = {
         "id": home_id,
@@ -468,13 +397,13 @@ def _build_web_state(ctx: ServerContext) -> dict[str, Any]:
         "receivedDevices": received_devices,
         "rooms": rooms,
     }
-    lon = _get_value(home_data, "lon")
+    lon = get_value(home_data, "lon")
     if lon is not None:
         home_payload["lon"] = lon
-    lat = _get_value(home_data, "lat")
+    lat = get_value(home_data, "lat")
     if lat is not None:
         home_payload["lat"] = lat
-    geo_name = _get_value(home_data, "geo_name", "geoName")
+    geo_name = get_value(home_data, "geo_name", "geoName")
     if geo_name is not None:
         home_payload["geoName"] = geo_name
 
@@ -520,11 +449,11 @@ def _filter_home_data_to_runtime_devices(ctx: ServerContext, home_data: dict[str
         for device in devices:
             if not isinstance(device, dict):
                 continue
-            duid = str(_get_value(device, "duid", "did", default="")).strip()
+            duid = str(get_value(device, "duid", "did", default="")).strip()
             if not duid or not _device_has_runtime_did(ctx, duid):
                 continue
             filtered_devices.append(dict(device))
-            product_id = str(_get_value(device, "productId", "product_id", default="")).strip()
+            product_id = str(get_value(device, "productId", "product_id", default="")).strip()
             if product_id:
                 allowed_product_ids.add(product_id)
         filtered_home[collection_key] = filtered_devices
@@ -535,7 +464,7 @@ def _filter_home_data_to_runtime_devices(ctx: ServerContext, home_data: dict[str
     for product in products:
         if not isinstance(product, dict):
             continue
-        product_id = str(_get_value(product, "id", "productId", "product_id", default="")).strip()
+        product_id = str(get_value(product, "id", "productId", "product_id", default="")).strip()
         if not product_id or product_id not in allowed_product_ids:
             continue
         filtered_products.append(dict(product))
@@ -565,13 +494,13 @@ def _build_product_response(ctx: ServerContext, home_data: dict[str, Any]) -> di
             }
         model = str(product.get("model") or "roborock.vacuum.a117")
         model_key = model.strip().lower()
-        product_id = _MODEL_PRODUCT_ID_OVERRIDES.get(
+        product_id = MODEL_PRODUCT_ID_OVERRIDES.get(
             model_key,
-            _as_int(raw_product_id, _stable_int(raw_product_id or category_name) % 1_000_000),
+            as_int(raw_product_id, stable_int(raw_product_id or category_name) % 1_000_000),
         )
         product_entry = {
             "id": product_id,
-            "name": str(product.get("name") or _default_product_name(model)),
+            "name": str(product.get("name") or default_product_name(model)),
             "model": model,
             "packagename": f"com.roborock.{model.split('.')[-1]}",
             "ncMode": "global",

@@ -20,9 +20,10 @@ def _make_stream_handler() -> logging.Handler:
 
 def _jsonl_stream_logger() -> logging.Logger:
     logger = logging.getLogger(_JSONL_STREAM_LOGGER_NAME)
-    logger.setLevel(logging.INFO)
     logger.propagate = False
     if not logger.handlers:
+        if logger.level == logging.NOTSET:
+            logger.setLevel(logging.INFO)
         logger.addHandler(_make_stream_handler())
     return logger
 
@@ -32,7 +33,7 @@ def append_jsonl(path: Path, entry: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(encoded + "\n")
-    _jsonl_stream_logger().info("[%s] %s", path.name, encoded)
+    _jsonl_stream_logger().debug("[%s] %s", path.name, encoded)
 
 
 def setup_file_logger(name: str, path: Path) -> logging.Logger:

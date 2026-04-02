@@ -1,5 +1,3 @@
-"""Route handlers for /user/scene/{id}/{execute|name|param}."""
-
 from __future__ import annotations
 
 import re
@@ -31,11 +29,10 @@ def match_execute(path: str) -> bool:
 
 def build_execute(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
-    body_params: dict[str, list[str]],
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
     clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params, body_params
     scene_id = _scene_id_from_path(clean_path)
     return wrap_response(execute_scene(ctx, scene_id))
 
@@ -47,11 +44,10 @@ def match_put_name(path: str, method: str = "GET") -> bool:
 
 def build_put_name(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
+    _query_params: dict[str, list[str]],
     body_params: dict[str, list[str]],
     clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params
     scene_id = _scene_id_from_path(clean_path)
     return wrap_response(update_scene_name(ctx, scene_id, body_params))
 
@@ -63,11 +59,10 @@ def match_put_param(path: str, method: str = "GET") -> bool:
 
 def build_put_param(
     ctx: ServerContext,
-    query_params: dict[str, list[str]],
+    _query_params: dict[str, list[str]],
     body_params: dict[str, list[str]],
     clean_path: str,
 ) -> dict[str, Any]:
-    _ = query_params
     scene_id = _scene_id_from_path(clean_path)
     return wrap_response(update_scene_param(ctx, scene_id, body_params))
 

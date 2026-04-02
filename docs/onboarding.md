@@ -1,57 +1,86 @@
 # Onboarding
 
-You can follow this guide whenever you setup a vacuum. If it is a new vacuum, I'd recommend first setting it up on the Roborock app with the official servers and then go through the onboarding here. That way you can be sure your app has installed all of the artifacts it needs for that vacuum and you can check that it is up to date on it's firmware.
+Before you start, finish [Installation](installation.md) and make sure the server is reachable on your `api-...` hostname. If you want a compatibility snapshot, also check [Tested vacuums](tested_vacuums.md).
 
-1. You need to go through this cycle 2-4 times. I recommend having the admin dashboard up (https://api-roborock.example.com)
+If this is a brand new vacuum, it is still a good idea to set it up once in the official Roborock app first so the app can fetch the vacuum's current metadata and confirm the firmware is up to date.
 
-2. On a machine that is NOT running the server, you need to run the onboarding script found in this repo. 
+## Guided Flow
 
-You need to determine the following parameters:
+Run onboarding from a second machine, not from the machine hosting the local server:
 
-server: This is your server WITHOUT the api- and it should end with a '/' i.e. roborock.example.com/ The onboarding script should help you out if you make a mistake.
+```bash
+uv run start_onboarding --server api-roborock.example.com
+```
 
-ssid: This is the name of the network you want the vacuum to connect to, if there is a space make sure to surround it in quotes.
+`uv run onboarding.py --server api-roborock.example.com` still works as a compatibility wrapper.
 
-password: This is your networks password
+The guided CLI will:
 
-cst: This is your POSIX timezone. Here are some common ones:
+1. Log into the main server with your admin password.
+2. Show the known vacuums that can be onboarded, with status lines such as `Qrevo MaxV [Public Key Determined] [Disconnected]`.
+3. Prompt for any missing local Wi-Fi details on the second machine.
+4. Ask you to reset the vacuum Wi-Fi, join the vacuum's Wi-Fi network, and press Enter when ready.
+5. Send the cfgwifi onboarding packet.
+6. Ask you to reconnect the second machine to your normal Wi-Fi.
+7. Poll the main server every 5 seconds for up to 5 minutes to see whether query samples increased, the public key was recovered, or the vacuum connected.
+8. Tell you whether to retry, wait, choose a different vacuum, or finish.
 
-Eastern Time (US): EST5EDT,M3.2.0,M11.1.0
+You do not need to watch the admin dashboard manually during the loop anymore.
 
-Central Time (US): CST6CDT,M3.2.0,M11.1.0
+## Prompts And Defaults
 
-Mountain Time (US - with DST): MST7MDT,M3.2.0,M11.1.0
+The only required CLI flag is `--server`. The script will prompt for anything missing:
 
-Mountain Time (Arizona - no DST): MST7
+- `admin password`
+- `ssid`
+- `password`
+- `timezone`
+- `cst`
+- `country-domain`
 
-Pacific Time (US): PST8PDT,M3.2.0,M11.1.0
+You can still pass them explicitly if you prefer:
 
-London (UK): GMT0BST,M3.5.0,M10.5.0
+```bash
+uv run start_onboarding --server api-roborock.example.com --ssid "My Wifi" --password "Password123" --timezone "America/New_York" --cst EST5EDT,M3.2.0,M11.1.0 --country-domain us
+```
 
-Central Europe (Paris/Berlin): CET-1CEST,M3.5.0,M10.5.0
+`server` should be your real stack hostname, usually the same `api-...` hostname you use for `/admin`.
 
-India (No DST): IST-5:30
+## CST Examples
 
-Japan (No DST): JST-9
+Eastern Time (US): `EST5EDT,M3.2.0,M11.1.0`
 
-country-domain: Two letter key for your country domain, I'm not sure how this is utilized by the vacuum but 'us' is the valid key for the USA.
+Central Time (US): `CST6CDT,M3.2.0,M11.1.0`
 
-timezone: IANA Time Zone Database identifier i.e. 'America/New_York"
+Mountain Time (US - with DST): `MST7MDT,M3.2.0,M11.1.0`
 
+Mountain Time (Arizona - no DST): `MST7`
 
-Example command:
-`uv run onboarding.py --server roborock.example.com/ --ssid "My Wifi" --password "Password123" --cst EST5EDT,M3.2.0,M11.1.0 --timezone "America/New_York"`
+Pacific Time (US): `PST8PDT,M3.2.0,M11.1.0`
 
-3. The script will walk you through the onboarding process. But you need to Reset the vacuums wifi (You can do this by holding the two buttons on your dock if your vacuum has just two buttons) or by holding the left and right button if your vacuum has three buttons. Hold for 3-5 seconds until you hear "Resetting Wifi". You can find specific instructions for your vacuum by Googling: "How to reset wifi Roborock ..."
+London (UK): `GMT0BST,M3.5.0,M10.5.0`
 
-4. Connect to your vacuum's wifi SSID on a computer that is NOT running the server. Give it a second and then continue on the script.
+Central Europe (Paris/Berlin): `CET-1CEST,M3.5.0,M10.5.0`
 
-5. You will hear the vacuum say 'Connecting to Wifi - Stand by"
+India (No DST): `IST-5:30`
 
-6. Check the UI and wait for the "Num Query samples" count to go up by 1. Once it goes up, you can do another cycle on the onboarding script. Some vacuums seem more resistant than others. So the amount of times you have to do it may vary.
+Japan (No DST): `JST-9`
 
-![Sample](sample_example.png)
+## What To Expect
 
-7. Repeat this until you hear the vacuum say "Wifi Connected" It will take 2-3 times. Once you do it twice, wait a few minutes between tries to ensure that the vacuum has enough time to finish the onboarding cycle.
+- The first successful attempt usually increases the query sample count.
+- If the sample count increases but the public key is still missing, run another cycle.
+- Once the public key is ready, the script will tell you to do one final pairing cycle so the vacuum connects fully.
+- Some vacuums need 2-4 cycles total.
+- If something goes wrong, the CLI lets you `retry`, `refresh`, `reselect`, or `quit`.
 
-Congrats! The vacuum is now free of the cloud!
+You still need to reset the vacuum's Wi-Fi manually. On many Roborock models that means holding the two buttons on the dock or the left and right buttons on the vacuum for 3-5 seconds until you hear the Wi-Fi reset prompt. If you are unsure, search for your exact model's Wi-Fi reset steps.
+
+Congrats! Once the script reports that the vacuum is connected to the local server, the onboarding flow is complete.
+
+## Related Docs
+
+- [Installation](installation.md)
+- [Tested vacuums](tested_vacuums.md)
+- [Home Assistant](home_assistant.md)
+- [Using the Roborock App](roborock_app.md)

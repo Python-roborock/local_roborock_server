@@ -1,5 +1,3 @@
-"""Route handler for bootstrap region resolution."""
-
 from __future__ import annotations
 
 import json
@@ -21,9 +19,8 @@ def build(
     ctx: ServerContext,
     query_params: dict[str, list[str]],
     body_params: dict[str, list[str]],
-    clean_path: str,
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = clean_path
     did = ctx.extract_did(query_params, body_params)
     host_override = request_host_override(query_params)
     api_host = host_override or ctx.api_host

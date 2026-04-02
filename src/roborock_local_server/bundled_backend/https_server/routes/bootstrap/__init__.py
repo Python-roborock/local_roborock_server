@@ -1,2 +1,1 @@
-"""Bootstrap route modules."""
 

@@ -225,6 +225,45 @@ def register_standalone_admin_routes(
         supervisor._require_admin(request)
         return JSONResponse(supervisor._vacuums_payload())
 
+    @app.get("/admin/api/onboarding/devices")
+    async def admin_onboarding_devices(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        return JSONResponse(supervisor._onboarding_devices_payload())
+
+    @app.post("/admin/api/onboarding/sessions")
+    async def admin_onboarding_start(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            body = {}
+        duid = str((body or {}).get("duid") or "").strip()
+        try:
+            payload = supervisor.start_onboarding_session(duid=duid)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except KeyError:
+            return JSONResponse({"error": "Unknown onboarding device"}, status_code=404)
+        return JSONResponse(payload)
+
+    @app.get("/admin/api/onboarding/sessions/{session_id}")
+    async def admin_onboarding_status(session_id: str, request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            payload = supervisor.onboarding_session_snapshot(session_id=session_id)
+        except KeyError:
+            return JSONResponse({"error": "Onboarding session not found"}, status_code=404)
+        return JSONResponse(payload)
+
+    @app.delete("/admin/api/onboarding/sessions/{session_id}")
+    async def admin_onboarding_delete(session_id: str, request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            payload = supervisor.clear_onboarding_session(session_id=session_id)
+        except KeyError:
+            return JSONResponse({"error": "Onboarding session not found"}, status_code=404)
+        return JSONResponse(payload)
+
 
     @app.post("/admin/api/cloud/request-code")
     async def admin_cloud_request_code(request: Request) -> JSONResponse:

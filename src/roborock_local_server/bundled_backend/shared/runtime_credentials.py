@@ -11,9 +11,7 @@ import threading
 from typing import Any
 from urllib.parse import parse_qs
 
-
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from .data_helpers import utcnow_iso
 
 
 def _clean_str(value: Any) -> str:
@@ -160,7 +158,7 @@ class RuntimeCredentialsStore:
     def _save_locked(self) -> None:
         payload = dict(self._base)
         payload["schema_version"] = 2
-        payload["updated_at"] = _utcnow_iso()
+        payload["updated_at"] = utcnow_iso()
         payload["devices"] = self.devices()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -378,9 +376,52 @@ class RuntimeCredentialsStore:
                 changed = True
 
             if changed:
-                device["updated_at"] = _utcnow_iso()
+                device["updated_at"] = utcnow_iso()
                 self._save_locked()
             return dict(device)
+
+    def link_did_to_duid(
+        self,
+        *,
+        did: str,
+        duid: str,
+        name: str = "",
+        model: str = "",
+        product_id: str = "",
+    ) -> tuple[dict[str, str] | None, str]:
+        normalized_did = _clean_str(did)
+        normalized_duid = _clean_str(duid)
+        if not normalized_did or not normalized_duid:
+            return None, "Both did and duid are required."
+
+        with self._lock:
+            did_index = self._find_index_by_did_locked(normalized_did)
+            if did_index is not None:
+                existing_duid = _clean_str(self._devices[did_index].get("duid"))
+                if existing_duid and existing_duid != normalized_duid:
+                    return None, (
+                        f"Runtime DID {normalized_did} is already linked to DUID {existing_duid}; "
+                        "not reassigning it automatically."
+                    )
+
+            duid_index = self._find_index_by_duid_locked(normalized_duid)
+            if duid_index is not None:
+                existing_did = _clean_str(self._devices[duid_index].get("did"))
+                if existing_did and existing_did != normalized_did:
+                    return None, (
+                        f"Selected DUID {normalized_duid} is already linked to DID {existing_did}; "
+                        "not reassigning it automatically."
+                    )
+
+        merged = self.ensure_device(
+            did=normalized_did,
+            duid=normalized_duid,
+            name=name,
+            model=model,
+            product_id=product_id,
+            assign_localkey=False,
+        )
+        return merged, ""
 
     def resolve_device_localkey(
         self,
@@ -451,7 +492,7 @@ class RuntimeCredentialsStore:
 
     def record_mqtt_topic(self, *, topic: str) -> None:
         normalized_topic = _clean_str(topic)
-        now = _utcnow_iso()
+        now = utcnow_iso()
         if normalized_topic.startswith("rr/d/"):
             parts = normalized_topic.split("/")
             if len(parts) >= 5:
@@ -547,7 +588,7 @@ class RuntimeCredentialsStore:
                     device_changed = True
 
                 if device_changed:
-                    device["updated_at"] = _utcnow_iso()
+                    device["updated_at"] = utcnow_iso()
 
             if changed:
                 self._save_locked()

@@ -1,4 +1,3 @@
-"""Shared helpers for the minimal server stack."""
 
 from .constants import DNS_OVERRIDES, MQTT_TYPES
 from .context import ServerContext

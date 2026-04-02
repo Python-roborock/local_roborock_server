@@ -1,5 +1,3 @@
-"""Route handler for /user/app/info."""
-
 from __future__ import annotations
 
 from typing import Any, Sequence
@@ -23,12 +21,11 @@ def match(path: str) -> bool:
 
 
 def build(
-    ctx: ServerContext,
-    query_params: dict[str, list[str]],
+    _ctx: ServerContext,
+    _query_params: dict[str, list[str]],
     body_params: dict[str, list[str]],
-    clean_path: str,
+    _clean_path: str,
 ) -> dict[str, Any]:
-    _ = ctx, query_params, clean_path
     payload = {"stored": True}
     for source_key, payload_key in (
         ("pushChannel", "pushChannel"),
