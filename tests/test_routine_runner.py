@@ -276,6 +276,7 @@ class _ScriptedStatusClient:
         self._statuses = [StatusV2.from_dict(s) for s in status_sequence]
         self._index = 0
         self._logger = logging.getLogger("test-wait")
+        self.sent_commands: list[tuple[RoborockCommand, list | dict | None]] = []
 
     async def get_status(self) -> StatusV2:
         if self._index < len(self._statuses):
@@ -283,6 +284,9 @@ class _ScriptedStatusClient:
             self._index += 1
             return status
         return self._statuses[-1]
+
+    async def send_command(self, command: RoborockCommand, params=None) -> None:
+        self.sent_commands.append((command, params))
 
 
 _ScriptedStatusClient.wait_for_step_complete = (
@@ -366,5 +370,93 @@ def test_wait_for_step_complete_start_timeout(monkeypatch) -> None:
         ])
         with pytest.raises(routine_runner_module.RoutineExecutionError, match="did not leave ready state"):
             await client.wait_for_step_complete()
+
+    asyncio.run(exercise())
+
+
+def test_wait_for_step_complete_resume_after_mid_clean_charge(monkeypatch) -> None:
+    """Robot returns to dock mid-clean with low battery, charges, gets resumed, completes."""
+    monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(routine_runner_module, "_RESUME_BATTERY_THRESHOLD", 80)
+
+    async def exercise() -> None:
+        client = _ScriptedStatusClient([
+            {"state": 18, "in_cleaning": 3, "battery": 55},  # segment cleaning
+            {"state": 26, "in_cleaning": 3, "battery": 30},  # going to wash mop
+            {"state": 6, "in_cleaning": 3, "battery": 14},   # returning home (low battery)
+            {"state": 8, "in_cleaning": 3, "battery": 14},   # charging mid-clean, too low
+            {"state": 8, "in_cleaning": 3, "battery": 50},   # still too low
+            {"state": 8, "in_cleaning": 3, "battery": 80},   # threshold reached → resume sent
+            {"state": 18, "in_cleaning": 3, "battery": 80},  # cleaning resumes
+            {"state": 18, "in_cleaning": 3, "battery": 60},
+            {"state": 6, "in_cleaning": 3, "battery": 40},   # returning home
+            {"state": 8, "in_cleaning": 0, "battery": 40},   # step complete
+        ])
+        await client.wait_for_step_complete()
+        assert len(client.sent_commands) == 1
+        assert client.sent_commands[0] == (RoborockCommand.RESUME_SEGMENT_CLEAN, [])
+
+    asyncio.run(exercise())
+
+
+def test_wait_for_step_complete_resume_zoned_clean(monkeypatch) -> None:
+    """Resume uses correct command for zone cleaning."""
+    monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(routine_runner_module, "_RESUME_BATTERY_THRESHOLD", 80)
+
+    async def exercise() -> None:
+        client = _ScriptedStatusClient([
+            {"state": 18, "in_cleaning": 2, "battery": 50},  # zone cleaning
+            {"state": 8, "in_cleaning": 2, "battery": 80},   # charging mid-clean → resume
+            {"state": 18, "in_cleaning": 2, "battery": 80},  # resumes
+            {"state": 8, "in_cleaning": 0, "battery": 60},   # step complete
+        ])
+        await client.wait_for_step_complete()
+        assert len(client.sent_commands) == 1
+        assert client.sent_commands[0] == (RoborockCommand.RESUME_ZONED_CLEAN, [])
+
+    asyncio.run(exercise())
+
+
+def test_wait_for_step_complete_no_resume_when_battery_low(monkeypatch) -> None:
+    """No resume sent while battery is below threshold."""
+    monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(routine_runner_module, "_STEP_COMPLETE_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(routine_runner_module, "_RESUME_BATTERY_THRESHOLD", 80)
+
+    async def exercise() -> None:
+        client = _ScriptedStatusClient([
+            {"state": 18, "in_cleaning": 3, "battery": 50},  # cleaning
+            {"state": 8, "in_cleaning": 3, "battery": 14},   # charging, below threshold
+            {"state": 8, "in_cleaning": 3, "battery": 50},   # still below
+            {"state": 8, "in_cleaning": 3, "battery": 79},   # still below
+        ])
+        with pytest.raises(routine_runner_module.RoutineExecutionError, match="Timed out"):
+            await client.wait_for_step_complete()
+        assert len(client.sent_commands) == 0
+
+    asyncio.run(exercise())
+
+
+def test_wait_for_step_complete_resume_only_sent_once(monkeypatch) -> None:
+    """Resume command is only sent once even if robot returns to dock again."""
+    monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(routine_runner_module, "_RESUME_BATTERY_THRESHOLD", 80)
+
+    async def exercise() -> None:
+        client = _ScriptedStatusClient([
+            {"state": 18, "in_cleaning": 3, "battery": 95},  # cleaning
+            {"state": 8, "in_cleaning": 3, "battery": 80},   # charging → resume sent
+            {"state": 18, "in_cleaning": 3, "battery": 80},  # cleaning resumes
+            {"state": 8, "in_cleaning": 3, "battery": 80},   # back to charging again → second resume sent
+            {"state": 18, "in_cleaning": 3, "battery": 80},  # cleaning resumes again
+            {"state": 8, "in_cleaning": 0, "battery": 60},   # step complete
+        ])
+        await client.wait_for_step_complete()
+        assert len(client.sent_commands) == 2
 
     asyncio.run(exercise())

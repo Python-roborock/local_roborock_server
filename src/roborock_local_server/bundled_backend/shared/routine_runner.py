@@ -51,6 +51,7 @@ _STEP_COMPLETE_TIMEOUT_SECONDS = 4 * 60 * 60
 _STEP_START_POLL_INTERVAL_SECONDS = 0.5
 _STATUS_POLL_INTERVAL_SECONDS = 5.0
 _ROUTINE_READY_STATES = {3, 8, 100}
+_RESUME_BATTERY_THRESHOLD = 80
 _POST_STEP_SETTLE_SECONDS = 15.0
 _POST_STEP_SETTLE_TIMEOUT_SECONDS = 10 * 60
 from .inventory_io import WEB_API_INVENTORY_FILE
@@ -58,6 +59,11 @@ _SUPPORTED_METHODS = {
     "do_scenes_app_start",
     "do_scenes_segments",
     "do_scenes_zones",
+}
+_RESUME_COMMAND_BY_IN_CLEANING: dict[int, RoborockCommand] = {
+    RoborockInCleaning.global_clean_not_complete.value: RoborockCommand.APP_START,
+    RoborockInCleaning.zone_clean_not_complete.value: RoborockCommand.RESUME_ZONED_CLEAN,
+    RoborockInCleaning.segment_clean_not_complete.value: RoborockCommand.RESUME_SEGMENT_CLEAN,
 }
 
 
@@ -553,6 +559,7 @@ class _RoutineMqttClient:
         start_deadline = loop.time() + _STEP_START_TIMEOUT_SECONDS
         saw_activity = False
         saw_cleaning = False
+        sent_resume = False
 
         try:
             while True:
@@ -563,6 +570,7 @@ class _RoutineMqttClient:
                 status = await asyncio.wait_for(self.get_status(), timeout=remaining)
                 state = _enum_or_int_value(status.state)
                 in_cleaning = _enum_or_int_value(status.in_cleaning)
+                battery = int(status.battery) if status.battery is not None else -1
                 observed = (state, in_cleaning)
                 if observed != last_observed:
                     self._logger.info(
@@ -579,8 +587,35 @@ class _RoutineMqttClient:
                     in_cleaning == RoborockInCleaning.complete.value
                     and state in _ROUTINE_READY_STATES
                 )
+
+                charging_mid_clean = (
+                    state == 8
+                    and in_cleaning != RoborockInCleaning.complete.value
+                    and saw_cleaning
+                    and not sent_resume
+                    and battery >= _RESUME_BATTERY_THRESHOLD
+                )
+                if charging_mid_clean:
+                    resume_cmd = _RESUME_COMMAND_BY_IN_CLEANING.get(in_cleaning)
+                    if resume_cmd is not None:
+                        self._logger.info(
+                            "Routine wait: robot charging mid-clean (battery=%s%%), "
+                            "sending %s",
+                            battery,
+                            resume_cmd.value,
+                        )
+                        try:
+                            await self.send_command(resume_cmd, [])
+                            sent_resume = True
+                        except Exception as exc:  # noqa: BLE001
+                            self._logger.warning(
+                                "Routine wait: resume command failed: %s", exc
+                            )
+
                 if not is_ready:
                     saw_activity = True
+                    if sent_resume and state != 8:
+                        sent_resume = False
                 elif saw_cleaning:
                     return
                 elif saw_activity:
