@@ -4,7 +4,7 @@ from io import StringIO
 
 import pytest
 
-from roborock_local_server.onboarding_cli import GuidedOnboardingConfig, run_guided_onboarding
+from start_onboarding import GuidedOnboardingConfig, run_guided_onboarding
 
 
 class FakeApi:
@@ -97,7 +97,7 @@ def test_guided_onboarding_happy_path(monkeypatch: pytest.MonkeyPatch, config: G
     answers = iter(["1", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     monkeypatch.setattr(
-        "roborock_local_server.onboarding_cli.poll_session_until_progress",
+        "start_onboarding.poll_session_until_progress",
         lambda *args, **kwargs: next(poll_results),
     )
 
@@ -177,7 +177,7 @@ def test_guided_onboarding_handles_extra_cycles(monkeypatch: pytest.MonkeyPatch,
     answers = iter(["1", "", "", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     monkeypatch.setattr(
-        "roborock_local_server.onboarding_cli.poll_session_until_progress",
+        "start_onboarding.poll_session_until_progress",
         lambda *args, **kwargs: next(poll_results),
     )
 
@@ -247,7 +247,7 @@ def test_guided_onboarding_timeout_can_retry_without_restart(
     answers = iter(["1", "", "retry", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     monkeypatch.setattr(
-        "roborock_local_server.onboarding_cli.poll_session_until_progress",
+        "start_onboarding.poll_session_until_progress",
         lambda *args, **kwargs: next(poll_results),
     )
 
@@ -307,7 +307,7 @@ def test_guided_onboarding_duplicate_names_still_selects_requested_device(
     answers = iter(["2", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     monkeypatch.setattr(
-        "roborock_local_server.onboarding_cli.poll_session_until_progress",
+        "start_onboarding.poll_session_until_progress",
         lambda *args, **kwargs: next(poll_results),
     )
 

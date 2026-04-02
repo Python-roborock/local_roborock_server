@@ -1,4 +1,14 @@
-"""Guided remote onboarding CLI for pairing vacuums through the main server."""
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pycryptodome>=3.20,<4"]
+# ///
+"""Guided remote onboarding CLI for pairing vacuums through the main server.
+
+This is a standalone script. Copy it to any machine and run:
+
+    uv run start_onboarding.py --server api-roborock.example.com
+"""
 
 from __future__ import annotations
 
@@ -538,3 +548,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+
+if __name__ == "__main__":
+    raise SystemExit(main())

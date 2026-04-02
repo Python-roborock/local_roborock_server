@@ -9,10 +9,10 @@ If this is a brand new vacuum, it is still a good idea to set it up once in the 
 Run onboarding from a second machine, not from the machine hosting the local server:
 
 ```bash
-uv run start_onboarding --server api-roborock.example.com
+uv run start_onboarding.py --server api-roborock.example.com
 ```
 
-`uv run onboarding.py --server api-roborock.example.com` still works as a compatibility wrapper.
+This is a standalone script — you can copy `start_onboarding.py` to any machine and run it with just `uv`.
 
 The guided CLI will:
 
@@ -41,7 +41,7 @@ The only required CLI flag is `--server`. The script will prompt for anything mi
 You can still pass them explicitly if you prefer:
 
 ```bash
-uv run start_onboarding --server api-roborock.example.com --ssid "My Wifi" --password "Password123" --timezone "America/New_York" --cst EST5EDT,M3.2.0,M11.1.0 --country-domain us
+uv run start_onboarding.py --server api-roborock.example.com --ssid "My Wifi" --password "Password123" --timezone "America/New_York" --cst EST5EDT,M3.2.0,M11.1.0 --country-domain us
 ```
 
 `server` should be your real stack hostname, usually the same `api-...` hostname you use for `/admin`.
