@@ -461,6 +461,7 @@ class RuntimeState:
         delta = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
         return delta.total_seconds() <= 180
 
+
     def _idle_pairing_snapshot_locked(self) -> dict[str, Any]:
         step_details = self._pairing_step_details_locked("")
         return {

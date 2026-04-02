@@ -36,11 +36,72 @@ CFGWIFI_PORT = 55559
 CFGWIFI_TIMEOUT_SECONDS = 2.0
 CFGWIFI_PRE_KEY = "6433df70f5a3a42e"
 CFGWIFI_UID = "1234567890"
-DEFAULT_CST = "EST5EDT,M3.2.0,M11.1.0"
 DEFAULT_COUNTRY_DOMAIN = "us"
 DEFAULT_TIMEZONE = "America/New_York"
 POLL_INTERVAL_SECONDS = 5.0
 POLL_TIMEOUT_SECONDS = 300.0
+
+# Mapping from IANA timezone to POSIX TZ string for the vacuum firmware.
+_IANA_TO_POSIX: dict[str, str] = {
+    "America/New_York": "EST5EDT,M3.2.0,M11.1.0",
+    "America/Chicago": "CST6CDT,M3.2.0,M11.1.0",
+    "America/Denver": "MST7MDT,M3.2.0,M11.1.0",
+    "America/Los_Angeles": "PST8PDT,M3.2.0,M11.1.0",
+    "America/Phoenix": "MST7",
+    "America/Anchorage": "AKST9AKDT,M3.2.0,M11.1.0",
+    "Pacific/Honolulu": "HST10",
+    "America/Toronto": "EST5EDT,M3.2.0,M11.1.0",
+    "America/Vancouver": "PST8PDT,M3.2.0,M11.1.0",
+    "America/Winnipeg": "CST6CDT,M3.2.0,M11.1.0",
+    "America/Edmonton": "MST7MDT,M3.2.0,M11.1.0",
+    "Europe/London": "GMT0BST,M3.5.0/1,M10.5.0",
+    "Europe/Berlin": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "Europe/Paris": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "Europe/Amsterdam": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "Asia/Shanghai": "CST-8",
+    "Asia/Tokyo": "JST-9",
+    "Asia/Kolkata": "IST-5:30",
+    "Australia/Sydney": "AEST-10AEDT,M10.1.0,M4.1.0/3",
+    "Australia/Melbourne": "AEST-10AEDT,M10.1.0,M4.1.0/3",
+    "Australia/Perth": "AWST-8",
+}
+DEFAULT_CST = _IANA_TO_POSIX[DEFAULT_TIMEZONE]
+
+
+def posix_tz_from_iana(iana: str) -> str:
+    """Return a POSIX TZ string for the given IANA timezone, or empty string if unknown."""
+    return _IANA_TO_POSIX.get(iana.strip(), "")
+
+
+# Mapping from IANA timezone to country domain for the vacuum firmware.
+_IANA_TO_COUNTRY: dict[str, str] = {
+    "America/New_York": "us",
+    "America/Chicago": "us",
+    "America/Denver": "us",
+    "America/Los_Angeles": "us",
+    "America/Phoenix": "us",
+    "America/Anchorage": "us",
+    "Pacific/Honolulu": "us",
+    "America/Toronto": "us",
+    "America/Vancouver": "us",
+    "America/Winnipeg": "us",
+    "America/Edmonton": "us",
+    "Europe/London": "gb",
+    "Europe/Berlin": "de",
+    "Europe/Paris": "fr",
+    "Europe/Amsterdam": "nl",
+    "Asia/Shanghai": "cn",
+    "Asia/Tokyo": "jp",
+    "Asia/Kolkata": "in",
+    "Australia/Sydney": "au",
+    "Australia/Melbourne": "au",
+    "Australia/Perth": "au",
+}
+
+
+def country_from_iana(iana: str) -> str:
+    """Return a country domain for the given IANA timezone, or empty string if unknown."""
+    return _IANA_TO_COUNTRY.get(iana.strip(), "")
 
 
 def crc32(data: bytes) -> int:
@@ -288,8 +349,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ssid", default="")
     parser.add_argument("--password", default="")
     parser.add_argument("--timezone", default="")
-    parser.add_argument("--cst", default=DEFAULT_CST)
-    parser.add_argument("--country-domain", default=DEFAULT_COUNTRY_DOMAIN)
+    parser.add_argument("--cst", default="")
+    parser.add_argument("--country-domain", default="")
     return parser
 
 
@@ -308,15 +369,29 @@ def _prompt_text(value: str, prompt: str, *, default: str = "", secret: bool = F
 def prompt_for_config(args: argparse.Namespace) -> GuidedOnboardingConfig:
     api_base_url = normalize_api_base_url(args.server)
     stack_server = sanitize_stack_server(args.server)
+    admin_password = _prompt_text(args.admin_password, "Admin password", secret=True)
+    ssid = _prompt_text(args.ssid, "Home Wi-Fi SSID")
+    password = _prompt_text(args.password, "Home Wi-Fi password", secret=True)
+    timezone = _prompt_text(args.timezone, "Timezone", default=DEFAULT_TIMEZONE)
+    cst = str(args.cst or "").strip()
+    if not cst:
+        cst = posix_tz_from_iana(timezone)
+    if not cst:
+        cst = _prompt_text("", "POSIX TZ string (could not auto-detect from timezone)", default=DEFAULT_CST)
+    country_domain = str(args.country_domain or "").strip()
+    if not country_domain:
+        country_domain = country_from_iana(timezone)
+    if not country_domain:
+        country_domain = _prompt_text("", "Country domain (could not auto-detect from timezone)", default=DEFAULT_COUNTRY_DOMAIN)
     return GuidedOnboardingConfig(
         api_base_url=api_base_url,
         stack_server=stack_server,
-        admin_password=_prompt_text(args.admin_password, "Admin password", secret=True),
-        ssid=_prompt_text(args.ssid, "Home Wi-Fi SSID"),
-        password=_prompt_text(args.password, "Home Wi-Fi password", secret=True),
-        timezone=_prompt_text(args.timezone, "IANA timezone", default=DEFAULT_TIMEZONE),
-        cst=_prompt_text(args.cst, "POSIX CST timezone", default=DEFAULT_CST),
-        country_domain=_prompt_text(args.country_domain, "Country domain", default=DEFAULT_COUNTRY_DOMAIN),
+        admin_password=admin_password,
+        ssid=ssid,
+        password=password,
+        timezone=timezone,
+        cst=cst,
+        country_domain=country_domain,
     )
 
 

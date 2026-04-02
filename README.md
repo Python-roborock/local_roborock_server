@@ -40,6 +40,16 @@ Additional docs:
 - [Custom certificate management](docs/custom_cert_management.md)
 
 
+
+## Acknowledgements
+
+- [Dennis Giese (@dgiese)](https://dontvacuum.me/) whose research and papers inspired much of the work on reverse-engineering Roborock vacuums
+- [@rovo89](https://github.com/rovo89) who has been VERY helpful through this process, giving lots of tips and advice.
+- [python-miio](https://github.com/rytilahti/python-miio) - Their repo was the basis for a lot of python-roborock's logic.
+- [@humbertogontijo](https://github.com/humbertogontijo) who first created the python-roborock repo.
+- [@allenporter](https://github.com/allenporter) who has taken up a significant role in the maintenance of the python-roborock library as well as the Roborock integration. The improvements Allen has made to the repository cannot be overstated.
+- [@rccoleman](https://github.com/rccoleman) who was the first beta tester and helped work out some kinks!
+
 [link-bmac]: https://buymeacoffee.com/lashl
 [badge-bmac]: https://img.shields.io/badge/Buy%20Me%20a%20Coffee-donate-yellow?style=for-the-badge&logo=buymeacoffee&logoColor=black
 [link-paypal]: https://paypal.me/LLashley304
