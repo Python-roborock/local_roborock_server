@@ -2,7 +2,9 @@
 Roborock vacuums communicate over three protocols. 
 
 1) REST - a number of things happen over REST primarily during onboarding.
+
 2) MQTT - The vacuum communicates with the Roborock cloud using MQTT.
+
 3) TCP - The vacuum communicates locally with your phone over a TCP transport.
 
 ## Reverse engineering Roborock's messaging
@@ -67,11 +69,17 @@ The vacuum accepted this as it had no max length constraint or any other sanitiz
 ## Agentic Reverse Engineering
 
 Fast forward to early 2026. AI tools were now significantly better than they were a year ago, I knew more about reverse engineering, more about Roborock's apps, protocols, etc. I decided I would give it one more try this time with agents. Context is key for good agentic work, so I gave it the following:
+
 1) Access to SSH into my rooted Roborock S7
+
 2) Access to the Roborock S7 firmware file
+
 3) python-roborock
+
 4) The Roborock app APK
+
 5) The decompiled react native bundles.
+
 6) My previous code that allows for controlling the onboarding process.
 
 I did not want to bias the agent with my approach that I figured was a dead end, I wanted to let the agent explore naturally and see what it finds. I started by using Opus 4.6, but Claude code's $20 subscription was constantly running out of usage, so I switched to Codex 5.3 max on their $20 plan, which would run for probably 4-5x as long without running out of usage.
@@ -96,10 +104,15 @@ If we rearrange the verification equation: `sig^e - pad(SHA256(msg)) = k * n` fo
 
 So the approach is:
 1) During onboarding, we inject our server URL so the vacuum connects to us.
+
 2) The vacuum sends signed requests to our server (the `/region` endpoint and others).
+
 3) We capture at least two requests with different query strings and their signatures.
+
 4) We compute `sig^e - padded_message` for each pair, take the GCD, strip any small prime cofactors, and verify the candidate modulus against all captured signatures.
+
 5) Once we have the modulus, we reconstruct the full RSA public key (modulus + exponent 65537).
+
 6) With the public key, we can now encrypt the bootstrap response exactly like Roborock's servers do
 
 I prompted the agent towards trying to determine the public key, I didn't think something like this was an option, as in my head any kind of key recovery is incredibly computational complex. However, the agent explored the signature verification code in the firmware, realized the math worked out and pointed me in the right direction. We used [gmpy2](https://github.com/aleaxit/gmpy2) for the arithmetic since we're dealing with 2048-bit numbers and using Python builtins would be very slow.
