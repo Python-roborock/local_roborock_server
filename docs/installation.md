@@ -68,6 +68,8 @@ It then writes `config.toml`, generates `admin.password_hash` and `admin.session
 
 9. Import your data from the cloud so things like routines and rooms will work. Enter your email in under cloud import, then hit send code. Once the code is returned enter the code and hit fetch data.
 
+10. For any routines that use zones, you need to re-save them so the server stores the zone data correctly. In the Roborock app, open each routine that has zones, click on the zone, tap **Edit**, click on any **Zone Cleaning** entry, then tap **Save**. Repeat for each zone in the routine.
+
 ## Next Steps
 
 - [Onboarding](onboarding.md) for pairing a new vacuum.
