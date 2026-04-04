@@ -18,6 +18,7 @@ from shared.decoder import build_decoder
 from shared.io_utils import append_jsonl, payload_preview
 from shared.runtime_credentials import RuntimeCredentialsStore
 from shared.runtime_state import RuntimeState
+from shared.zone_ranges_store import ZoneRangesStore
 
 from .command_handlers import RpcCommandRegistry
 
@@ -36,6 +37,7 @@ class MqttTlsProxy:
         decoded_jsonl: Path,
         runtime_state: RuntimeState | None = None,
         runtime_credentials: RuntimeCredentialsStore | None = None,
+        zone_ranges_store: ZoneRangesStore | None = None,
     ) -> None:
         self.cert_file = cert_file
         self.key_file = key_file
@@ -48,6 +50,7 @@ class MqttTlsProxy:
         self.decoded_jsonl = decoded_jsonl
         self.runtime_state = runtime_state
         self.runtime_credentials = runtime_credentials
+        self.zone_ranges_store = zone_ranges_store
         self._server_socket: socket.socket | None = None
         self._running = False
         self._counter = 0
@@ -383,10 +386,26 @@ class MqttTlsProxy:
                             rpc_data.get("id"),
                             handled,
                         )
+                    if (
+                        self.zone_ranges_store is not None
+                        and str(rpc_data.get("method") or "").strip() == "set_scenes_zones"
+                    ):
+                        self.zone_ranges_store.merge_set_scenes_zones_request(
+                            rpc_data.get("params"),
+                        )
                 elif proto_value == 102:
                     response_to = self._command_registry.handle_response(rpc_data)
                     if response_to is not None:
                         decoded_entry["response_to"] = response_to
+                        if (
+                            self.zone_ranges_store is not None
+                            and str(response_to.get("request_method") or "").strip() == "set_scenes_zones"
+                            and response_to.get("error") is None
+                        ):
+                            self.zone_ranges_store.merge_set_scenes_zones_response(
+                                request_params=response_to.get("request_params"),
+                                result=response_to.get("result"),
+                            )
                         self.logger.info(
                             "[conn %s %s] rpc_response request_id=%s method=%s error=%s",
                             conn_id,

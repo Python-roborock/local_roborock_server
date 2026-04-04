@@ -45,6 +45,7 @@ from .backend import (
     start_broker,
     strip_roborock_prefix,
 )
+from .bundled_backend.shared.zone_ranges_store import ZoneRangesStore
 from .security import AdminSessionManager
 
 
@@ -345,9 +346,18 @@ class ReleaseSupervisor:
             bootstrap_encryption_enabled=True,
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
+            zone_ranges_store=self._init_zone_ranges_store(),
         )
         self.endpoint_rules = default_endpoint_rules()
         self.app = self._create_app()
+
+    def _init_zone_ranges_store(self) -> ZoneRangesStore:
+        store = ZoneRangesStore(self.paths.http_jsonl_path.parent)
+        if not store._data:
+            added = store.seed_from_mqtt_jsonl(self.paths.mqtt_jsonl_path)
+            if added:
+                self.root_logger.info("Seeded zone ranges store with %d entries from MQTT log", added)
+        return store
 
     def _setup_loggers(self) -> dict[str, logging.Logger]:
         self.paths.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -793,6 +803,7 @@ class ReleaseSupervisor:
             decoded_jsonl=self.context.mqtt_jsonl,
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
+            zone_ranges_store=self.context.zone_ranges_store,
         )
         self._mqtt_proxy.start()
         self.runtime_state.set_service("mqtt_tls_proxy", running=True, required=True, enabled=True)

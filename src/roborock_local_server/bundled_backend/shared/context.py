@@ -14,6 +14,7 @@ from .device_key_recovery import DeviceKeyCache
 from .http_helpers import pick_first
 from .runtime_credentials import RuntimeCredentialsStore
 from .runtime_state import RuntimeState
+from .zone_ranges_store import ZoneRangesStore
 
 
 @dataclass
@@ -35,6 +36,7 @@ class ServerContext:
     bootstrap_encryption_enabled: bool = True
     runtime_state: RuntimeState | None = None
     runtime_credentials: RuntimeCredentialsStore | None = None
+    zone_ranges_store: ZoneRangesStore | None = None
     _bootstrap_encryptor: BootstrapEncryptor | None = field(init=False, default=None, repr=False)
     _device_key_cache: DeviceKeyCache | None = field(init=False, default=None, repr=False)
 

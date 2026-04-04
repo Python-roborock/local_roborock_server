@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Callable, Sequence
 
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, as_int, default_home_id, get_value, stable_int
 from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory, write_inventory
 from shared.routine_runner import RoutineExecutionError, RoutineRunner
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _first_non_empty(values: Sequence[str]) -> str:
@@ -169,32 +172,37 @@ def _scene_zone_ranges_from_mqtt(
     zone_ranges: dict[tuple[str, int], list[int]] = {}
     try:
         with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
+            lines = handle.readlines()
+        for line in reversed(lines):
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            decoded_messages = entry.get("decoded_messages")
+            if not isinstance(decoded_messages, list):
+                continue
+            for decoded in decoded_messages:
+                if not isinstance(decoded, dict):
                     continue
-                decoded_messages = entry.get("decoded_messages")
-                if not isinstance(decoded_messages, list):
-                    continue
-                for decoded in decoded_messages:
-                    if not isinstance(decoded, dict):
-                        continue
-                    rpc = decoded.get("rpc")
-                    if isinstance(rpc, dict) and str(rpc.get("method") or "").strip() == "set_scenes_zones":
-                        _merge_scene_zone_ranges_from_request(
-                            zone_ranges,
-                            params=rpc.get("params"),
-                            tids_filter=tids_filter,
-                        )
-                    response_to = decoded.get("response_to")
-                    if isinstance(response_to, dict) and str(response_to.get("request_method") or "").strip() == "set_scenes_zones":
-                        _merge_scene_zone_ranges_from_response(
-                            zone_ranges,
-                            request_params=response_to.get("request_params"),
-                            result=response_to.get("result"),
-                            tids_filter=tids_filter,
-                        )
+                rpc = decoded.get("rpc")
+                if isinstance(rpc, dict) and str(rpc.get("method") or "").strip() == "set_scenes_zones":
+                    _merge_scene_zone_ranges_from_request(
+                        zone_ranges,
+                        params=rpc.get("params"),
+                        tids_filter=tids_filter,
+                    )
+                response_to = decoded.get("response_to")
+                if isinstance(response_to, dict) and str(response_to.get("request_method") or "").strip() == "set_scenes_zones":
+                    _merge_scene_zone_ranges_from_response(
+                        zone_ranges,
+                        request_params=response_to.get("request_params"),
+                        result=response_to.get("result"),
+                        tids_filter=tids_filter,
+                    )
+            if tids_filter and all(
+                any(key[0] == tid for key in zone_ranges) for tid in tids_filter
+            ):
+                break
     except OSError:
         return {}
     return zone_ranges
@@ -234,6 +242,16 @@ def _scene_zone_tids(param_payload: dict[str, Any]) -> set[str]:
     return tids
 
 
+def _scene_zone_ranges_from_store(
+    ctx: ServerContext,
+    *,
+    tids_filter: set[str] | None = None,
+) -> dict[tuple[str, int], list[int]]:
+    if ctx.zone_ranges_store is None:
+        return {}
+    return ctx.zone_ranges_store.get_all(tids=tids_filter)
+
+
 def _hydrate_scene_param_with_zone_ranges(
     ctx: ServerContext,
     param_payload: dict[str, Any],
@@ -241,7 +259,9 @@ def _hydrate_scene_param_with_zone_ranges(
     tids = _scene_zone_tids(param_payload)
     if not tids:
         return param_payload, False
-    zone_ranges = _scene_zone_ranges_from_mqtt(ctx, tids_filter=tids)
+    zone_ranges = _scene_zone_ranges_from_store(ctx, tids_filter=tids)
+    if not zone_ranges:
+        zone_ranges = _scene_zone_ranges_from_mqtt(ctx, tids_filter=tids)
     if not zone_ranges:
         return param_payload, False
     try:
@@ -445,9 +465,18 @@ def _hydrate_inventory_scene_ranges(ctx: ServerContext, scene: dict[str, Any]) -
     if scene_id <= 0:
         return scene
     param_payload = _scene_param_payload(scene)
+    tids = _scene_zone_tids(param_payload)
     hydrated_payload, changed = _hydrate_scene_param_with_zone_ranges(ctx, param_payload)
     if not changed:
+        if tids:
+            _LOGGER.warning(
+                "Scene %s has zone tids %s but no range data was hydrated from MQTT log",
+                scene_id,
+                tids,
+            )
         return scene
+
+    _LOGGER.info("Scene %s: hydrated zone ranges for tids %s from MQTT log", scene_id, tids)
 
     def apply_update(updated_scene: dict[str, Any], inventory: dict[str, Any]) -> None:
         _ = inventory
@@ -616,6 +645,7 @@ def execute_scene(ctx: ServerContext, scene_id: int) -> Any:
     )
     if scene is None:
         raise RoutineExecutionError(f"Scene {scene_id} not found")
+    _LOGGER.info("Executing scene %s (%s)", scene_id, get_value(scene, "name", default=""))
     scene = _hydrate_inventory_scene_ranges(ctx, scene)
     return _routine_runner_for_context(ctx).start_scene(scene)
 

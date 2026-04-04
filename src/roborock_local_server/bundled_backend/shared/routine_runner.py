@@ -373,9 +373,14 @@ def commands_for_step(step: RoutineStep) -> list[RoutineCommand]:
         entry = _single_data_entry(step)
         repeat = max(1, _as_int(entry.get("repeat"), 1))
         sync_command = _scene_zone_sync_command(entry)
+        if sync_command is None:
+            raise RoutineExecutionError(
+                f"Zone step {step.step_id} is missing range coordinates for tid={entry.get('tid')!r}; "
+                "cannot execute zone cleaning without SET_SCENES_ZONES sync data"
+            )
         return [
             *_settings_commands(entry),
-            *([sync_command] if sync_command is not None else []),
+            sync_command,
             RoutineCommand(
                 RoborockCommand.APP_ZONED_CLEAN,
                 [{"zones": _zone_ids(entry), "repeat": repeat}],
@@ -936,6 +941,14 @@ class RoutineRunner:
                             routine_command.command.value,
                             exc,
                         )
+                    else:
+                        if (
+                            routine_command.command == RoborockCommand.SET_SCENES_ZONES
+                            and self._context.zone_ranges_store is not None
+                        ):
+                            self._context.zone_ranges_store.merge_set_scenes_zones_request(
+                                routine_command.params,
+                            )
                 if waits_for_step_complete:
                     logger.info("Waiting for ready state step=%s scene=%s", step.step_id, _scene_name(scene))
                     await client.wait_for_step_complete()
