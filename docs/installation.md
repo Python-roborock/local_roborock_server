@@ -30,7 +30,7 @@ Start here for a first-time setup. After the stack is running, continue with [On
 2. Change into the project folder.
 
 ```bash
-cd roborock_local_server
+cd local_roborock_server
 ```
 
 3. Install the project dependencies.
