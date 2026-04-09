@@ -14,6 +14,7 @@ The following vacuums are confirmed working:
 - Roborock S7 MaxV
 - QRevo MaxV
 - QRevo Master
+- Roborock S8 Pro Ultra (a70)
 
 ## Unsupported Vacuums
 
