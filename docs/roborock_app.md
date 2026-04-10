@@ -1,5 +1,7 @@
 # Using the Roborock App
 
+ONLY WORKS ON IOS FOR NOW! Android does certificate pinning that makes this harder to do. See info [here](https://github.com/Python-roborock/local_roborock_server/issues/5#issuecomment-4223935907)
+
 Use this after [Installation](installation.md) and [Onboarding](onboarding.md) if you want the official Roborock app to talk to your local stack.
 
 1. Log out of the app on your phone.
