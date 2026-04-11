@@ -60,7 +60,7 @@ Make sure you have the following installed:
       cp roborock_work/lib/arm64-v8a/librrcodec.so roborock_work/lib/arm64-v8a/librrcodec.so.bak
    ```
 
-   Now run the patcher. It replaces two `BL` instructions in `JNI_OnLoad` with `NOP` to skip the signing certificate verification. You can pass the path to `librrcodec.so` explicitly (as shown below), or run it with no arguments from inside the unpacked APK and it will find the file itself.
+   Now run the patcher (located in .\patcher\). You can pass the path to `librrcodec.so` explicitly (as shown below), or run it with no arguments from inside the unpacked APK and it will find the file itself.
    
    > Use `python` or `python3` depending on your system (Python 3.8+ is required).
    
