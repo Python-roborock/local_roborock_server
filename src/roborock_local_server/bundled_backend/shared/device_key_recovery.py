@@ -8,8 +8,10 @@ import hashlib
 import json
 import logging
 import multiprocessing
+import signal as _signal
 import threading
 import time
+import traceback
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -77,18 +79,33 @@ def recover_modulus_from_samples(
     samples: list[tuple[str, str]],
     *,
     e: int = DEFAULT_RSA_E,
+    diagnostics: dict[str, Any] | None = None,
 ) -> int | None:
-    """Recover an RSA modulus from canonical query/signature pairs."""
+    """Recover an RSA modulus from canonical query/signature pairs.
+
+    If ``diagnostics`` is supplied, it is populated with information about each
+    stage of recovery so callers can surface a precise failure reason.
+    """
+
+    def _diag(key: str, value: Any) -> None:
+        if diagnostics is not None:
+            diagnostics[key] = value
+
+    _diag("input_samples", len(samples))
     dedup: dict[str, str] = {}
     for canonical, sig_b64 in samples:
         if canonical and canonical not in dedup:
             dedup[canonical] = sig_b64
+    _diag("unique_canonical", len(dedup))
     if len(dedup) < 2:
+        _diag("reason", "Fewer than 2 unique canonical query signatures.")
         return None
 
     pairs = list(dedup.items())
     sig_lengths = [len(base64.b64decode(sig_b64)) for _canonical, sig_b64 in pairs]
+    _diag("sig_byte_lengths", sig_lengths)
     key_bytes = max(sig_lengths)
+    _diag("key_bytes", key_bytes)
     xs: list[Any] = []
     verifiers: list[tuple[int, int]] = []
     for canonical, sig_b64 in pairs:
@@ -101,14 +118,23 @@ def recover_modulus_from_samples(
         xs.append(abs(x))
         verifiers.append((sig_int, em_int))
 
+    _diag("equal_length_samples", len(xs))
     if len(xs) < 2:
+        _diag(
+            "reason",
+            f"Need >=2 signatures of matching length {key_bytes}; "
+            f"only {len(xs)} qualified (lengths={sig_lengths}).",
+        )
         return None
 
     n_any = _gcd_many(xs)
     if not n_any:
+        _diag("reason", "GCD of (sig**e - EM) values was zero.")
         return None
     n_int = int(n_any)
+    _diag("gcd_bit_length", n_int.bit_length())
     target_bits = key_bytes * 8
+    _diag("target_bits", target_bits)
 
     def _verify_candidate(candidate: int) -> bool:
         if candidate <= 0:
@@ -135,8 +161,14 @@ def recover_modulus_from_samples(
             factor_powers.append((prime, power))
 
     if not factor_powers:
+        _diag(
+            "reason",
+            f"GCD result ({n_int.bit_length()} bits) does not match expected "
+            f"{target_bits}-bit modulus and has no small-prime cofactor to strip.",
+        )
         return None
 
+    _diag("small_prime_cofactors", factor_powers)
     divisors = [1]
     for prime, power in factor_powers:
         next_divisors: list[int] = []
@@ -149,12 +181,19 @@ def recover_modulus_from_samples(
         if len(divisors) > 4096:
             break
 
+    trials = 0
     for divisor in sorted(set(divisors)):
         trial = n_int // divisor
         if trial.bit_length() != target_bits:
             continue
+        trials += 1
         if _verify_candidate(trial):
             return trial
+    _diag(
+        "reason",
+        f"No divisor of the GCD produced a verifying {target_bits}-bit modulus "
+        f"({trials} candidates of correct bit-length were tried).",
+    )
     return None
 
 
@@ -186,11 +225,13 @@ def _recover_modulus_subprocess(
     e: int,
     conn: Any,
 ) -> None:
+    diag: dict[str, Any] = {}
     try:
-        modulus = recover_modulus_from_samples(samples, e=e)
-        conn.send((int(modulus) if modulus else None, ""))
+        modulus = recover_modulus_from_samples(samples, e=e, diagnostics=diag)
+        conn.send((int(modulus) if modulus else None, "", "", diag))
     except Exception as exc:  # noqa: BLE001
-        conn.send((None, str(exc)))
+        tb = traceback.format_exc()
+        conn.send((None, f"{type(exc).__name__}: {exc}", tb, diag))
     finally:
         conn.close()
 
@@ -577,21 +618,58 @@ class DeviceKeyCache:
 
                 modulus: int | None = None
                 error = ""
+                child_tb = ""
+                diag: dict[str, Any] = {}
                 if parent_conn.poll():
-                    modulus, error = parent_conn.recv()
+                    payload = parent_conn.recv()
+                    # Tolerate older 2-tuple payloads if a stale worker answers.
+                    if isinstance(payload, tuple):
+                        if len(payload) >= 4:
+                            modulus, error, child_tb, diag = payload[:4]
+                        elif len(payload) == 2:
+                            modulus, error = payload
                 parent_conn.close()
-                if process.exitcode not in (0, None) and not error:
-                    raise RuntimeError(f"Recovery subprocess exited with code {process.exitcode}.")
+                exitcode = process.exitcode
+                if exitcode not in (0, None) and not error:
+                    if exitcode is not None and exitcode < 0:
+                        try:
+                            sig_name = _signal.Signals(-exitcode).name
+                        except (ValueError, AttributeError):
+                            sig_name = f"signal {-exitcode}"
+                        error = (
+                            f"Recovery subprocess terminated by {sig_name} "
+                            f"(exitcode={exitcode}). This usually indicates a crash "
+                            "in gmpy2/cryptography — check for OOM or a native-lib bug."
+                        )
+                    else:
+                        error = (
+                            f"Recovery subprocess exited with code {exitcode} "
+                            "without sending a result."
+                        )
                 if error:
+                    if child_tb:
+                        LOG.warning(
+                            "Public-key recovery subprocess failed for did=%s; "
+                            "child traceback:\n%s",
+                            did,
+                            child_tb.rstrip(),
+                        )
                     raise RuntimeError(error)
                 finished_at = utcnow_iso()
                 with self._lock:
                     if not modulus:
+                        reason = diag.get("reason") or "see diagnostics"
+                        note = f"Could not recover modulus from captured samples: {reason}"
+                        LOG.info(
+                            "Modulus recovery produced no key for did=%s. Diagnostics: %s",
+                            did,
+                            diag,
+                        )
                         self._set_recovery_meta_locked(
                             did,
                             state="failed",
-                            note="Could not recover modulus from captured samples.",
-                            error="recover_modulus_from_samples returned no modulus.",
+                            note=note,
+                            error=f"recover_modulus_from_samples returned no modulus ({reason}).",
                             finished_at=finished_at,
                         )
                         self._save_safe_locked()
@@ -619,7 +697,12 @@ class DeviceKeyCache:
                         finished_at=utcnow_iso(),
                     )
                     self._save_safe_locked()
-                LOG.warning("Failed recovering public key for did=%s: %s", did, exc)
+                LOG.warning(
+                    "Failed recovering public key for did=%s: %s",
+                    did,
+                    exc,
+                    exc_info=True,
+                )
             finally:
                 with self._lock:
                     self._recovering.discard(did)
