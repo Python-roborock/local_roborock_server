@@ -103,9 +103,9 @@ Make sure you have the following installed:
 
 9. Install the WireGuard app on your phone. Then tap the plus button in WireGuard, choose to add from QR code, and scan the code at `http://127.0.0.1:8081/#/capture`.
 
-10. Open `mitm.it` in your web browser (Phone). Follow the instructions there for your device. In Chrome, complete all device-specific steps, including installing and trusting the certificate.
+10. Open `mitm.it` in your web browser (Android). Follow the instructions there for your device. In Chrome, complete all device-specific steps, including installing and trusting the certificate.
 
-11. Once the MITM setup is working, open the Roborock app, log back in, enter your verification code, and the server should automatically show the vacuums already known to your local stack. Close Roborock App, Turn off WireGuard, disable/delete the MITM certificate, and then open the Roborock App, Select your device/s to confirm the map loads.
+11. Once the MITM setup is working, open the Roborock app, log back in, enter your verification code, and the server should automatically show the vacuums already known to your local stack. Then close the Roborock app, turn off WireGuard, disable or delete the MITM certificate, reopen the Roborock app, and select your device or devices to confirm the map loads.
 
 
 ### What the patch does
