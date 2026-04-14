@@ -110,9 +110,9 @@ Make sure you have the following installed:
 
 ### What the patch does
 
-During `JNI_OnLoad`, `librrcodec.so` calls a verification function that retrieves the APK's signing certificate via `PackageManager.getPackageInfo()`, hashes it with `MessageDigest`, and compares it against a hardcoded value. If the hash doesn't match, it calls `Process.killProcess()`. The patch replaces the two `BL` (branch-link) instructions that call this function (at VA `0x4bdcc` and `0x4c428`) with `NOP`, so the check never runs. The crypto functions the app actually needs are unaffected.
+During `JNI_OnLoad`, `librrcodec.so` calls a verification function that retrieves the APK's signing certificate via `PackageManager.getPackageInfo()`, hashes it with `MessageDigest`, and compares it against a hardcoded value. If the hash doesn't match, it calls `Process.killProcess()`. The patch replaces the two `BL` (branch-link) instructions that call this function with `NOP`, so the check never runs. In the disassembly, these call sites are at VA `0x4bdcc` and `0x4c428`; in `patcher/patch_librrcodec.py`, the corresponding file offsets are `0x4adcc` and `0x4b428`. The crypto functions the app actually needs are unaffected.
 
-> **Note:** This patch has only been tested and confirmed working on Roborock app version **4.60.06**, against the `librrcodec.so` with build ID `becc35bc1a75903df1eae3f90b380ca5403d06cb`. If Roborock releases a new app version, the offsets may change and the patch script will need to be updated.
+> **Note:** This patch has only been tested and confirmed working on Roborock app version **4.60.06**, against the `librrcodec.so` with build ID `becc35bc1a75903df1eae3f90b380ca5403d06cb`. If Roborock releases a new app version, the virtual addresses and file offsets may change and the patch script will need to be updated.
 
 ## Related Docs
 
