@@ -20,6 +20,8 @@ Use this after [Installation](installation.md) and [Onboarding](onboarding.md) i
 
 ## Android
 
+> **Note:** It is recommended to disable auto update in the Roborock App.
+
 > **Note:** This workaround has only been tested and confirmed working on Roborock app version **4.60.06**. Newer versions may ship a different `librrcodec.so` with different offsets, in which case the patch script will need to be updated.
 
 Android 7+ (API level 24+) only trusts system certificates, so the app will reject the MITM certificate by default. On top of that, the Roborock app includes a native library (`librrcodec.so`) that checks the APK's signing certificate on startup and kills the process if it doesn't match, meaning a simple `apk-mitm` patch isn't enough.
@@ -61,9 +63,9 @@ Make sure you have the following installed:
    ```
 
    Now run the patcher from the repository root using the script in `patcher/`. You can pass the path to `librrcodec.so` explicitly (as shown below), or run it with no arguments from inside the unpacked APK and it will find the file itself.
-   
+
    > Use `python` or `python3` depending on your system (Python 3.8+ is required).
-   
+
       ```bash
          python patcher/patch_librrcodec.py roborock_work/lib/arm64-v8a/librrcodec.so
       ```
@@ -82,9 +84,9 @@ Make sure you have the following installed:
       keytool -genkey -v -keystore my-key.keystore -alias mykey -keyalg RSA -keysize 2048 -validity 10000
       apksigner sign --ks my-key.keystore roborock_final.apk
    ```
-   
+
    **Option B** — Use an existing JKS keystore:
-   
+
    ```bash
       apksigner sign --ks my-key.jks --v1-signing-enabled true --v2-signing-enabled true roborock_final.apk
    ```
