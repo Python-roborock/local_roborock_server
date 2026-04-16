@@ -12,9 +12,10 @@ If you're looking to buy a Roborock, consider using one of my affiliate links on
 The following vacuums are confirmed working:
 
 - Roborock S7 MaxV
+- Roborock S8 Pro Ultra (a70)
+- Roborock Saros 10R
 - QRevo MaxV
 - QRevo Master
-- Roborock S8 Pro Ultra (a70)
 
 ## Unsupported Vacuums
 
