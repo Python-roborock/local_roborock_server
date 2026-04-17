@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
 from roborock_local_server.server import ReleaseSupervisor
+from shared.protocol_auth import ProtocolAuthStore, build_hawk_authorization
 
 
 FIXTURE_PATH = Path(__file__).with_name("fixtures") / "ios_app_init_v4_59_02_anonymized.json"
@@ -20,6 +21,28 @@ def _load_fixture() -> dict[str, Any]:
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _cloud_snapshot_with_protocol_user_data(snapshot: dict[str, Any]) -> dict[str, Any]:
+    seeded = dict(snapshot)
+    seeded["user_data"] = {
+        "uid": 1001,
+        "token": "anon-app-token",
+        "rruid": "anon-rruid",
+        "rriot": {
+            "u": "user-anon",
+            "s": "session-anon",
+            "h": "contract-hawk-secret",
+            "k": "contract-hawk-mqtt-key",
+            "r": {
+                "r": "US",
+                "a": "https://api-us.roborock.com",
+                "m": "ssl://mqtt-us.roborock.com:8883",
+                "l": "https://wood-us.roborock.com",
+            },
+        },
+    }
+    return seeded
 
 
 def _record_runtime_presence(supervisor: ReleaseSupervisor, entries: list[dict[str, Any]]) -> None:
@@ -52,7 +75,7 @@ def test_ios_app_init_contract_from_anonymized_capture(tmp_path: Path, monkeypat
 
     seed = fixture["seed"]
     _write_json(paths.inventory_path, seed["inventory"])
-    _write_json(paths.cloud_snapshot_path, seed["cloud_snapshot"])
+    _write_json(paths.cloud_snapshot_path, _cloud_snapshot_with_protocol_user_data(seed["cloud_snapshot"]))
     _write_json(paths.runtime_credentials_path, seed["runtime_credentials"])
 
     supervisor = ReleaseSupervisor(config=config, paths=paths)
@@ -63,10 +86,22 @@ def test_ios_app_init_contract_from_anonymized_capture(tmp_path: Path, monkeypat
 
     client = TestClient(supervisor.app)
     default_headers = fixture["default_headers"]
+    auth_store = ProtocolAuthStore(paths.cloud_snapshot_path)
+    user = auth_store.availability().user
+    assert user is not None
 
-    for request in fixture["requests"]:
+    for index, request in enumerate(fixture["requests"]):
         headers = dict(default_headers)
         headers.update(request.get("headers", {}))
+        if request["path"].startswith(("/user/", "/v2/user/", "/v3/user/")):
+            headers["authorization"] = build_hawk_authorization(
+                user=user,
+                path=request["path"],
+                query_values=request.get("query"),
+                form_values=request.get("form") or request.get("json"),
+                timestamp=fixture["frozen_time"],
+                nonce=f"contract-{index}",
+            )
         response = client.request(
             method=request["method"],
             url=request["path"],

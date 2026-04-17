@@ -45,6 +45,8 @@ from .backend import (
     start_broker,
     strip_roborock_prefix,
 )
+from shared.protocol_auth import ProtocolAuthStore
+from https_server.routes.auth.service import build_login_data_response, cloud_login_data_required_response
 from .bundled_backend.shared.zone_ranges_store import ZoneRangesStore
 from .security import AdminSessionManager
 
@@ -73,11 +75,16 @@ def _request_query_params(request: Request) -> dict[str, list[str]]:
     return parse_qs(request.url.query, keep_blank_values=True)
 
 
-def _request_body_params(raw_body: bytes) -> tuple[str, dict[str, list[str]]]:
+def _request_body_params(raw_body: bytes, *, content_type: str = "") -> tuple[str, dict[str, list[str]]]:
     body_text = raw_body.decode("utf-8", errors="replace")
     if not body_text:
         return "", {}
-    return body_text, parse_qs(body_text, keep_blank_values=True)
+    body_params = parse_qs(body_text, keep_blank_values=True)
+    stripped = body_text.lstrip()
+    if "json" in content_type.lower() or stripped.startswith(("{", "[")):
+        body_params = dict(body_params)
+        body_params.setdefault("__json", [body_text])
+    return body_text, body_params
 
 
 def _pick_first_header(headers: dict[str, str], keys: tuple[str, ...]) -> str:
@@ -85,6 +92,39 @@ def _pick_first_header(headers: dict[str, str], keys: tuple[str, ...]) -> str:
         value = str(headers.get(key, "")).strip()
         if value:
             return value
+    return ""
+
+
+def _request_json_object(body_params: dict[str, list[str]]) -> dict[str, Any]:
+    for raw in body_params.get("__json") or []:
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _request_value(
+    query_params: dict[str, list[str]],
+    body_params: dict[str, list[str]],
+    *keys: str,
+) -> str:
+    json_body = _request_json_object(body_params)
+    for key in keys:
+        for value in query_params.get(key, []):
+            candidate = str(value).strip()
+            if candidate:
+                return candidate
+        for value in body_params.get(key, []):
+            candidate = str(value).strip()
+            if candidate:
+                return candidate
+        json_value = json_body.get(key)
+        candidate = str(json_value).strip() if json_value is not None else ""
+        if candidate:
+            return candidate
     return ""
 
 
@@ -267,6 +307,7 @@ class ReleaseSupervisor:
             inventory_path=self.paths.inventory_path,
             snapshot_path=self.paths.cloud_snapshot_path,
         )
+        self.protocol_auth = ProtocolAuthStore(self.paths.cloud_snapshot_path)
 
         self.loggers = self._setup_loggers()
         if not self.paths.device_key_state_path.exists():
@@ -408,6 +449,230 @@ class ReleaseSupervisor:
         if not self._authenticated(request):
             raise HTTPException(status_code=401, detail="Authentication required")
 
+    @staticmethod
+    def _normalized_path(path: str) -> str:
+        normalized = str(path or "").rstrip("/")
+        return normalized or "/"
+
+    @classmethod
+    def _is_public_protocol_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/",
+            "/region",
+            "/time",
+            "/location",
+            "/nc/prepare",
+            "/api/v1/getUrlByEmail",
+            "/api/v1/ml/c",
+            "/api/v1/sendEmailCode",
+            "/api/v1/sendSmsCode",
+            "/api/v1/validateEmailCode",
+            "/api/v1/validateSmsCode",
+            "/api/v1/loginWithCode",
+            "/api/v3/key/sign",
+            "/api/v3/sms/sendCode",
+            "/api/v4/key/captcha",
+            "/api/v4/email/code/send",
+            "/api/v4/sms/code/send",
+            "/api/v4/email/code/validate",
+            "/api/v4/sms/code/validate",
+            "/api/v4/auth/email/login/code",
+            "/api/v4/auth/phone/login/code",
+            "/api/v4/auth/mobile/login/code",
+            "/api/v5/email/code/send",
+            "/api/v5/sms/code/send",
+            "/api/v5/email/code/validate",
+            "/api/v5/sms/code/validate",
+            "/api/v5/auth/email/login/code",
+            "/api/v5/auth/phone/login/code",
+            "/api/v5/auth/mobile/login/code",
+            "/api/v1/country/version",
+            "/api/v1/country/list",
+            "/api/v1/appconfig",
+            "/api/v2/appconfig",
+            "/api/v1/appfeatureplugin",
+            "/api/v1/appplugin",
+            "/api/v1/plugins",
+            "/api/v4/agreement/latest",
+        }
+
+    @classmethod
+    def _is_code_send_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/api/v1/sendEmailCode",
+            "/api/v1/sendSmsCode",
+            "/api/v3/sms/sendCode",
+            "/api/v4/email/code/send",
+            "/api/v4/sms/code/send",
+            "/api/v5/email/code/send",
+            "/api/v5/sms/code/send",
+        }
+
+    @classmethod
+    def _is_code_validate_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/api/v1/validateEmailCode",
+            "/api/v1/validateSmsCode",
+            "/api/v4/email/code/validate",
+            "/api/v4/sms/code/validate",
+            "/api/v5/email/code/validate",
+            "/api/v5/sms/code/validate",
+        }
+
+    @classmethod
+    def _is_code_submit_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/api/v1/loginWithCode",
+            "/api/v4/auth/email/login/code",
+            "/api/v4/auth/phone/login/code",
+            "/api/v4/auth/mobile/login/code",
+            "/api/v5/auth/email/login/code",
+            "/api/v5/auth/phone/login/code",
+            "/api/v5/auth/mobile/login/code",
+        }
+
+    @classmethod
+    def _is_password_login_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/api/v1/login",
+            "/api/v3/auth/email/login",
+            "/api/v3/auth/phone/login",
+            "/api/v3/auth/mobile/login",
+            "/api/v5/auth/email/login/pwd",
+            "/api/v5/auth/phone/login/pwd",
+            "/api/v5/auth/mobile/login/pwd",
+        }
+
+    @classmethod
+    def _is_password_reset_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/api/v5/user/password/mobile/reset",
+            "/api/v5/user/password/email/reset",
+        }
+
+    @classmethod
+    def _required_protocol_auth(cls, clean_path: str) -> str | None:
+        normalized = cls._normalized_path(clean_path)
+        if cls._is_public_protocol_path(normalized):
+            return None
+        if normalized.startswith(("/user/", "/v2/user/", "/v3/user/")):
+            return "hawk"
+        if normalized.startswith("/api/"):
+            return "token"
+        return None
+
+    def _login_send_success_payload(self) -> dict[str, Any]:
+        return {"code": 200, "msg": "success", "data": {"sent": True, "validForSec": 300}}
+
+    def _login_validate_success_payload(self) -> dict[str, Any]:
+        return {"code": 200, "msg": "success", "data": {"valid": True}}
+
+    @staticmethod
+    def _unsupported_password_login_payload() -> dict[str, Any]:
+        return {
+            "code": 40031,
+            "msg": "password_login_not_supported",
+            "data": {"reason": "code_login_only"},
+        }
+
+    @staticmethod
+    def _protocol_auth_failure_payload(reason: str, auth_kind: str) -> dict[str, Any]:
+        return {
+            "code": 40101,
+            "msg": "authentication_required",
+            "data": {"reason": reason, "auth": auth_kind},
+        }
+
+    def _protocol_auth_not_ready_payload(self) -> tuple[int, dict[str, Any]]:
+        availability = self.protocol_auth.availability()
+        payload = cloud_login_data_required_response(
+            self.context,
+            reason=availability.reason,
+            missing_fields=list(availability.missing_fields) or None,
+        )
+        return 412, payload
+
+    async def _handle_protocol_login_route(
+        self,
+        *,
+        clean_path: str,
+        query_params: dict[str, list[str]],
+        body_params: dict[str, list[str]],
+    ) -> tuple[str, int, dict[str, Any]] | None:
+        normalized = self._normalized_path(clean_path)
+        if self._is_code_send_path(normalized):
+            account = _request_value(
+                query_params,
+                body_params,
+                "email",
+                "username",
+                "account",
+                "mobile",
+                "phone",
+            )
+            base_url = _request_value(query_params, body_params, "base_url", "baseUrl")
+            try:
+                result = await self.cloud_manager.request_code(email=account, base_url=base_url)
+            except Exception as exc:  # noqa: BLE001
+                result = {"success": False, "step": "code_request_failed", "error": str(exc)}
+                self.runtime_state.record_cloud_request(result)
+                return "protocol_login_request_code", 400, {
+                    "code": 40021,
+                    "msg": "code_request_failed",
+                    "data": {"error": str(exc)},
+                }
+            self.runtime_state.record_cloud_request(result)
+            return "protocol_login_request_code", 200, self._login_send_success_payload()
+
+        if self._is_code_validate_path(normalized):
+            return "protocol_login_validate_code", 200, self._login_validate_success_payload()
+
+        if self._is_code_submit_path(normalized):
+            account = _request_value(
+                query_params,
+                body_params,
+                "email",
+                "username",
+                "account",
+                "mobile",
+                "phone",
+            )
+            session_id = _request_value(query_params, body_params, "session_id", "sessionId")
+            if not session_id:
+                session_id = self.cloud_manager.find_pending_session_id(email=account)
+            code = _request_value(
+                query_params,
+                body_params,
+                "code",
+                "verifyCode",
+                "emailCode",
+                "smsCode",
+            )
+            try:
+                result = await self.cloud_manager.submit_code(session_id=session_id, code=code)
+                self.refresh_inventory_state()
+            except Exception as exc:  # noqa: BLE001
+                result = {"success": False, "step": "code_submit_failed", "error": str(exc)}
+                self.runtime_state.record_cloud_request(result)
+                return "protocol_login_submit_code", 400, {
+                    "code": 40022,
+                    "msg": "code_submit_failed",
+                    "data": {"error": str(exc)},
+                }
+            self.runtime_state.record_cloud_request(result)
+            return "protocol_login_submit_code", 200, build_login_data_response(self.context)
+
+        if self._is_password_login_path(normalized) or self._is_password_reset_path(normalized):
+            return "protocol_login_password_unsupported", 400, self._unsupported_password_login_payload()
+
+        return None
+
     async def _handle_roborock_request(self, request: Request) -> Response:
         host = (request.headers.get("host") or "").strip()
         group = classify_host(host)
@@ -415,7 +680,10 @@ class ReleaseSupervisor:
         raw_body = await request.body()
         clean_path = strip_roborock_prefix(request.url.path)
         query_params = _request_query_params(request)
-        body_text, body_params = _request_body_params(raw_body)
+        body_text, body_params = _request_body_params(
+            raw_body,
+            content_type=str(request.headers.get("content-type") or ""),
+        )
         body_sha256 = hashlib.sha256(raw_body).hexdigest()
 
         if host:
@@ -500,6 +768,114 @@ class ReleaseSupervisor:
                 "query_sample_added": query_sample_added,
                 "header_sample_added": header_sample_added,
             }
+
+        custom_login = await self._handle_protocol_login_route(
+            clean_path=clean_path,
+            query_params=query_params,
+            body_params=body_params,
+        )
+        if custom_login is not None:
+            route_name, status_code, response_payload = custom_login
+            entry["route"] = route_name
+            entry["response_json"] = response_payload
+            try:
+                self.runtime_state.record_http_event(
+                    event_time=str(entry["time"]),
+                    route_name=route_name,
+                    clean_path=clean_path,
+                    raw_path=raw_path,
+                    method=request.method,
+                    host=host,
+                    remote=str(entry["remote"]),
+                    did=explicit_did or None,
+                    pid=explicit_pid or None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("runtime_state record_http_event failed: %s", exc)
+            append_jsonl(self.context.http_jsonl, entry)
+            logger.info(
+                "%s %s host=%s route=%s status=%d body_sha256=%s",
+                request.method,
+                clean_path,
+                host or "-",
+                route_name,
+                status_code,
+                body_sha256[:16],
+            )
+            return JSONResponse(response_payload, status_code=status_code)
+
+        required_auth = self._required_protocol_auth(clean_path)
+        if required_auth is not None:
+            availability = self.protocol_auth.availability()
+            if availability.user is None:
+                status_code, response_payload = self._protocol_auth_not_ready_payload()
+                route_name = f"{required_auth}_auth_not_ready"
+                entry["route"] = route_name
+                entry["response_json"] = response_payload
+                try:
+                    self.runtime_state.record_http_event(
+                        event_time=str(entry["time"]),
+                        route_name=route_name,
+                        clean_path=clean_path,
+                        raw_path=raw_path,
+                        method=request.method,
+                        host=host,
+                        remote=str(entry["remote"]),
+                        did=explicit_did or None,
+                        pid=explicit_pid or None,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("runtime_state record_http_event failed: %s", exc)
+                append_jsonl(self.context.http_jsonl, entry)
+                logger.info(
+                    "%s %s host=%s route=%s status=%d body_sha256=%s",
+                    request.method,
+                    clean_path,
+                    host or "-",
+                    route_name,
+                    status_code,
+                    body_sha256[:16],
+                )
+                return JSONResponse(response_payload, status_code=status_code)
+
+            if required_auth == "token":
+                authenticated, auth_reason = self.protocol_auth.verify_token(request.headers)
+            else:
+                authenticated, auth_reason = self.protocol_auth.verify_hawk(
+                    path=self._normalized_path(clean_path),
+                    query_params=query_params,
+                    body_params=body_params,
+                    headers=request.headers,
+                )
+            if not authenticated:
+                route_name = f"{required_auth}_auth_failed"
+                response_payload = self._protocol_auth_failure_payload(auth_reason, required_auth)
+                entry["route"] = route_name
+                entry["response_json"] = response_payload
+                try:
+                    self.runtime_state.record_http_event(
+                        event_time=str(entry["time"]),
+                        route_name=route_name,
+                        clean_path=clean_path,
+                        raw_path=raw_path,
+                        method=request.method,
+                        host=host,
+                        remote=str(entry["remote"]),
+                        did=explicit_did or None,
+                        pid=explicit_pid or None,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("runtime_state record_http_event failed: %s", exc)
+                append_jsonl(self.context.http_jsonl, entry)
+                logger.info(
+                    "%s %s host=%s route=%s status=401 body_sha256=%s",
+                    request.method,
+                    clean_path,
+                    host or "-",
+                    route_name,
+                    body_sha256[:16],
+                )
+                return JSONResponse(response_payload, status_code=401)
 
         try:
             plugin_dispatch = await dispatch_plugin_zip_request(
@@ -746,11 +1122,17 @@ class ReleaseSupervisor:
 
     def _register_protocol_routes(self, app: FastAPI) -> None:
         @app.get("/ui/api/health")
-        async def ui_health() -> JSONResponse:
+        async def ui_health(request: Request) -> JSONResponse:
+            if not self.enable_standalone_admin:
+                return JSONResponse({"error": "Not Found"}, status_code=404)
+            self._require_admin(request)
             return JSONResponse(self._ui_health_payload())
 
         @app.get("/ui/api/vacuums")
-        async def ui_vacuums() -> JSONResponse:
+        async def ui_vacuums(request: Request) -> JSONResponse:
+            if not self.enable_standalone_admin:
+                return JSONResponse({"error": "Not Found"}, status_code=404)
+            self._require_admin(request)
             return JSONResponse(self._ui_vacuums_payload())
 
         @app.api_route("/", methods=list(ALL_HTTP_METHODS))
@@ -801,6 +1183,7 @@ class ReleaseSupervisor:
             localkey=self.context.localkey,
             logger=self.loggers["mqtt"],
             decoded_jsonl=self.context.mqtt_jsonl,
+            cloud_snapshot_path=self.paths.cloud_snapshot_path,
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self.context.zone_ranges_store,

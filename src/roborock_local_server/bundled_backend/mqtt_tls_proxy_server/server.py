@@ -16,6 +16,7 @@ from typing import Any
 from shared.constants import MQTT_TYPES
 from shared.decoder import build_decoder
 from shared.io_utils import append_jsonl, payload_preview
+from shared.protocol_auth import ProtocolAuthStore
 from shared.runtime_credentials import RuntimeCredentialsStore
 from shared.runtime_state import RuntimeState
 from shared.zone_ranges_store import ZoneRangesStore
@@ -35,6 +36,7 @@ class MqttTlsProxy:
         localkey: str,
         logger: logging.Logger,
         decoded_jsonl: Path,
+        cloud_snapshot_path: Path | None = None,
         runtime_state: RuntimeState | None = None,
         runtime_credentials: RuntimeCredentialsStore | None = None,
         zone_ranges_store: ZoneRangesStore | None = None,
@@ -48,6 +50,7 @@ class MqttTlsProxy:
         self.localkey = localkey
         self.logger = logger
         self.decoded_jsonl = decoded_jsonl
+        self.cloud_snapshot_path = cloud_snapshot_path
         self.runtime_state = runtime_state
         self.runtime_credentials = runtime_credentials
         self.zone_ranges_store = zone_ranges_store
@@ -58,6 +61,7 @@ class MqttTlsProxy:
         self._conn_protocol_levels: dict[str, int] = {}
         self._trace_queue: queue.Queue[tuple[str, str, bytes] | None] = queue.Queue()
         self._trace_thread: threading.Thread | None = None
+        self._protocol_auth = ProtocolAuthStore(cloud_snapshot_path) if cloud_snapshot_path is not None else None
         default_decoder, self._protocol_names = build_decoder(localkey)
         self._decoder_cache: dict[str, Any] = {localkey: default_decoder}
         self._command_registry = RpcCommandRegistry()
@@ -119,6 +123,140 @@ class MqttTlsProxy:
         if protocol_level_idx >= len(packet):
             return None
         return packet[protocol_level_idx]
+
+    @staticmethod
+    def _decode_mqtt_string(packet: bytes, cursor: int) -> tuple[str | None, int]:
+        if cursor + 2 > len(packet):
+            return None, cursor
+        length = int.from_bytes(packet[cursor : cursor + 2], "big")
+        start = cursor + 2
+        end = start + length
+        if end > len(packet):
+            return None, cursor
+        return packet[start:end].decode("utf-8", errors="replace"), end
+
+    @staticmethod
+    def _decode_mqtt_binary(packet: bytes, cursor: int) -> tuple[bytes | None, int]:
+        if cursor + 2 > len(packet):
+            return None, cursor
+        length = int.from_bytes(packet[cursor : cursor + 2], "big")
+        start = cursor + 2
+        end = start + length
+        if end > len(packet):
+            return None, cursor
+        return packet[start:end], end
+
+    @classmethod
+    def _parse_connect_packet(cls, packet: bytes) -> dict[str, Any] | None:
+        if not packet or (packet[0] >> 4) != 1:
+            return None
+        remaining_len, remaining_len_bytes = cls._decode_remaining_length(packet, 1)
+        if remaining_len is None or remaining_len_bytes == 0:
+            return None
+        cursor = 1 + remaining_len_bytes
+        protocol_name, cursor = cls._decode_mqtt_string(packet, cursor)
+        if protocol_name is None or cursor + 4 > len(packet):
+            return None
+        protocol_level = packet[cursor]
+        connect_flags = packet[cursor + 1]
+        cursor += 4  # protocol_level + connect_flags + keepalive(2)
+        if protocol_level == 5:
+            property_len, property_len_bytes = cls._decode_remaining_length(packet, cursor)
+            if property_len is None or property_len_bytes == 0:
+                return None
+            cursor += property_len_bytes + property_len
+        client_id, cursor = cls._decode_mqtt_string(packet, cursor)
+        if client_id is None:
+            return None
+
+        will_flag = (connect_flags & 0x04) != 0
+        username_flag = (connect_flags & 0x80) != 0
+        password_flag = (connect_flags & 0x40) != 0
+        if will_flag:
+            if protocol_level == 5:
+                property_len, property_len_bytes = cls._decode_remaining_length(packet, cursor)
+                if property_len is None or property_len_bytes == 0:
+                    return None
+                cursor += property_len_bytes + property_len
+            _, cursor = cls._decode_mqtt_string(packet, cursor)
+            _, cursor = cls._decode_mqtt_binary(packet, cursor)
+            if cursor > len(packet):
+                return None
+
+        username = ""
+        password = ""
+        if username_flag:
+            decoded_username, cursor = cls._decode_mqtt_string(packet, cursor)
+            if decoded_username is None:
+                return None
+            username = decoded_username
+        if password_flag:
+            decoded_password, cursor = cls._decode_mqtt_binary(packet, cursor)
+            if decoded_password is None:
+                return None
+            password = decoded_password.decode("utf-8", errors="replace")
+
+        return {
+            "protocol_name": protocol_name,
+            "protocol_level": protocol_level,
+            "client_id": client_id,
+            "username": username,
+            "password": password,
+        }
+
+    @classmethod
+    def _read_first_packet(cls, conn: socket.socket) -> tuple[bytes, bytes] | None:
+        buffer = bytearray()
+        while True:
+            chunk = conn.recv(4096)
+            if not chunk:
+                return None
+            buffer.extend(chunk)
+            if len(buffer) < 2:
+                continue
+            remaining_len, remaining_len_bytes = cls._decode_remaining_length(buffer, 1)
+            if remaining_len is None or remaining_len_bytes == 0:
+                continue
+            total_len = 1 + remaining_len_bytes + remaining_len
+            if len(buffer) < total_len:
+                continue
+            return bytes(buffer[:total_len]), bytes(buffer[total_len:])
+
+    def _expected_bootstrap_credentials(self) -> tuple[str, str, str] | None:
+        if self.runtime_credentials is None:
+            return None
+        username = str(self.runtime_credentials.bootstrap_value("mqtt_usr", "") or "").strip()
+        password = str(self.runtime_credentials.bootstrap_value("mqtt_passwd", "") or "").strip()
+        client_id = str(self.runtime_credentials.bootstrap_value("mqtt_clientid", "") or "").strip()
+        if not username or not password:
+            return None
+        return username, password, client_id
+
+    def _authorize_connect_packet(self, packet: bytes) -> tuple[bool, str, dict[str, Any] | None]:
+        info = self._parse_connect_packet(packet)
+        if info is None:
+            return False, "invalid_connect_packet", None
+
+        username = str(info.get("username") or "").strip()
+        password = str(info.get("password") or "").strip()
+        client_id = str(info.get("client_id") or "").strip()
+        if not username or not password:
+            return False, "missing_mqtt_credentials", info
+
+        if self._protocol_auth is not None:
+            user_credentials = self._protocol_auth.expected_user_mqtt_credentials()
+            if user_credentials is not None and (username, password) == user_credentials:
+                return True, "user_hash", info
+
+        bootstrap_credentials = self._expected_bootstrap_credentials()
+        if bootstrap_credentials is not None:
+            expected_username, expected_password, expected_client_id = bootstrap_credentials
+            if username == expected_username and password == expected_password:
+                if expected_client_id and client_id and client_id != expected_client_id:
+                    return False, "invalid_bootstrap_client_id", info
+                return True, "bootstrap", info
+
+        return False, "invalid_mqtt_credentials", info
 
     @classmethod
     def _extract_publish(cls, packet: bytes, protocol_level: int | None = None) -> tuple[str | None, bytes | None]:
@@ -495,9 +633,35 @@ class MqttTlsProxy:
         if self.runtime_state is not None:
             self.runtime_state.record_mqtt_connection(conn_id=conn_id, client_ip=addr[0], client_port=addr[1])
         try:
+            first_packet = self._read_first_packet(tls_conn)
+            if first_packet is None:
+                self.logger.warning("[conn %s] client closed before MQTT CONNECT", conn_id)
+                return
+            connect_packet, initial_remainder = first_packet
+            authorized, auth_reason, connect_info = self._authorize_connect_packet(connect_packet)
+            if connect_info is not None:
+                protocol_level = connect_info.get("protocol_level")
+                if isinstance(protocol_level, int):
+                    self._set_conn_protocol_level(conn_id, protocol_level)
+            self._queue_trace_packet(conn_id, "c2b", connect_packet)
+            if not authorized:
+                self.logger.warning(
+                    "[conn %s] rejected MQTT CONNECT reason=%s client_id=%s username=%s",
+                    conn_id,
+                    auth_reason,
+                    str((connect_info or {}).get("client_id") or ""),
+                    str((connect_info or {}).get("username") or ""),
+                )
+                return
+
             backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             backend.connect((self.backend_host, self.backend_port))
-            c2b = threading.Thread(target=self._relay, args=(tls_conn, backend, conn_id, "c2b", bytearray()), daemon=True)
+            backend.sendall(connect_packet + initial_remainder)
+            c2b = threading.Thread(
+                target=self._relay,
+                args=(tls_conn, backend, conn_id, "c2b", bytearray(initial_remainder)),
+                daemon=True,
+            )
             b2c = threading.Thread(target=self._relay, args=(backend, tls_conn, conn_id, "b2c", bytearray()), daemon=True)
             c2b.start()
             b2c.start()

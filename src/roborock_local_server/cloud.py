@@ -71,6 +71,24 @@ class CloudImportManager:
         for key in expired:
             self._sessions.pop(key, None)
 
+    def find_pending_session_id(self, *, email: str, base_url: str = "") -> str:
+        normalized_email = email.strip().lower()
+        normalized_base_url = base_url.strip()
+        if not normalized_email:
+            return ""
+        with self._lock:
+            self._cleanup_locked()
+            matches = [
+                value
+                for value in self._sessions.values()
+                if value.email.strip().lower() == normalized_email
+                and (not normalized_base_url or value.base_url.strip() == normalized_base_url)
+            ]
+        if not matches:
+            return ""
+        matches.sort(key=lambda item: item.expires_at_ts, reverse=True)
+        return matches[0].session_id
+
     async def request_code(self, *, email: str, base_url: str = "") -> dict[str, Any]:
         normalized_email = email.strip()
         if not normalized_email:

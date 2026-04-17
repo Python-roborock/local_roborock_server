@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
 from roborock_local_server.server import ReleaseSupervisor, resolve_route
+from shared.protocol_auth import ProtocolAuthStore, build_hawk_authorization
 
 
 def _scene_zone_step(
@@ -144,6 +145,48 @@ def _write_scene_zone_trace(mqtt_jsonl_path: Path) -> None:
         "\n".join(json.dumps(entry, separators=(",", ":")) for entry in entries) + "\n",
         encoding="utf-8",
     )
+
+
+def _seed_protocol_snapshot(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "user_data": {
+                    "uid": 1001,
+                    "token": "local-token-123",
+                    "rruid": "local-rruid-123",
+                    "rriot": {
+                        "u": "hawk-user-123",
+                        "s": "hawk-session-123",
+                        "h": "hawk-secret-123",
+                        "k": "hawk-mqtt-key-123",
+                        "r": {
+                            "r": "US",
+                            "a": "https://api-us.roborock.com",
+                            "m": "ssl://mqtt-us.roborock.com:8883",
+                            "l": "https://wood-us.roborock.com",
+                        },
+                    },
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _hawk_headers(snapshot_path: Path, path: str, *, form_values: dict[str, object] | None = None, json_values: dict[str, object] | None = None) -> dict[str, str]:
+    user = ProtocolAuthStore(snapshot_path).availability().user
+    assert user is not None
+    return {
+        "Authorization": build_hawk_authorization(
+            user=user,
+            path=path,
+            form_values=form_values or json_values,
+            nonce=f"nonce-{path.replace('/', '-')}",
+        )
+    }
 
 
 def test_admin_login_and_status_flow(tmp_path: Path) -> None:
@@ -321,13 +364,13 @@ def test_core_only_mode_disables_standalone_admin_routes(tmp_path: Path) -> None
     assert admin_page.status_code == 404
 
     ui_health = client.get("/ui/api/health")
-    assert ui_health.status_code == 200
+    assert ui_health.status_code == 404
 
     region_response = client.get("/region")
     assert region_response.status_code == 200
 
 
-def test_ui_api_health_and_vacuums_return_runtime_payload_without_auth(tmp_path: Path) -> None:
+def test_ui_api_health_and_vacuums_require_admin_auth(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
     paths = resolve_paths(config_file, config)
@@ -361,6 +404,12 @@ def test_ui_api_health_and_vacuums_return_runtime_payload_without_auth(tmp_path:
     )
 
     client = TestClient(supervisor.app)
+
+    assert client.get("/ui/api/health").status_code == 401
+    assert client.get("/ui/api/vacuums").status_code == 401
+
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
 
     health = client.get("/ui/api/health")
     assert health.status_code == 200
@@ -576,16 +625,34 @@ def test_scene_update_routes_persist_name_and_zone_ranges(tmp_path: Path) -> Non
         + "\n",
         encoding="utf-8",
     )
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
     _write_scene_zone_trace(paths.mqtt_jsonl_path)
 
     supervisor = ReleaseSupervisor(config=config, paths=paths)
     client = TestClient(supervisor.app)
 
-    rename_response = client.put("/user/scene/4491073/name", data={"name": "After dinner"})
+    rename_response = client.put(
+        "/user/scene/4491073/name",
+        data={"name": "After dinner"},
+        headers=_hawk_headers(
+            paths.cloud_snapshot_path,
+            "/user/scene/4491073/name",
+            form_values={"name": "After dinner"},
+        ),
+    )
     assert rename_response.status_code == 200
     assert rename_response.json()["data"]["name"] == "After dinner"
 
-    update_response = client.put("/user/scene/4491073/param", json=_after_dinner_param_payload(device_id, include_ranges=False))
+    update_payload = _after_dinner_param_payload(device_id, include_ranges=False)
+    update_response = client.put(
+        "/user/scene/4491073/param",
+        json=update_payload,
+        headers=_hawk_headers(
+            paths.cloud_snapshot_path,
+            "/user/scene/4491073/param",
+            json_values=update_payload,
+        ),
+    )
     assert update_response.status_code == 200
 
     stored_inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
