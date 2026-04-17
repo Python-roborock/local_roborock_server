@@ -46,12 +46,18 @@ from .backend import (
     strip_roborock_prefix,
 )
 from shared.protocol_auth import ProtocolAuthStore
-from https_server.routes.auth.service import build_login_data_response, cloud_login_data_required_response
+from https_server.routes.auth.service import (
+    build_login_data_response,
+    cloud_login_data_required_response,
+    load_cloud_user_data,
+)
 from .bundled_backend.shared.zone_ranges_store import ZoneRangesStore
 from .security import AdminSessionManager
 
 
 ALL_HTTP_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
+PROTOCOL_AUTH_SYNC_PATH = "/internal/protocol/user-data"
+PROTOCOL_AUTH_SYNC_SECRET_HEADER = "x-local-sync-secret"
 PROJECT_SUPPORT = {
     "title": "Support This Project",
     "text": (
@@ -126,6 +132,14 @@ def _request_value(
         if candidate:
             return candidate
     return ""
+
+
+def _headers_for_log(headers: dict[str, str]) -> dict[str, str]:
+    normalized = dict(headers)
+    for key in list(normalized):
+        if str(key).strip().lower() == PROTOCOL_AUTH_SYNC_SECRET_HEADER:
+            normalized[key] = "<redacted>"
+    return normalized
 
 
 def _extract_explicit_pid(
@@ -307,7 +321,10 @@ class ReleaseSupervisor:
             inventory_path=self.paths.inventory_path,
             snapshot_path=self.paths.cloud_snapshot_path,
         )
-        self.protocol_auth = ProtocolAuthStore(self.paths.cloud_snapshot_path)
+        self.protocol_auth = ProtocolAuthStore(
+            self.paths.cloud_snapshot_path,
+            session_store_path=self.paths.protocol_auth_sessions_path,
+        )
 
         self.loggers = self._setup_loggers()
         if not self.paths.device_key_state_path.exists():
@@ -598,6 +615,67 @@ class ReleaseSupervisor:
         )
         return 412, payload
 
+    @classmethod
+    def _is_protocol_sync_path(cls, clean_path: str) -> bool:
+        return cls._normalized_path(clean_path) == PROTOCOL_AUTH_SYNC_PATH
+
+    @staticmethod
+    def _protocol_sync_success_payload(*, source: str) -> dict[str, Any]:
+        return {
+            "code": 200,
+            "msg": "success",
+            "data": {"stored": True, "source": source},
+        }
+
+    @staticmethod
+    def _protocol_sync_failure_payload(*, reason: str, detail: str = "") -> dict[str, Any]:
+        payload: dict[str, Any] = {"reason": reason}
+        if detail:
+            payload["detail"] = detail
+        return {"code": 40041, "msg": "protocol_sync_failed", "data": payload}
+
+    def _sync_secret_matches(self, headers: dict[str, str]) -> bool:
+        provided = _pick_first_header(headers, ("x-local-sync-secret", "X-Local-Sync-Secret"))
+        expected = str(self.config.admin.session_secret or "").strip()
+        return bool(expected) and secrets.compare_digest(provided, expected)
+
+    async def _handle_protocol_sync_route(
+        self,
+        *,
+        method: str,
+        clean_path: str,
+        headers: dict[str, str],
+        body_params: dict[str, list[str]],
+    ) -> tuple[str, int, dict[str, Any]] | None:
+        if not self._is_protocol_sync_path(clean_path):
+            return None
+        if method.upper() != "POST":
+            return "protocol_auth_sync_method_not_allowed", 405, self._protocol_sync_failure_payload(
+                reason="method_not_allowed"
+            )
+        if not self._sync_secret_matches(headers):
+            return "protocol_auth_sync_unauthorized", 401, self._protocol_sync_failure_payload(
+                reason="invalid_sync_secret"
+            )
+
+        payload = _request_json_object(body_params)
+        user_data = payload.get("user_data")
+        if not isinstance(user_data, dict):
+            return "protocol_auth_sync_invalid_payload", 400, self._protocol_sync_failure_payload(
+                reason="missing_user_data"
+            )
+
+        source = str(payload.get("source") or "mitm_cloud_login").strip() or "mitm_cloud_login"
+        try:
+            self.protocol_auth.upsert_user_data(user_data, source=source)
+        except ValueError as exc:
+            return "protocol_auth_sync_invalid_payload", 400, self._protocol_sync_failure_payload(
+                reason="invalid_user_data",
+                detail=str(exc),
+            )
+
+        return "protocol_auth_sync", 200, self._protocol_sync_success_payload(source=source)
+
     async def _handle_protocol_login_route(
         self,
         *,
@@ -665,8 +743,25 @@ class ReleaseSupervisor:
                     "msg": "code_submit_failed",
                     "data": {"error": str(exc)},
                 }
+            cloud_user_data = load_cloud_user_data(self.context)
+            if cloud_user_data is None:
+                self.runtime_state.record_cloud_request(result)
+                status_code, response_payload = self._protocol_auth_not_ready_payload()
+                return "protocol_login_submit_code_not_ready", status_code, response_payload
+            try:
+                issued_user_data = self.protocol_auth.issue_local_session(
+                    cloud_user_data,
+                    source="protocol_code_login",
+                )
+            except ValueError as exc:
+                self.runtime_state.record_cloud_request(result)
+                return "protocol_login_submit_code", 400, {
+                    "code": 40023,
+                    "msg": "local_session_issue_failed",
+                    "data": {"error": str(exc)},
+                }
             self.runtime_state.record_cloud_request(result)
-            return "protocol_login_submit_code", 200, build_login_data_response(self.context)
+            return "protocol_login_submit_code", 200, build_login_data_response(self.context, issued_user_data)
 
         if self._is_password_login_path(normalized) or self._is_password_reset_path(normalized):
             return "protocol_login_password_unsupported", 400, self._unsupported_password_login_payload()
@@ -685,6 +780,7 @@ class ReleaseSupervisor:
             content_type=str(request.headers.get("content-type") or ""),
         )
         body_sha256 = hashlib.sha256(raw_body).hexdigest()
+        is_protocol_sync_request = self._is_protocol_sync_path(clean_path)
 
         if host:
             host_no_port = host.split(":", 1)[0].strip()
@@ -744,17 +840,20 @@ class ReleaseSupervisor:
             "raw_path": raw_path,
             "clean_path": clean_path,
             "query": {key: value for key, value in query_params.items()},
-            "headers": dict(request.headers),
+            "headers": _headers_for_log(dict(request.headers)),
             "body_len": len(raw_body),
             "body_sha256": body_sha256,
-            "body_b64": base64.b64encode(raw_body).decode("ascii"),
             "remote": f"{client_host}:{client_port}",
         }
         if explicit_did:
             entry["did"] = explicit_did
         if explicit_pid:
             entry["pid"] = explicit_pid
-        if body_text:
+        if is_protocol_sync_request:
+            entry["body_redacted"] = True
+        else:
+            entry["body_b64"] = base64.b64encode(raw_body).decode("ascii")
+        if body_text and not is_protocol_sync_request:
             entry["body_text"] = body_text
             try:
                 entry["body_json"] = json.loads(body_text)
@@ -768,6 +867,42 @@ class ReleaseSupervisor:
                 "query_sample_added": query_sample_added,
                 "header_sample_added": header_sample_added,
             }
+
+        custom_sync = await self._handle_protocol_sync_route(
+            method=request.method,
+            clean_path=clean_path,
+            headers=dict(request.headers),
+            body_params=body_params,
+        )
+        if custom_sync is not None:
+            route_name, status_code, response_payload = custom_sync
+            entry["route"] = route_name
+            entry["response_json"] = response_payload
+            try:
+                self.runtime_state.record_http_event(
+                    event_time=str(entry["time"]),
+                    route_name=route_name,
+                    clean_path=clean_path,
+                    raw_path=raw_path,
+                    method=request.method,
+                    host=host,
+                    remote=str(entry["remote"]),
+                    did=explicit_did or None,
+                    pid=explicit_pid or None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("runtime_state record_http_event failed: %s", exc)
+            append_jsonl(self.context.http_jsonl, entry)
+            logger.info(
+                "%s %s host=%s route=%s status=%d body_sha256=%s",
+                request.method,
+                clean_path,
+                host or "-",
+                route_name,
+                status_code,
+                body_sha256[:16],
+            )
+            return JSONResponse(response_payload, status_code=status_code)
 
         custom_login = await self._handle_protocol_login_route(
             clean_path=clean_path,
@@ -1184,6 +1319,7 @@ class ReleaseSupervisor:
             logger=self.loggers["mqtt"],
             decoded_jsonl=self.context.mqtt_jsonl,
             cloud_snapshot_path=self.paths.cloud_snapshot_path,
+            protocol_auth_sessions_path=self.paths.protocol_auth_sessions_path,
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self.context.zone_ranges_store,

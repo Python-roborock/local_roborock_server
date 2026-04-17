@@ -158,16 +158,15 @@ def build_password_reset_response(
     return ok(None)
 
 
-def build_login_data_response(ctx: ServerContext) -> dict[str, Any]:
-    cloud_user_data = load_cloud_user_data(ctx)
-    if cloud_user_data is None:
+def build_login_data_response(ctx: ServerContext, user_data: dict[str, Any] | None = None) -> dict[str, Any]:
+    candidate_user_data = with_current_server_urls(ctx, user_data) if isinstance(user_data, dict) else load_cloud_user_data(ctx)
+    if candidate_user_data is None:
         return cloud_login_data_required_response(ctx, reason="missing_snapshot_or_user_data")
-    missing_fields = missing_cloud_login_fields(cloud_user_data)
+    missing_fields = missing_cloud_login_fields(candidate_user_data)
     if missing_fields:
         return cloud_login_data_required_response(
             ctx,
             reason="incomplete_cloud_user_data",
             missing_fields=missing_fields,
         )
-    return ok(cloud_user_data)
-
+    return ok(candidate_user_data)

@@ -37,6 +37,7 @@ class MqttTlsProxy:
         logger: logging.Logger,
         decoded_jsonl: Path,
         cloud_snapshot_path: Path | None = None,
+        protocol_auth_sessions_path: Path | None = None,
         runtime_state: RuntimeState | None = None,
         runtime_credentials: RuntimeCredentialsStore | None = None,
         zone_ranges_store: ZoneRangesStore | None = None,
@@ -61,7 +62,14 @@ class MqttTlsProxy:
         self._conn_protocol_levels: dict[str, int] = {}
         self._trace_queue: queue.Queue[tuple[str, str, bytes] | None] = queue.Queue()
         self._trace_thread: threading.Thread | None = None
-        self._protocol_auth = ProtocolAuthStore(cloud_snapshot_path) if cloud_snapshot_path is not None else None
+        self._protocol_auth = (
+            ProtocolAuthStore(
+                cloud_snapshot_path,
+                session_store_path=protocol_auth_sessions_path,
+            )
+            if cloud_snapshot_path is not None
+            else None
+        )
         default_decoder, self._protocol_names = build_decoder(localkey)
         self._decoder_cache: dict[str, Any] = {localkey: default_decoder}
         self._command_registry = RpcCommandRegistry()
@@ -244,9 +252,9 @@ class MqttTlsProxy:
             return False, "missing_mqtt_credentials", info
 
         if self._protocol_auth is not None:
-            user_credentials = self._protocol_auth.expected_user_mqtt_credentials()
-            if user_credentials is not None and (username, password) == user_credentials:
-                return True, "user_hash", info
+            authorized, auth_reason, _matched_user = self._protocol_auth.verify_user_mqtt_credentials(username, password)
+            if authorized:
+                return True, auth_reason, info
 
         bootstrap_credentials = self._expected_bootstrap_credentials()
         if bootstrap_credentials is not None:

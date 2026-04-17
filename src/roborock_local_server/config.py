@@ -74,6 +74,7 @@ class AppPaths:
     acme_dir: Path
     inventory_path: Path
     cloud_snapshot_path: Path
+    protocol_auth_sessions_path: Path
     runtime_credentials_path: Path
     device_key_state_path: Path
     http_jsonl_path: Path
@@ -230,6 +231,7 @@ def resolve_paths(config_file: str | Path, config: AppConfig) -> AppPaths:
         acme_dir=acme_dir,
         inventory_path=runtime_dir / "web_api_inventory.json",
         cloud_snapshot_path=runtime_dir / "web_api_inventory_full_snapshot.json",
+        protocol_auth_sessions_path=state_dir / "protocol_auth_sessions.json",
         runtime_credentials_path=runtime_dir / "runtime_credentials.json",
         device_key_state_path=state_dir / "device_key_state.json",
         http_jsonl_path=runtime_dir / "decompiled_http.jsonl",

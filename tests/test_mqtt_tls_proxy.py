@@ -64,6 +64,31 @@ def _seed_cloud_snapshot(path: Path) -> None:
     )
 
 
+def _seed_protocol_sessions(path: Path) -> None:
+    _write_json(
+        path,
+        {
+            "version": 1,
+            "sessions": [
+                {
+                    "source": "test_sync",
+                    "updated_at_utc": "2026-04-17T17:00:00+00:00",
+                    "user_data": {
+                        "token": "real-cloud-token-999",
+                        "rruid": "real-cloud-rruid-999",
+                        "rriot": {
+                            "u": "real-cloud-hawk-user",
+                            "s": "real-cloud-hawk-session",
+                            "h": "real-cloud-hawk-secret",
+                            "k": "real-cloud-mqtt-key",
+                        },
+                    },
+                }
+            ],
+        },
+    )
+
+
 def _build_connect_packet(*, client_id: str, username: str, password: str) -> bytes:
     protocol_name = b"MQTT"
     variable_header = (
@@ -231,3 +256,35 @@ def test_authorize_connect_accepts_bootstrap_credentials_and_rejects_wrong_passw
     rejected, reject_reason, _info = proxy._authorize_connect_packet(wrong_password_packet)
     assert rejected is False
     assert reject_reason == "invalid_mqtt_credentials"
+
+
+def test_authorize_connect_accepts_persisted_synced_user_hash_credentials(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    protocol_sessions_path = tmp_path / "protocol_sessions.json"
+    _seed_protocol_sessions(protocol_sessions_path)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        protocol_auth_sessions_path=protocol_sessions_path,
+    )
+
+    packet = _build_connect_packet(
+        client_id="ios-app-client",
+        username="7ad5ebc1",
+        password="558d41e0cece0ee7",
+    )
+    authorized, reason, info = proxy._authorize_connect_packet(packet)
+
+    assert authorized is True
+    assert reason == "user_hash"
+    assert info is not None
+    assert info["client_id"] == "ios-app-client"
