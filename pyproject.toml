@@ -1,10 +1,10 @@
 [project]
 name = "roborock-local-server"
-version = "0.1.0"
-description = "Clean release surface for a private local Roborock server stack."
+version = "0.0.2"
+description = "private local Roborock server stack."
 requires-python = ">=3.11,<3.14"
 readme = "README.md"
-authors = [{ name = "Codex" }]
+authors = [{ name = "Luke Lashley" }]
 dependencies = [
   "aiohttp>=3.9,<4",
   "cryptography>=42,<47",
