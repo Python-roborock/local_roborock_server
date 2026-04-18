@@ -11,7 +11,7 @@ import queue
 import socket
 import ssl
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from shared.constants import MQTT_TYPES
 from shared.decoder import build_decoder
@@ -40,6 +40,7 @@ class MqttTlsProxy:
         decoded_jsonl: Path,
         cloud_snapshot_path: Path | None = None,
         protocol_auth_sessions_path: Path | None = None,
+        protocol_auth_enabled: Callable[[], bool] | None = None,
         runtime_state: RuntimeState | None = None,
         runtime_credentials: RuntimeCredentialsStore | None = None,
         zone_ranges_store: ZoneRangesStore | None = None,
@@ -54,6 +55,7 @@ class MqttTlsProxy:
         self.logger = logger
         self.decoded_jsonl = decoded_jsonl
         self.cloud_snapshot_path = cloud_snapshot_path
+        self._protocol_auth_enabled = protocol_auth_enabled or (lambda: True)
         self.runtime_state = runtime_state
         self.runtime_credentials = runtime_credentials
         self.zone_ranges_store = zone_ranges_store
@@ -254,17 +256,6 @@ class MqttTlsProxy:
             return None
         return username, password, client_id
 
-    def _known_device_mqtt_user(self, username: str) -> dict[str, str] | None:
-        if self.runtime_credentials is None:
-            return None
-        normalized_username = str(username or "").strip()
-        if not normalized_username:
-            return None
-        for device in self.runtime_credentials.devices():
-            if str(device.get("device_mqtt_usr") or "").strip() == normalized_username:
-                return device
-        return None
-
     def _authorize_connect_packet(self, packet: bytes) -> tuple[bool, str, dict[str, Any] | None]:
         info = self._parse_connect_packet(packet)
         if info is None:
@@ -276,7 +267,7 @@ class MqttTlsProxy:
         if not username or not password:
             return False, "missing_mqtt_credentials", info
 
-        if self._protocol_auth is not None:
+        if self._protocol_auth is not None and self._protocol_auth_enabled():
             authorized, auth_reason, _matched_user = self._protocol_auth.verify_user_mqtt_credentials(username, password)
             if authorized:
                 return True, auth_reason, info
@@ -289,8 +280,20 @@ class MqttTlsProxy:
                     return False, "invalid_bootstrap_client_id", info
                 return True, "bootstrap", info
 
-        if self._known_device_mqtt_user(username) is not None:
-            return True, "device_mqtt_user", info
+        if self.runtime_credentials is not None:
+            authorized, auth_reason, _matched_device = self.runtime_credentials.verify_device_mqtt_credentials(
+                username=username,
+                password=password,
+            )
+            if authorized:
+                return True, auth_reason, info
+            if auth_reason == "device_mqtt_password_missing":
+                recovered_device = self.runtime_credentials.recover_device_mqtt_password(
+                    username=username,
+                    password=password,
+                )
+                if recovered_device is not None:
+                    return True, "device_mqtt_recovered", info
 
         return False, "invalid_mqtt_credentials", info
 

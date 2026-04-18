@@ -53,6 +53,7 @@ class AdminConfig:
     password_hash: str
     session_secret: str
     session_ttl_seconds: int
+    protocol_auth_enabled: bool
 
 
 @dataclass(frozen=True)
@@ -180,6 +181,7 @@ def load_config(path: str | Path) -> AppConfig:
             password_hash=_require_non_empty(admin.get("password_hash"), "admin.password_hash"),
             session_secret=_require_non_empty(admin.get("session_secret"), "admin.session_secret"),
             session_ttl_seconds=_as_int(admin.get("session_ttl_seconds"), "admin.session_ttl_seconds", 86400),
+            protocol_auth_enabled=_as_bool(admin.get("protocol_auth_enabled"), True),
         ),
     )
 

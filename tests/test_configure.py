@@ -40,6 +40,7 @@ def test_write_config_setup_embedded_cloudflare(tmp_path: Path) -> None:
     assert config.broker.port == 18830
     assert config.tls.mode == "cloudflare_acme"
     assert config.tls.cloudflare_token_file == "/run/secrets/cloudflare_token"
+    assert config.admin.protocol_auth_enabled is True
 
 
 def test_write_config_setup_external_broker_requires_host_before_serve(tmp_path: Path) -> None:
@@ -56,6 +57,7 @@ def test_write_config_setup_external_broker_requires_host_before_serve(tmp_path:
     assert 'mode = "external"' in rendered
     assert 'host = ""' in rendered
     assert "port = 1883" in rendered
+    assert "protocol_auth_enabled = true" in rendered
 
     with pytest.raises(ValueError, match="broker.host is required"):
         load_config(config_file)

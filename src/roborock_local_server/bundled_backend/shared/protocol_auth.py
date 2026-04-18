@@ -391,6 +391,36 @@ class ProtocolAuthStore:
             self._refresh_locked()
             return self._availability
 
+    def persisted_sessions(self) -> list[dict[str, Any]]:
+        with self._lock:
+            records = self._load_persisted_session_records_locked()
+            return [_clone_json_value(dict(record)) for record in records]
+
+    def remove_session(self, *, hawk_id: str, hawk_session: str) -> bool:
+        normalized_identity = (_clean_str(hawk_id), _clean_str(hawk_session))
+        if not all(normalized_identity):
+            return False
+
+        with self._lock:
+            existing_records = list(self._load_persisted_session_records_locked())
+            filtered_records: list[dict[str, Any]] = []
+            removed = False
+            for existing_record in existing_records:
+                existing_user = (
+                    existing_record.get("user_data")
+                    if isinstance(existing_record.get("user_data"), dict)
+                    else existing_record
+                )
+                if isinstance(existing_user, Mapping) and _session_identity(existing_user) == normalized_identity:
+                    removed = True
+                    continue
+                filtered_records.append(existing_record)
+            if not removed:
+                return False
+            self._persist_session_records_locked(filtered_records)
+            self._refresh_locked()
+            return True
+
     def expected_user_mqtt_credentials(self) -> tuple[str, str] | None:
         availability = self.availability()
         if availability.user is None:

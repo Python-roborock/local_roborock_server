@@ -32,6 +32,7 @@ session_secret = "abcdefghijklmnopqrstuvwxyz123456"
     paths = resolve_paths(config_file, config)
 
     assert config.network.stack_fqdn == "roborock.example.com"
+    assert config.admin.protocol_auth_enabled is True
     assert paths.data_dir == (tmp_path / "data").resolve()
     assert paths.cert_file == (tmp_path / "certs" / "fullchain.pem").resolve()
     assert paths.key_file == (tmp_path / "certs" / "privkey.pem").resolve()

@@ -232,6 +232,7 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
     dashboard_page = client.get("/admin")
     assert dashboard_page.status_code == 200
     assert "Cloud Import" in dashboard_page.text
+    assert "Protocol Auth" in dashboard_page.text
 
     assert "Num query samples" in dashboard_page.text
     assert "Public Key determined" in dashboard_page.text
@@ -247,6 +248,48 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
 
     status_after_logout = client.get("/admin/api/status")
     assert status_after_logout.status_code == 401
+
+
+def test_admin_auth_endpoints_toggle_protocol_auth_and_manage_sessions(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    issued = supervisor.protocol_auth.issue_local_session(
+        json.loads(paths.cloud_snapshot_path.read_text(encoding="utf-8"))["user_data"],
+        source="admin_test_session",
+    )
+
+    client = TestClient(supervisor.app)
+
+    assert client.get("/admin/api/auth").status_code == 401
+
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
+
+    auth_payload = client.get("/admin/api/auth")
+    assert auth_payload.status_code == 200
+    auth_json = auth_payload.json()
+    assert auth_json["protocol_auth_enabled"] is True
+    assert auth_json["protocol_session_count"] >= 1
+    session = next(item for item in auth_json["protocol_sessions"] if item["hawk_id"] == issued["rriot"]["u"])
+
+    toggled = client.post("/admin/api/auth", json={"protocol_auth_enabled": False})
+    assert toggled.status_code == 200
+    assert toggled.json()["protocol_auth_enabled"] is False
+    assert 'protocol_auth_enabled = false' in paths.config_file.read_text(encoding="utf-8")
+
+    unauthed_home = client.get("/api/v1/getHomeDetail")
+    assert unauthed_home.status_code == 200
+
+    deleted = client.delete(f"/admin/api/auth/sessions/{session['hawk_id']}/{session['hawk_session']}")
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+    assert deleted.json()["auth"]["protocol_session_count"] == 0
+
+    missing = client.delete(f"/admin/api/auth/sessions/{session['hawk_id']}/{session['hawk_session']}")
+    assert missing.status_code == 404
 
 
 def test_admin_onboarding_endpoints_require_auth_and_manage_session(tmp_path: Path) -> None:

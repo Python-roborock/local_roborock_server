@@ -385,6 +385,11 @@ class ReleaseSupervisor:
             mqtt_backend_port=self.config.broker.port,
         )
         self.runtime_credentials.sync_inventory()
+        recovered_device_passwords = self.runtime_credentials.backfill_device_mqtt_passwords(
+            self.paths.runtime_dir / "mqtt_server.log"
+        )
+        if recovered_device_passwords:
+            self.root_logger.info("Recovered %d device MQTT password(s) from mqtt_server.log", recovered_device_passwords)
 
         self.context = ServerContext(
             api_host=self.config.network.stack_fqdn,
@@ -465,6 +470,9 @@ class ReleaseSupervisor:
     def _require_admin(self, request: Request) -> None:
         if not self._authenticated(request):
             raise HTTPException(status_code=401, detail="Authentication required")
+
+    def protocol_auth_enabled(self) -> bool:
+        return bool(self.config.admin.protocol_auth_enabled)
 
     @staticmethod
     def _normalized_path(path: str) -> str:
@@ -583,6 +591,11 @@ class ReleaseSupervisor:
         if normalized.startswith("/api/"):
             return "token"
         return None
+
+    def _required_protocol_auth_for_request(self, clean_path: str) -> str | None:
+        if not self.protocol_auth_enabled():
+            return None
+        return self._required_protocol_auth(clean_path)
 
     def _login_send_success_payload(self) -> dict[str, Any]:
         return {"code": 200, "msg": "success", "data": {"sent": True, "validForSec": 300}}
@@ -940,7 +953,7 @@ class ReleaseSupervisor:
             )
             return JSONResponse(response_payload, status_code=status_code)
 
-        required_auth = self._required_protocol_auth(clean_path)
+        required_auth = self._required_protocol_auth_for_request(clean_path)
         if required_auth is not None:
             availability = self.protocol_auth.availability()
             if availability.user is None:
@@ -1140,6 +1153,7 @@ class ReleaseSupervisor:
         health["connected_vacuums"] = [vac for vac in merged_vacuums if vac.get("connected")]
         return {
             "health": health,
+            "auth": self._auth_payload(),
             "pairing": self.runtime_state.pairing_snapshot(),
             "support": PROJECT_SUPPORT,
             "inventory_path": str(self.paths.inventory_path),
@@ -1183,6 +1197,96 @@ class ReleaseSupervisor:
             "devices": devices,
             "generated_at": utcnow_iso(),
         }
+
+    @staticmethod
+    def _redacted_protocol_session(record: dict[str, Any]) -> dict[str, str]:
+        user_data = record.get("user_data") if isinstance(record.get("user_data"), dict) else record
+        if not isinstance(user_data, dict):
+            return {}
+        rriot = user_data.get("rriot") if isinstance(user_data.get("rriot"), dict) else {}
+        return {
+            "rruid": str(user_data.get("rruid") or "").strip(),
+            "hawk_id": str(rriot.get("u") or "").strip(),
+            "hawk_session": str(rriot.get("s") or "").strip(),
+            "source": str(record.get("source") or user_data.get("source") or "").strip(),
+            "updated_at_utc": str(record.get("updated_at_utc") or user_data.get("updated_at_utc") or "").strip(),
+        }
+
+    def _pending_device_mqtt_recovery_payload(self) -> list[dict[str, str]]:
+        devices: list[dict[str, str]] = []
+        for device in self.runtime_credentials.recovery_pending_devices():
+            devices.append(
+                {
+                    "did": str(device.get("did") or "").strip(),
+                    "duid": str(device.get("duid") or "").strip(),
+                    "name": str(device.get("name") or device.get("duid") or device.get("did") or "").strip(),
+                    "model": str(device.get("model") or "").strip(),
+                    "device_mqtt_usr": str(device.get("device_mqtt_usr") or "").strip(),
+                }
+            )
+        return devices
+
+    def _auth_payload(self) -> dict[str, Any]:
+        sessions = [
+            session
+            for session in (
+                self._redacted_protocol_session(record)
+                for record in self.protocol_auth.persisted_sessions()
+            )
+            if session.get("hawk_id") and session.get("hawk_session")
+        ]
+        return {
+            "protocol_auth_enabled": self.protocol_auth_enabled(),
+            "protocol_sessions": sessions,
+            "protocol_session_count": len(sessions),
+            "pending_device_mqtt_recovery": self._pending_device_mqtt_recovery_payload(),
+        }
+
+    def _rewrite_admin_bool_setting(self, *, key: str, value: bool) -> None:
+        config_path = self.paths.config_file
+        lines = config_path.read_text(encoding="utf-8").splitlines()
+        rendered_value = "true" if value else "false"
+        output: list[str] = []
+        in_admin_section = False
+        admin_section_found = False
+        updated = False
+
+        for line in lines:
+            stripped = line.strip()
+            is_section = stripped.startswith("[") and stripped.endswith("]")
+            if is_section and in_admin_section and not updated:
+                output.append(f"{key} = {rendered_value}")
+                updated = True
+            if stripped == "[admin]":
+                admin_section_found = True
+                in_admin_section = True
+            elif is_section:
+                in_admin_section = False
+            if in_admin_section and stripped.startswith(f"{key}"):
+                output.append(f"{key} = {rendered_value}")
+                updated = True
+                continue
+            output.append(line)
+
+        if admin_section_found and in_admin_section and not updated:
+            output.append(f"{key} = {rendered_value}")
+            updated = True
+
+        if not admin_section_found:
+            if output and output[-1].strip():
+                output.append("")
+            output.extend(["[admin]", f"{key} = {rendered_value}"])
+
+        config_path.write_text("\n".join(output) + "\n", encoding="utf-8")
+
+    def set_protocol_auth_enabled(self, enabled: bool) -> dict[str, Any]:
+        normalized_enabled = bool(enabled)
+        self._rewrite_admin_bool_setting(key="protocol_auth_enabled", value=normalized_enabled)
+        self.config = load_config(self.paths.config_file)
+        return self._auth_payload()
+
+    def remove_protocol_session(self, *, hawk_id: str, hawk_session: str) -> bool:
+        return self.protocol_auth.remove_session(hawk_id=hawk_id, hawk_session=hawk_session)
 
     def start_onboarding_session(self, *, duid: str) -> dict[str, Any]:
         normalized_duid = str(duid or "").strip()
@@ -1321,6 +1425,7 @@ class ReleaseSupervisor:
             decoded_jsonl=self.context.mqtt_jsonl,
             cloud_snapshot_path=self.paths.cloud_snapshot_path,
             protocol_auth_sessions_path=self.paths.protocol_auth_sessions_path,
+            protocol_auth_enabled=self.protocol_auth_enabled,
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self.context.zone_ranges_store,

@@ -235,6 +235,7 @@ def render_config_toml(answers: ConfigureAnswers) -> str:
             f"password_hash = {_toml_string(answers.password_hash)}",
             f"session_secret = {_toml_string(answers.session_secret)}",
             "session_ttl_seconds = 86400",
+            "protocol_auth_enabled = true",
             "",
         ]
     )

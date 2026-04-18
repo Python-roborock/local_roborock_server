@@ -19,6 +19,7 @@ def write_release_config(
     *,
     broker_mode: str = "external",
     enable_topic_bridge: bool = False,
+    protocol_auth_enabled: bool = True,
 ) -> Path:
     cert_dir = tmp_path / "certs"
     cert_dir.mkdir(parents=True, exist_ok=True)
@@ -49,6 +50,7 @@ key_file = "certs/privkey.pem"
 password_hash = "{hash_password("correct horse battery staple", iterations=10_000)}"
 session_secret = "abcdefghijklmnopqrstuvwxyz123456"
 session_ttl_seconds = 3600
+protocol_auth_enabled = {"true" if protocol_auth_enabled else "false"}
         """.strip(),
         encoding="utf-8",
     )

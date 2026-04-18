@@ -76,6 +76,20 @@ def _build_supervisor(tmp_path: Path, *, with_snapshot: bool = True) -> tuple[Re
     return supervisor, paths
 
 
+def _build_supervisor_with_protocol_toggle(
+    tmp_path: Path,
+    *,
+    protocol_auth_enabled: bool,
+) -> tuple[ReleaseSupervisor, object]:
+    config_file = write_release_config(tmp_path, protocol_auth_enabled=protocol_auth_enabled)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    _write_json(paths.inventory_path, {"home": {"id": 12345, "name": "Test Home"}, "devices": []})
+    _seed_cloud_snapshot(paths.cloud_snapshot_path)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    return supervisor, paths
+
+
 def test_protected_routes_require_native_token_and_hawk_auth(tmp_path: Path) -> None:
     supervisor, paths = _build_supervisor(tmp_path)
     client = TestClient(supervisor.app)
@@ -119,6 +133,17 @@ def test_protected_routes_require_imported_cloud_snapshot(tmp_path: Path) -> Non
     response = client.get("/api/v1/getHomeDetail")
     assert response.status_code == 412
     assert response.json()["msg"] == "cloud_user_data_required"
+
+
+def test_protected_routes_skip_protocol_auth_when_disabled(tmp_path: Path) -> None:
+    supervisor, _paths = _build_supervisor_with_protocol_toggle(tmp_path, protocol_auth_enabled=False)
+    client = TestClient(supervisor.app)
+
+    home_response = client.get("/api/v1/getHomeDetail")
+    assert home_response.status_code == 200
+
+    inbox_response = client.get("/user/inbox/latest")
+    assert inbox_response.status_code == 200
 
 
 def test_protocol_code_login_routes_reuse_cloud_import_manager(tmp_path: Path, monkeypatch) -> None:
