@@ -1,12 +1,15 @@
 # Roborock Local Server
+The best way to support this project is the next time you are buying a Roborock device come back here and use one of my afifliate links where I will receieve a comission.
 
-If this project helps, you can support it or next time you buy a Roborock device, come back here and use my affiliate links!
+[![Amazon Affiliate][badge-amazon]][link-amazon]
+[![Roborock 5 Off][badge-roborock-discount]][link-roborock-discount]
+[![Roborock Affiliate][badge-roborock-affiliate]][link-roborock-affiliate]
+
+
+You can also support via BMAC or paypal:
 
 [![Buy Me a Coffee][badge-bmac]][link-bmac]
 [![PayPal][badge-paypal]][link-paypal]
-[![Roborock 5 Off][badge-roborock-discount]][link-roborock-discount]
-[![Roborock Affiliate][badge-roborock-affiliate]][link-roborock-affiliate]
-[![Amazon Affiliate][badge-amazon]][link-amazon]
 
 Roborock Local Server is a private Roborock HTTPS and MQTT stack you run on your own system.
 
@@ -58,5 +61,5 @@ Additional docs:
 [badge-roborock-discount]: https://img.shields.io/badge/Roborock-5%25%20Off-C00000?style=for-the-badge
 [link-roborock-affiliate]: https://roborock.pxf.io/B0VYV9
 [badge-roborock-affiliate]: https://img.shields.io/badge/Roborock-affiliate-B22222?style=for-the-badge
-[link-amazon]: https://amzn.to/4bGfG6B
+[link-amazon]: https://amzn.to/4cx8zg3
 [badge-amazon]: https://img.shields.io/badge/Amazon-affiliate-FF9900?style=for-the-badge&logo=amazon&logoColor=white

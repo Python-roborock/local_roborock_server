@@ -137,17 +137,25 @@ def test_protocol_code_login_routes_reuse_cloud_import_manager(tmp_path: Path, m
         return {"success": True, "step": "inventory_fetched"}
 
     monkeypatch.setattr(supervisor.cloud_manager, "request_code", fake_request_code)
-    monkeypatch.setattr(supervisor.cloud_manager, "find_pending_session_id", lambda *, email, base_url="": "pending-1")
+    monkeypatch.setattr(
+        supervisor.cloud_manager,
+        "find_pending_session_id",
+        lambda *, email, base_url="": captured.update({"pending_email": email, "pending_base_url": base_url}) or "pending-1",
+    )
     monkeypatch.setattr(supervisor.cloud_manager, "submit_code", fake_submit_code)
 
-    send_response = client.post("/api/v5/email/code/send", json={"email": "user@example.com"})
+    send_response = client.post(
+        "/api/v5/email/code/send",
+        json={"email": "user@example.com", "baseUrl": "https://api-us.roborock.com"},
+    )
     assert send_response.status_code == 200
     assert send_response.json()["data"]["sent"] is True
     assert captured["request_email"] == "user@example.com"
+    assert captured["request_base_url"] == "https://api-us.roborock.com"
 
     login_response = client.post(
         "/api/v5/auth/email/login/code",
-        json={"email": "user@example.com", "code": "123456"},
+        json={"email": "user@example.com", "code": "123456", "baseUrl": "https://api-us.roborock.com"},
     )
     assert login_response.status_code == 200
     login_payload = login_response.json()["data"]
@@ -156,6 +164,8 @@ def test_protocol_code_login_routes_reuse_cloud_import_manager(tmp_path: Path, m
     assert login_payload["rriot"]["u"] != "hawk-user-123"
     assert captured["submit_session_id"] == "pending-1"
     assert captured["submit_code"] == "123456"
+    assert captured["pending_email"] == "user@example.com"
+    assert captured["pending_base_url"] == "https://api-us.roborock.com"
 
 
 def test_protocol_password_login_is_rejected(tmp_path: Path) -> None:

@@ -72,7 +72,7 @@ PROJECT_SUPPORT = {
             "url": "https://us.roborock.com/discount/RRSAP202602071713342D18X?redirect=%2Fpages%2Froborock-store%3Fuuid%3DEQe6p1jdZczHEN4Q0nbsG9sZRm0RK1gW5eSM%252FCzcW4Q%253D",
         },
         {"label": "Roborock Affiliate", "url": "https://roborock.pxf.io/B0VYV9"},
-        {"label": "Amazon Affiliate", "url": "https://amzn.to/4bGfG6B"},
+        {"label": "Amazon Affiliate", "url": "https://amzn.to/4cx8zg3"},
     ],
 }
 
@@ -721,9 +721,10 @@ class ReleaseSupervisor:
                 "mobile",
                 "phone",
             )
+            base_url = _request_value(query_params, body_params, "base_url", "baseUrl")
             session_id = _request_value(query_params, body_params, "session_id", "sessionId")
             if not session_id:
-                session_id = self.cloud_manager.find_pending_session_id(email=account)
+                session_id = self.cloud_manager.find_pending_session_id(email=account, base_url=base_url)
             code = _request_value(
                 query_params,
                 body_params,

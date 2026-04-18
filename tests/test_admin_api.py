@@ -220,7 +220,7 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
         "https://paypal.me/LLashley304",
         "https://us.roborock.com/discount/RRSAP202602071713342D18X?redirect=%2Fpages%2Froborock-store%3Fuuid%3DEQe6p1jdZczHEN4Q0nbsG9sZRm0RK1gW5eSM%252FCzcW4Q%253D",
         "https://roborock.pxf.io/B0VYV9",
-        "https://amzn.to/4bGfG6B",
+        "https://amzn.to/4cx8zg3",
     ]
     assert payload["health"]["services"]
     assert payload["pairing"]["active"] is False

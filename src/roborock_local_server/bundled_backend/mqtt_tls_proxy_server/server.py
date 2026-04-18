@@ -24,6 +24,8 @@ from shared.zone_ranges_store import ZoneRangesStore
 from .command_handlers import RpcCommandRegistry
 
 class MqttTlsProxy:
+    _MAX_FIRST_PACKET_BYTES = 1024 * 1024
+
     def __init__(
         self,
         *,
@@ -96,6 +98,12 @@ class MqttTlsProxy:
             if consumed >= 4:
                 break
         return None, 0
+
+    @staticmethod
+    def _remaining_length_invalid(data: bytes, start: int) -> bool:
+        if start + 3 >= len(data):
+            return False
+        return (data[start + 3] & 0x80) != 0
 
     def _extract_packets(self, frame_buf: bytearray) -> list[bytes]:
         packets: list[bytes] = []
@@ -220,12 +228,18 @@ class MqttTlsProxy:
             if not chunk:
                 return None
             buffer.extend(chunk)
+            if len(buffer) > cls._MAX_FIRST_PACKET_BYTES:
+                raise ValueError("MQTT CONNECT exceeds maximum supported size")
             if len(buffer) < 2:
                 continue
+            if cls._remaining_length_invalid(buffer, 1):
+                raise ValueError("Invalid MQTT remaining length in CONNECT packet")
             remaining_len, remaining_len_bytes = cls._decode_remaining_length(buffer, 1)
             if remaining_len is None or remaining_len_bytes == 0:
                 continue
             total_len = 1 + remaining_len_bytes + remaining_len
+            if total_len > cls._MAX_FIRST_PACKET_BYTES:
+                raise ValueError("MQTT CONNECT exceeds maximum supported size")
             if len(buffer) < total_len:
                 continue
             return bytes(buffer[:total_len]), bytes(buffer[total_len:])
@@ -239,6 +253,17 @@ class MqttTlsProxy:
         if not username or not password:
             return None
         return username, password, client_id
+
+    def _known_device_mqtt_user(self, username: str) -> dict[str, str] | None:
+        if self.runtime_credentials is None:
+            return None
+        normalized_username = str(username or "").strip()
+        if not normalized_username:
+            return None
+        for device in self.runtime_credentials.devices():
+            if str(device.get("device_mqtt_usr") or "").strip() == normalized_username:
+                return device
+        return None
 
     def _authorize_connect_packet(self, packet: bytes) -> tuple[bool, str, dict[str, Any] | None]:
         info = self._parse_connect_packet(packet)
@@ -263,6 +288,9 @@ class MqttTlsProxy:
                 if expected_client_id and client_id and client_id != expected_client_id:
                     return False, "invalid_bootstrap_client_id", info
                 return True, "bootstrap", info
+
+        if self._known_device_mqtt_user(username) is not None:
+            return True, "device_mqtt_user", info
 
         return False, "invalid_mqtt_credentials", info
 
@@ -664,10 +692,13 @@ class MqttTlsProxy:
 
             backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             backend.connect((self.backend_host, self.backend_port))
+            c2b_frame_buf = bytearray(initial_remainder)
+            for packet in self._extract_packets(c2b_frame_buf):
+                self._queue_trace_packet(conn_id, "c2b", packet)
             backend.sendall(connect_packet + initial_remainder)
             c2b = threading.Thread(
                 target=self._relay,
-                args=(tls_conn, backend, conn_id, "c2b", bytearray(initial_remainder)),
+                args=(tls_conn, backend, conn_id, "c2b", c2b_frame_buf),
                 daemon=True,
             )
             b2c = threading.Thread(target=self._relay, args=(backend, tls_conn, conn_id, "b2c", bytearray()), daemon=True)

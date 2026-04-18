@@ -1,8 +1,11 @@
 import json
 import logging
+import socket
 import threading
 import time
 from pathlib import Path
+
+import pytest
 
 from roborock_local_server.backend import MqttTlsProxy
 
@@ -11,8 +14,10 @@ class _FakeSourceSocket:
     def __init__(self, *chunks: bytes) -> None:
         self._chunks = list(chunks)
         self.closed = False
+        self.recv_calls = 0
 
     def recv(self, _size: int) -> bytes:
+        self.recv_calls += 1
         if self._chunks:
             return self._chunks.pop(0)
         return b""
@@ -33,6 +38,18 @@ class _FakeDestinationSocket:
 
     def close(self) -> None:
         self.closed = True
+
+
+class _FakeBackendSocket(_FakeDestinationSocket):
+    def __init__(self) -> None:
+        super().__init__()
+        self.connected_to: tuple[str, int] | None = None
+
+    def connect(self, addr: tuple[str, int]) -> None:
+        self.connected_to = addr
+
+    def recv(self, _size: int) -> bytes:
+        return b""
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -258,6 +275,64 @@ def test_authorize_connect_accepts_bootstrap_credentials_and_rejects_wrong_passw
     assert reject_reason == "invalid_mqtt_credentials"
 
 
+def test_authorize_connect_accepts_known_device_mqtt_user(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    runtime_credentials_path = tmp_path / "runtime_credentials.json"
+    _write_json(
+        runtime_credentials_path,
+        {
+            "schema_version": 2,
+            "mqtt_usr": "bootstrap-user",
+            "mqtt_passwd": "bootstrap-pass",
+            "mqtt_clientid": "bootstrap-client",
+            "devices": [
+                {
+                    "did": "1103821560705",
+                    "duid": "6HL2zfniaoYYV01CkVuhkO",
+                    "name": "Roborock Qrevo MaxV 2",
+                    "model": "roborock.vacuum.a87",
+                    "product_id": "5gUei3OIJIXVD3eD85Balg",
+                    "localkey": "xPd5Dr8CGGqtdDlH",
+                    "local_key_source": "inventory",
+                    "device_mqtt_usr": "c25b14ceac358d2a",
+                    "updated_at": "2026-04-17T17:00:00+00:00",
+                    "last_nc_at": "",
+                    "last_mqtt_seen_at": "",
+                }
+            ],
+        },
+    )
+    from shared.runtime_credentials import RuntimeCredentialsStore
+
+    runtime_credentials = RuntimeCredentialsStore(runtime_credentials_path)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        runtime_credentials=runtime_credentials,
+    )
+
+    packet = _build_connect_packet(
+        client_id="a012391cb5f8bc97",
+        username="c25b14ceac358d2a",
+        password="ff8922d24a9a9af81f18f35dcee9a5a5",
+    )
+    authorized, reason, info = proxy._authorize_connect_packet(packet)
+
+    assert authorized is True
+    assert reason == "device_mqtt_user"
+    assert info is not None
+    assert info["client_id"] == "a012391cb5f8bc97"
+
+
 def test_authorize_connect_accepts_persisted_synced_user_hash_credentials(tmp_path) -> None:
     cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
     _seed_cloud_snapshot(cloud_snapshot_path)
@@ -288,3 +363,50 @@ def test_authorize_connect_accepts_persisted_synced_user_hash_credentials(tmp_pa
     assert reason == "user_hash"
     assert info is not None
     assert info["client_id"] == "ios-app-client"
+
+
+def test_read_first_packet_rejects_invalid_remaining_length() -> None:
+    src = _FakeSourceSocket(b"\x10\xff\xff\xff\xff")
+
+    with pytest.raises(ValueError, match="remaining length"):
+        MqttTlsProxy._read_first_packet(src)
+
+    assert src.recv_calls == 1
+
+
+def test_handle_client_traces_packets_already_buffered_before_relay(tmp_path, monkeypatch) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+    )
+    backend = _FakeBackendSocket()
+    traced: list[tuple[str, str, bytes]] = []
+    connect_packet = _build_connect_packet(
+        client_id="ha-client",
+        username="52359d04",
+        password="cb5af78c8d901feb",
+    )
+    tls_conn = _FakeSourceSocket(connect_packet + b"\xc0\x00")
+
+    monkeypatch.setattr(socket, "socket", lambda *args, **kwargs: backend)
+    monkeypatch.setattr(proxy, "_queue_trace_packet", lambda conn_id, direction, packet: traced.append((conn_id, direction, packet)))
+
+    proxy._running = True
+    proxy._handle_client(tls_conn, ("127.0.0.1", 4321))
+
+    assert backend.connected_to == ("127.0.0.1", 1883)
+    assert backend.sent == [connect_packet + b"\xc0\x00"]
+    assert traced == [
+        ("1", "c2b", connect_packet),
+        ("1", "c2b", b"\xc0\x00"),
+    ]
