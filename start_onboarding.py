@@ -254,6 +254,10 @@ class GuidedOnboardingConfig:
     country_domain: str
 
 
+class ApiReachabilityError(RuntimeError):
+    """Raised when the admin API is temporarily unreachable."""
+
+
 class RemoteOnboardingApi:
     """Thin authenticated JSON client for the admin onboarding endpoints."""
 
@@ -272,6 +276,14 @@ class RemoteOnboardingApi:
         self._ssl_context = ssl_context
         self._opener = opener or request.build_opener(request.HTTPCookieProcessor())
         self._logged_in = False
+
+    def _open(self, req: request.Request):
+        if self._ssl_context is not None:
+            try:
+                return self._opener.open(req, timeout=self.timeout_seconds, context=self._ssl_context)
+            except TypeError:
+                pass
+        return self._opener.open(req, timeout=self.timeout_seconds)
 
     def login(self) -> None:
         if self._logged_in:
@@ -313,24 +325,17 @@ class RemoteOnboardingApi:
             headers["Content-Type"] = "application/json"
         req = request.Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
         try:
-            with self._opener.open(req, timeout=self.timeout_seconds, context=self._ssl_context) as response:
+            with self._open(req) as response:
                 raw = response.read().decode("utf-8", errors="replace")
-        except TypeError:
-            try:
-                with self._opener.open(req, timeout=self.timeout_seconds) as response:
-                    raw = response.read().decode("utf-8", errors="replace")
-            except error.HTTPError as exc:
-                if exc.code == 401 and allow_401:
-                    raise RuntimeError("Invalid admin password.") from exc
-                detail = exc.read().decode("utf-8", errors="replace")
-                raise RuntimeError(_format_http_error(exc.code, detail)) from exc
         except error.HTTPError as exc:
             if exc.code == 401 and allow_401:
                 raise RuntimeError("Invalid admin password.") from exc
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(_format_http_error(exc.code, detail)) from exc
         except error.URLError as exc:
-            raise RuntimeError(f"Unable to reach {self.base_url}: {exc.reason}") from exc
+            raise ApiReachabilityError(f"Unable to reach {self.base_url}: {exc.reason}") from exc
+        except OSError as exc:
+            raise ApiReachabilityError(f"Unable to reach {self.base_url}: {exc}") from exc
         if not raw:
             return {}
         try:
@@ -499,15 +504,33 @@ def poll_session_until_progress(
     *,
     session_id: str,
     baseline_samples: int,
+    baseline_status: dict[str, Any] | None = None,
     output: TextIO,
     poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
     timeout_seconds: float = POLL_TIMEOUT_SECONDS,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> tuple[str, dict[str, Any]]:
     deadline = time.monotonic() + timeout_seconds
-    latest = api.get_session(session_id=session_id)
+    latest = dict(baseline_status or {"session_id": session_id, "query_samples": baseline_samples})
+    waiting_for_reconnect = False
     while True:
-        latest = api.get_session(session_id=session_id)
+        try:
+            latest = api.get_session(session_id=session_id)
+            waiting_for_reconnect = False
+        except ApiReachabilityError as exc:
+            if time.monotonic() >= deadline:
+                return "timeout", latest
+            if not waiting_for_reconnect:
+                output.write(
+                    "The main server is not reachable yet from this machine. "
+                    "Finish reconnecting to your normal Wi-Fi and the script will keep retrying.\n"
+                )
+                output.write(f"{exc}\n")
+                waiting_for_reconnect = True
+            else:
+                output.write("Still waiting for this machine to reach the main server again...\n")
+            sleep_fn(poll_interval_seconds)
+            continue
         if str(latest.get("identity_conflict") or "").strip():
             return "conflict", latest
         if bool(latest.get("connected")):
@@ -590,6 +613,7 @@ def run_guided_onboarding(
                     api,
                     session_id=session_id,
                     baseline_samples=baseline_samples,
+                    baseline_status=status,
                     output=output,
                     poll_interval_seconds=poll_interval_seconds,
                     timeout_seconds=timeout_seconds,
