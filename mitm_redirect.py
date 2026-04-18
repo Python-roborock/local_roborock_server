@@ -6,7 +6,7 @@ After auth bootstrap, app API traffic is routed to LOCAL_API so app home/device
 state comes from your local stack.
 
 Usage:
-  uv run mitm_redirect.py --local-api YOUR_SERVER_HOST [--local-mqtt HOST] [--local-wood HOST] [--mode wireguard]
+  uv run mitm_redirect.py --local-api YOUR_SERVER_HOST [--local-mqtt HOST] [--local-wood HOST] [--sync-secret SECRET] [--sync-base-url URL] [--mode wireguard]
 """
 
 from __future__ import annotations
@@ -188,6 +188,18 @@ def _normalize_base_url(value: str, *, fallback: str = "") -> str:
     return f"{scheme}://{authority}"
 
 
+def _default_sync_base_url(value: str, *, fallback: str = "https://127.0.0.1") -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return fallback
+    parsed = urlsplit(raw if "://" in raw else f"//{raw}")
+    host = (parsed.hostname or parsed.path.split("/", 1)[0]).strip().strip("/")
+    if not host:
+        return fallback
+    authority = host if parsed.port is None else f"{host}:{parsed.port}"
+    return f"https://{authority}"
+
+
 def _load_local_sync_secret() -> str:
     config_path = os.path.join(SCRIPT_DIR, "config.toml")
     if not os.path.exists(config_path):
@@ -209,9 +221,10 @@ def load(loader) -> None:
     LOCAL_MQTT = _normalize_host(os.environ.get("MITM_LOCAL_MQTT", LOCAL_API) or LOCAL_API, fallback=LOCAL_API)
     LOCAL_WOOD = _normalize_host(os.environ.get("MITM_LOCAL_WOOD", LOCAL_API) or LOCAL_API, fallback=LOCAL_API)
     LOCAL_SYNC_SECRET = str(os.environ.get("MITM_LOCAL_SYNC_SECRET") or "").strip()
+    default_sync_base_url = _default_sync_base_url(os.environ.get("MITM_LOCAL_API") or LOCAL_API)
     LOCAL_SYNC_BASE_URL = _normalize_base_url(
         os.environ.get("MITM_LOCAL_SYNC_BASE_URL") or "",
-        fallback="https://127.0.0.1",
+        fallback=default_sync_base_url,
     )
     _init_log_dir()
     ctx.log.info(f"[CONFIG] LOCAL_API={LOCAL_API} LOCAL_MQTT={LOCAL_MQTT} LOCAL_WOOD={LOCAL_WOOD}")
@@ -515,7 +528,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sync-base-url",
         default=None,
-        help="Base URL for protocol auth sync callbacks (default: https://127.0.0.1).",
+        help="Base URL for protocol auth sync callbacks (default: https://<local-api-host>).",
     )
     parser.add_argument("--mode", default="wireguard", help="mitmweb proxy mode (default: wireguard)")
     parser.add_argument("--listen-port", default=None, help="mitmweb listen port")
@@ -525,9 +538,10 @@ if __name__ == "__main__":
     local_mqtt = _normalize_host(args.local_mqtt or args.local_api, fallback=local_api)
     local_wood = _normalize_host(args.local_wood or args.local_api, fallback=local_api)
     local_sync_secret = str(args.sync_secret or os.environ.get("MITM_LOCAL_SYNC_SECRET") or _load_local_sync_secret()).strip()
+    default_sync_base_url = _default_sync_base_url(args.local_api)
     local_sync_base_url = _normalize_base_url(
         args.sync_base_url or os.environ.get("MITM_LOCAL_SYNC_BASE_URL") or "",
-        fallback="https://127.0.0.1",
+        fallback=default_sync_base_url,
     )
 
     for label, original, normalized in (
