@@ -399,7 +399,7 @@ def _sync_protocol_user_data(user_data: dict[str, object]) -> None:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=5, context=ssl._create_unverified_context()) as response:
+        with urlopen(request, timeout=5, context=ssl.create_default_context()) as response:
             status = getattr(response, "status", 200)
             response.read()
     except Exception as exc:
@@ -517,9 +517,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Launch mitmweb with Roborock traffic interception.",
     )
-    parser.add_argument("--local-api", required=True, help="Hostname or URL of your local API server")
-    parser.add_argument("--local-mqtt", default=None, help="Hostname or URL of your local MQTT server (defaults to --local-api)")
-    parser.add_argument("--local-wood", default=None, help="Hostname or URL of your local Wood server (defaults to --local-api)")
+    parser.add_argument(
+        "--local-api",
+        required=True,
+        help="Hostname or HTTPS URL of your local API server. Explicit ports are ignored and 443 is used.",
+    )
+    parser.add_argument(
+        "--local-mqtt",
+        default=None,
+        help="Hostname or HTTPS URL of your local MQTT server. Explicit ports are ignored and 443 is used.",
+    )
+    parser.add_argument(
+        "--local-wood",
+        default=None,
+        help="Hostname or HTTPS URL of your local Wood server. Explicit ports are ignored and 443 is used.",
+    )
     parser.add_argument(
         "--sync-secret",
         default=None,

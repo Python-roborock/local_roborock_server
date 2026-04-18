@@ -320,11 +320,16 @@ def register_standalone_admin_routes(
         try:
             body = await request.json()
         except json.JSONDecodeError:
-            body = {}
-        if "protocol_auth_enabled" not in (body or {}):
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
+        if "protocol_auth_enabled" not in body:
             return JSONResponse({"error": "protocol_auth_enabled is required"}, status_code=400)
+        protocol_auth_enabled = body.get("protocol_auth_enabled")
+        if not isinstance(protocol_auth_enabled, bool):
+            return JSONResponse({"error": "protocol_auth_enabled must be a boolean"}, status_code=400)
         try:
-            payload = supervisor.set_protocol_auth_enabled(bool((body or {}).get("protocol_auth_enabled")))
+            payload = supervisor.set_protocol_auth_enabled(protocol_auth_enabled)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=500)
         return JSONResponse(payload)

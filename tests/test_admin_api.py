@@ -292,6 +292,56 @@ def test_admin_auth_endpoints_toggle_protocol_auth_and_manage_sessions(tmp_path:
     assert missing.status_code == 404
 
 
+def test_admin_auth_update_rejects_invalid_payload_types(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+
+    client = TestClient(supervisor.app)
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
+
+    invalid_string = client.post("/admin/api/auth", json={"protocol_auth_enabled": "false"})
+    assert invalid_string.status_code == 400
+    assert invalid_string.json()["error"] == "protocol_auth_enabled must be a boolean"
+
+    invalid_container = client.post("/admin/api/auth", json=["not-an-object"])
+    assert invalid_container.status_code == 400
+    assert invalid_container.json()["error"] == "JSON body must be an object"
+
+    invalid_json = client.post(
+        "/admin/api/auth",
+        content="{",
+        headers={"Content-Type": "application/json"},
+    )
+    assert invalid_json.status_code == 400
+    assert invalid_json.json()["error"] == "Invalid JSON body"
+
+
+def test_set_protocol_auth_enabled_rewrites_only_exact_admin_key(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    original = config_file.read_text(encoding="utf-8")
+    modified = original.replace(
+        "protocol_auth_enabled = true",
+        "# protocol_auth_enabled = true\nprotocol_auth_enabled_backup = true",
+    )
+    config_file.write_text(modified, encoding="utf-8")
+
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+
+    payload = supervisor.set_protocol_auth_enabled(False)
+
+    rendered = config_file.read_text(encoding="utf-8")
+    assert payload["protocol_auth_enabled"] is False
+    assert "# protocol_auth_enabled = true" in rendered
+    assert "protocol_auth_enabled_backup = true" in rendered
+    assert "protocol_auth_enabled = false" in rendered
+    assert rendered.count("protocol_auth_enabled = false") == 1
+
+
 def test_admin_onboarding_endpoints_require_auth_and_manage_session(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)

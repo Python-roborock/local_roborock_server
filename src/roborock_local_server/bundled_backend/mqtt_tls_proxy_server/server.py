@@ -661,6 +661,8 @@ class MqttTlsProxy:
 
     def _handle_client(self, tls_conn: ssl.SSLSocket, addr: tuple[str, int]) -> None:
         conn_id = self._next_conn()
+        backend: socket.socket | None = None
+        relay_started = False
         self.logger.info(
             "[conn %s] backend connect %s:%d from %s:%d",
             conn_id,
@@ -705,6 +707,7 @@ class MqttTlsProxy:
                 daemon=True,
             )
             b2c = threading.Thread(target=self._relay, args=(backend, tls_conn, conn_id, "b2c", bytearray()), daemon=True)
+            relay_started = True
             c2b.start()
             b2c.start()
             c2b.join()
@@ -712,6 +715,14 @@ class MqttTlsProxy:
         except Exception as exc:
             self.logger.error("[conn %s] connection error: %s", conn_id, exc)
         finally:
+            if not relay_started:
+                for endpoint in (tls_conn, backend):
+                    if endpoint is None:
+                        continue
+                    try:
+                        endpoint.close()
+                    except OSError:
+                        pass
             if self.runtime_state is not None:
                 self.runtime_state.record_mqtt_disconnect(conn_id=conn_id)
             with self._lock:

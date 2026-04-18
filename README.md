@@ -1,5 +1,5 @@
 # Roborock Local Server
-The best way to support this project is the next time you are buying a Roborock device come back here and use one of my afifliate links where I will receieve a comission.
+The best way to support this project is the next time you are buying a Roborock device come back here and use one of my affiliate links where I will receive a commission.
 
 [![Amazon Affiliate][badge-amazon]][link-amazon]
 [![Roborock 5 Off][badge-roborock-discount]][link-roborock-discount]

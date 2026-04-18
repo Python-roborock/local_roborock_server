@@ -1262,10 +1262,15 @@ class ReleaseSupervisor:
                 in_admin_section = True
             elif is_section:
                 in_admin_section = False
-            if in_admin_section and stripped.startswith(f"{key}"):
-                output.append(f"{key} = {rendered_value}")
-                updated = True
-                continue
+            if in_admin_section:
+                is_comment = stripped.startswith(("#", ";"))
+                if not is_comment and "=" in line:
+                    existing_key, _existing_value = line.split("=", 1)
+                    if existing_key.strip() == key:
+                        indent = line[: len(line) - len(line.lstrip())]
+                        output.append(f"{indent}{key} = {rendered_value}")
+                        updated = True
+                        continue
             output.append(line)
 
         if admin_section_found and in_admin_section and not updated:

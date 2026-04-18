@@ -516,3 +516,60 @@ def test_handle_client_traces_packets_already_buffered_before_relay(tmp_path, mo
         ("1", "c2b", connect_packet),
         ("1", "c2b", b"\xc0\x00"),
     ]
+
+
+def test_handle_client_closes_tls_conn_when_client_closes_before_connect(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+    )
+    tls_conn = _FakeSourceSocket()
+
+    proxy._running = True
+    proxy._handle_client(tls_conn, ("127.0.0.1", 4321))
+
+    assert tls_conn.closed is True
+
+
+def test_handle_client_closes_tls_conn_when_connect_is_rejected(tmp_path, monkeypatch) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+    )
+    tls_conn = _FakeSourceSocket(
+        _build_connect_packet(
+            client_id="bad-client",
+            username="unknown-user",
+            password="unknown-pass",
+        )
+    )
+
+    def _unexpected_backend(*args, **kwargs):
+        raise AssertionError("backend socket should not be created for rejected MQTT CONNECT")
+
+    monkeypatch.setattr(socket, "socket", _unexpected_backend)
+
+    proxy._running = True
+    proxy._handle_client(tls_conn, ("127.0.0.1", 4321))
+
+    assert tls_conn.closed is True
