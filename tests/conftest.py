@@ -17,6 +17,9 @@ from roborock_local_server.security import hash_password
 def write_release_config(
     tmp_path: Path,
     *,
+    stack_fqdn: str = "roborock.example.com",
+    https_port: int = 443,
+    mqtt_tls_port: int = 8883,
     broker_mode: str = "external",
     enable_topic_bridge: bool = False,
     protocol_auth_enabled: bool = True,
@@ -30,7 +33,9 @@ def write_release_config(
     config_file.write_text(
         f"""
 [network]
-stack_fqdn = "roborock.example.com"
+stack_fqdn = "{stack_fqdn}"
+https_port = {https_port}
+mqtt_tls_port = {mqtt_tls_port}
 
 [broker]
 mode = "{broker_mode}"

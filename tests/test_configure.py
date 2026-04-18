@@ -8,11 +8,15 @@ from roborock_local_server.configure import ConfigureAnswers, write_config_setup
 
 def _answers(
     *,
+    https_port: int = 443,
+    mqtt_tls_port: int = 8883,
     broker_mode: str = "embedded",
     tls_mode: str = "cloudflare_acme",
 ) -> ConfigureAnswers:
     return ConfigureAnswers(
         stack_fqdn="roborock.example.com",
+        https_port=https_port,
+        mqtt_tls_port=mqtt_tls_port,
         broker_mode=broker_mode,
         tls_mode=tls_mode,
         base_domain="example.com" if tls_mode == "cloudflare_acme" else "",
@@ -35,6 +39,8 @@ def test_write_config_setup_embedded_cloudflare(tmp_path: Path) -> None:
 
     config = load_config(result.config_file)
     assert config.network.stack_fqdn == "roborock.example.com"
+    assert config.network.https_port == 443
+    assert config.network.mqtt_tls_port == 8883
     assert config.broker.mode == "embedded"
     assert config.broker.host == "127.0.0.1"
     assert config.broker.port == 18830
@@ -69,3 +75,16 @@ def test_write_config_setup_refuses_overwrite_without_force(tmp_path: Path) -> N
 
     with pytest.raises(FileExistsError, match="Refusing to overwrite existing file"):
         write_config_setup(config_file=config_file, answers=_answers())
+
+
+def test_write_config_setup_persists_custom_ports(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+
+    result = write_config_setup(
+        config_file=config_file,
+        answers=_answers(https_port=8443, mqtt_tls_port=9443),
+    )
+
+    config = load_config(result.config_file)
+    assert config.network.https_port == 8443
+    assert config.network.mqtt_tls_port == 9443

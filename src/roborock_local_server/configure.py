@@ -41,6 +41,8 @@ _CLOUDFLARE_TOKEN_CONTAINER_PATH = "/run/secrets/cloudflare_token"
 @dataclass(frozen=True)
 class ConfigureAnswers:
     stack_fqdn: str
+    https_port: int
+    mqtt_tls_port: int
     broker_mode: str
     tls_mode: str
     base_domain: str
@@ -101,6 +103,21 @@ def _prompt_hostname(prompt: str, *, field_name: str) -> str:
             print(exc)
 
 
+def _prompt_port(prompt: str, *, default: int) -> int:
+    while True:
+        raw_value = input(f"{prompt} [{default}]: ").strip()
+        if not raw_value:
+            return default
+        try:
+            port = int(raw_value)
+        except ValueError:
+            print("Please enter a valid port number.")
+            continue
+        if 1 <= port <= 65535:
+            return port
+        print("Port must be between 1 and 65535.")
+
+
 def _prompt_yes_no(prompt: str, *, default: bool) -> bool:
     suffix = "Y/n" if default else "y/N"
     while True:
@@ -128,6 +145,8 @@ def collect_configure_answers() -> ConfigureAnswers:
         "Stack FQDN (hostname only (no 'https://'); it needs to start with api-): ",
         field_name="stack_fqdn",
     )
+    https_port = _prompt_port("HTTPS port to advertise and listen on", default=443)
+    mqtt_tls_port = _prompt_port("MQTT TLS port to advertise and listen on", default=8883)
     use_external_broker = _prompt_yes_no("Use your own MQTT broker instead of the embedded one?", default=False)
     use_cloudflare_acme = _prompt_yes_no("Use Cloudflare DNS-01 for automatic TLS renewal?", default=True)
 
@@ -151,6 +170,8 @@ def collect_configure_answers() -> ConfigureAnswers:
     password = _prompt_password()
     return ConfigureAnswers(
         stack_fqdn=stack_fqdn,
+        https_port=https_port,
+        mqtt_tls_port=mqtt_tls_port,
         broker_mode=broker_mode,
         tls_mode=tls_mode,
         base_domain=base_domain,
@@ -166,8 +187,8 @@ def render_config_toml(answers: ConfigureAnswers) -> str:
         "[network]",
         f"stack_fqdn = {_toml_string(answers.stack_fqdn)}",
         'bind_host = "0.0.0.0"',
-        "https_port = 443",
-        "mqtt_tls_port = 8883",
+        f"https_port = {answers.https_port}",
+        f"mqtt_tls_port = {answers.mqtt_tls_port}",
         'region = "us"',
         "",
         "[broker]",

@@ -401,6 +401,7 @@ class ReleaseSupervisor:
             mqtt_usr=self._bootstrap_credentials["mqtt_usr"],
             mqtt_passwd=self._bootstrap_credentials["mqtt_passwd"],
             mqtt_clientid=self._bootstrap_credentials["mqtt_clientid"],
+            https_port=self.config.network.https_port,
             mqtt_tls_port=self.config.network.mqtt_tls_port,
             http_jsonl=self.paths.http_jsonl_path,
             mqtt_jsonl=self.paths.mqtt_jsonl_path,
@@ -797,10 +798,10 @@ class ReleaseSupervisor:
         is_protocol_sync_request = self._is_protocol_sync_path(clean_path)
 
         if host:
-            host_no_port = host.split(":", 1)[0].strip()
-            if host_no_port:
+            host_authority = host.strip()
+            if host_authority:
                 query_params = {key: list(values) for key, values in query_params.items()}
-                query_params.setdefault("__host", [host_no_port])
+                query_params.setdefault("__host", [host_authority])
 
         explicit_did = self.context.extract_explicit_did(query_params, body_params)
         explicit_pid = _extract_explicit_pid(query_params, body_params)
@@ -1600,6 +1601,7 @@ def repair_runtime_identities(*, config_file: Path, links: list[str]) -> int:
             mqtt_usr=str(runtime_credentials.bootstrap_value("mqtt_usr", "") or ""),
             mqtt_passwd=str(runtime_credentials.bootstrap_value("mqtt_passwd", "") or ""),
             mqtt_clientid=str(runtime_credentials.bootstrap_value("mqtt_clientid", "") or ""),
+            https_port=config.network.https_port,
             mqtt_tls_port=config.network.mqtt_tls_port,
             http_jsonl=paths.http_jsonl_path,
             mqtt_jsonl=paths.mqtt_jsonl_path,

@@ -4,7 +4,7 @@ from io import StringIO
 
 import pytest
 
-from start_onboarding import GuidedOnboardingConfig, run_guided_onboarding
+from start_onboarding import GuidedOnboardingConfig, RemoteOnboardingApi, normalize_api_base_url, run_guided_onboarding, sanitize_stack_server
 
 
 class FakeApi:
@@ -46,6 +46,27 @@ class FakeApi:
     def delete_session(self, *, session_id: str) -> dict:
         self.deleted_sessions.append(session_id)
         return {"ok": True}
+
+
+class _RecordingResponse:
+    def __enter__(self) -> "_RecordingResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return b"{}"
+
+
+class _RecordingOpener:
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    def open(self, request, timeout=None, context=None):
+        _ = timeout, context
+        self.urls.append(request.full_url)
+        return _RecordingResponse()
 
 
 @pytest.fixture
@@ -323,3 +344,25 @@ def test_guided_onboarding_duplicate_names_still_selects_requested_device(
     assert api.started_duids == ["cloud-q7-b"]
     assert "cloud-q7-a" in output.getvalue()
     assert "cloud-q7-b" in output.getvalue()
+
+
+def test_onboarding_server_normalization_preserves_custom_ports() -> None:
+    assert normalize_api_base_url("api-roborock.example.com:8443") == "https://api-roborock.example.com:8443"
+    assert sanitize_stack_server("https://api-roborock.example.com:8443") == "roborock.example.com:8443/"
+
+
+def test_remote_onboarding_api_uses_custom_port_base_url() -> None:
+    opener = _RecordingOpener()
+    api = RemoteOnboardingApi(
+        base_url="https://api-roborock.example.com:8443",
+        admin_password="secret",
+        opener=opener,
+    )
+
+    api.login()
+    api.list_devices()
+
+    assert opener.urls == [
+        "https://api-roborock.example.com:8443/admin/api/login",
+        "https://api-roborock.example.com:8443/admin/api/onboarding/devices",
+    ]

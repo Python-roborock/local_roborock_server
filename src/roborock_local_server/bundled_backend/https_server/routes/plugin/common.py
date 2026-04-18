@@ -110,7 +110,7 @@ def plugin_proxy_url(ctx: ServerContext, source_url: str) -> str:
         return source
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
     encoded_source = quote(source, safe="")
-    return f"https://{ctx.api_host}/plugin/proxy/{digest}.zip?src={encoded_source}"
+    return f"{ctx.api_url()}/plugin/proxy/{digest}.zip?src={encoded_source}"
 
 
 def proxied_plugin_records(
@@ -198,4 +198,3 @@ async def plugin_proxy_response(*, runtime_dir: Path, source_url: str) -> Respon
         media_type=media_type,
         headers={"Cache-Control": "public, max-age=86400", "X-RR-Plugin-Cache": "miss"},
     )
-

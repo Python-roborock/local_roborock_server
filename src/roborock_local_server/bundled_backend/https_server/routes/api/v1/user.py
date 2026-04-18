@@ -47,7 +47,7 @@ def build_get_url_by_email(
     region_upper = ctx.region.upper()
     return ok(
         {
-            "url": f"https://{ctx.api_host}",
+            "url": ctx.api_url(),
             "countrycode": _default_country_code_for_region(region_upper),
             "country": region_upper,
         }

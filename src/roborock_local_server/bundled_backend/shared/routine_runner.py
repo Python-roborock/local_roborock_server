@@ -440,9 +440,9 @@ class _RoutineMqttClient:
             k=localkey,
             r=Reference(
                 r=self._context.region.upper(),
-                a=f"https://{api_host}",
+                a=self._context.api_url(host=api_host),
                 m=f"tcp://127.0.0.1:{backend_port}",
-                l=f"https://{wood_host}",
+                l=self._context.wood_url(host=wood_host),
             ),
         )
 

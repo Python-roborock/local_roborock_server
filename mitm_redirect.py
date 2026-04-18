@@ -28,8 +28,14 @@ if __name__ != "__main__":
 
 # Populated by load() from env vars set by the CLI launcher.
 LOCAL_API: str = ""
+LOCAL_API_HOST: str = ""
+LOCAL_API_PORT: int | None = None
 LOCAL_MQTT: str = ""
+LOCAL_MQTT_HOST: str = ""
+LOCAL_MQTT_PORT: int | None = None
 LOCAL_WOOD: str = ""
+LOCAL_WOOD_HOST: str = ""
+LOCAL_WOOD_PORT: int | None = None
 LOCAL_SYNC_SECRET: str = ""
 LOCAL_SYNC_BASE_URL: str = ""
 
@@ -72,6 +78,35 @@ API_ROUTE_HOSTS = {
     "euiot.roborock.com",
     "cniot.roborock.com",
 }
+
+
+def _compile_host_patterns(hosts: set[str]) -> tuple[re.Pattern[str], ...]:
+    return tuple(
+        re.compile(rf"(?<![A-Za-z0-9.-]){re.escape(host)}(?::(?P<port>\d+))?", re.IGNORECASE)
+        for host in hosts
+    )
+
+
+_API_REWRITE_PATTERNS = _compile_host_patterns(API_ROUTE_HOSTS)
+_MQTT_REWRITE_PATTERNS = _compile_host_patterns(
+    {
+        "mqtt.roborock.com",
+        "mqtt-us.roborock.com",
+        "mqtt-eu.roborock.com",
+        "mqtt-cn.roborock.com",
+    }
+)
+_MQTT_NUMBERED_REWRITE_PATTERNS = (
+    re.compile(r"(?<![A-Za-z0-9.-])mqtt-\w+-\d+\.roborock\.com(?::(?P<port>\d+))?", re.IGNORECASE),
+)
+_WOOD_REWRITE_PATTERNS = _compile_host_patterns(
+    {
+        "wood.roborock.com",
+        "wood-us.roborock.com",
+        "wood-eu.roborock.com",
+        "wood-cn.roborock.com",
+    }
+)
 
 
 # Keep these on cloud so login/auth keeps working.
@@ -166,13 +201,26 @@ def _init_log_dir() -> None:
     ctx.log.info(f"[LOG] Passthrough  -> {LOG_DIR_PASSTHROUGH}")
 
 
-def _normalize_host(value: str, *, fallback: str = "") -> str:
+def _parse_endpoint(value: str, *, fallback_host: str = "", fallback_port: int | None = None) -> tuple[str, int | None]:
     raw = str(value or "").strip()
     if not raw:
-        return fallback
+        return fallback_host, fallback_port
     parsed = urlsplit(raw if "://" in raw else f"//{raw}")
     host = (parsed.hostname or parsed.path.split("/", 1)[0]).strip().strip("/")
-    return host or fallback
+    if not host:
+        return fallback_host, fallback_port
+    return host, parsed.port
+
+
+def _format_authority(host: str, port: int | None, *, default_port: int | None = None) -> str:
+    normalized_host = str(host or "").strip().strip("/")
+    if not normalized_host:
+        return ""
+    if port is None:
+        return normalized_host
+    if default_port is not None and port == default_port:
+        return normalized_host
+    return f"{normalized_host}:{port}"
 
 
 def _normalize_base_url(value: str, *, fallback: str = "") -> str:
@@ -216,10 +264,24 @@ def _load_local_sync_secret() -> str:
 
 
 def load(loader) -> None:
-    global LOCAL_API, LOCAL_MQTT, LOCAL_WOOD, LOCAL_SYNC_SECRET, LOCAL_SYNC_BASE_URL
-    LOCAL_API = _normalize_host(os.environ["MITM_LOCAL_API"])
-    LOCAL_MQTT = _normalize_host(os.environ.get("MITM_LOCAL_MQTT", LOCAL_API) or LOCAL_API, fallback=LOCAL_API)
-    LOCAL_WOOD = _normalize_host(os.environ.get("MITM_LOCAL_WOOD", LOCAL_API) or LOCAL_API, fallback=LOCAL_API)
+    global LOCAL_API, LOCAL_API_HOST, LOCAL_API_PORT
+    global LOCAL_MQTT, LOCAL_MQTT_HOST, LOCAL_MQTT_PORT
+    global LOCAL_WOOD, LOCAL_WOOD_HOST, LOCAL_WOOD_PORT
+    global LOCAL_SYNC_SECRET, LOCAL_SYNC_BASE_URL
+    LOCAL_API_HOST, LOCAL_API_PORT = _parse_endpoint(os.environ["MITM_LOCAL_API"])
+    LOCAL_API = _format_authority(LOCAL_API_HOST, LOCAL_API_PORT, default_port=443)
+    LOCAL_MQTT_HOST, LOCAL_MQTT_PORT = _parse_endpoint(
+        os.environ.get("MITM_LOCAL_MQTT", ""),
+        fallback_host=LOCAL_API_HOST,
+        fallback_port=None,
+    )
+    LOCAL_MQTT = _format_authority(LOCAL_MQTT_HOST, LOCAL_MQTT_PORT)
+    LOCAL_WOOD_HOST, LOCAL_WOOD_PORT = _parse_endpoint(
+        os.environ.get("MITM_LOCAL_WOOD", ""),
+        fallback_host=LOCAL_API_HOST,
+        fallback_port=LOCAL_API_PORT,
+    )
+    LOCAL_WOOD = _format_authority(LOCAL_WOOD_HOST, LOCAL_WOOD_PORT, default_port=443)
     LOCAL_SYNC_SECRET = str(os.environ.get("MITM_LOCAL_SYNC_SECRET") or "").strip()
     default_sync_base_url = _default_sync_base_url(os.environ.get("MITM_LOCAL_API") or LOCAL_API)
     LOCAL_SYNC_BASE_URL = _normalize_base_url(
@@ -339,8 +401,8 @@ def request(flow: http.HTTPFlow) -> None:
 
     source = flow.request.pretty_host
     flow.request.scheme = "https"
-    flow.request.host = LOCAL_API
-    flow.request.port = 443
+    flow.request.host = LOCAL_API_HOST
+    flow.request.port = LOCAL_API_PORT or 443
     flow.request.headers["Host"] = LOCAL_API
     ctx.log.info(f"[ROUTE] {source}{path} -> {LOCAL_API}{path}")
 
@@ -480,33 +542,50 @@ def _rewrite_json(obj, rewrites: list[str]) -> bool:
     return changed
 
 
+def _rewrite_authorities(
+    text: str,
+    *,
+    patterns: tuple[re.Pattern[str], ...],
+    replacement_host: str,
+    replacement_port: int | None,
+    default_port: int | None = None,
+) -> str:
+    if not replacement_host:
+        return text
+
+    def _replace(match: re.Match[str]) -> str:
+        original_port = match.group("port")
+        port = int(original_port) if replacement_port is None and original_port else replacement_port
+        return _format_authority(replacement_host, port, default_port=default_port)
+
+    rewritten = text
+    for pattern in patterns:
+        rewritten = pattern.sub(_replace, rewritten)
+    return rewritten
+
+
 def _rewrite_value(text: str) -> str:
-    for host in ("mqtt.roborock.com", "mqtt-us.roborock.com", "mqtt-eu.roborock.com", "mqtt-cn.roborock.com"):
-        if host in text:
-            text = text.replace(host, LOCAL_MQTT)
-    text = re.sub(r"mqtt-\w+-\d+\.roborock\.com", LOCAL_MQTT, text)
-
-    for host in (
-        "api.roborock.com",
-        "api-us.roborock.com",
-        "api-eu.roborock.com",
-        "api-cn.roborock.com",
-        "usiot.roborock.com",
-        "euiot.roborock.com",
-        "cniot.roborock.com",
-        "cnaccount.roborock.com",
-        "usaccount.roborock.com",
-        "euaccount.roborock.com",
-        "account.roborock.com",
-    ):
-        if host in text:
-            text = text.replace(host, LOCAL_API)
-
-    for host in ("wood.roborock.com", "wood-us.roborock.com", "wood-eu.roborock.com", "wood-cn.roborock.com"):
-        if host in text:
-            text = text.replace(host, LOCAL_WOOD)
-
-    return text
+    rewritten = _rewrite_authorities(
+        text,
+        patterns=_MQTT_REWRITE_PATTERNS + _MQTT_NUMBERED_REWRITE_PATTERNS,
+        replacement_host=LOCAL_MQTT_HOST,
+        replacement_port=LOCAL_MQTT_PORT,
+    )
+    rewritten = _rewrite_authorities(
+        rewritten,
+        patterns=_API_REWRITE_PATTERNS,
+        replacement_host=LOCAL_API_HOST,
+        replacement_port=LOCAL_API_PORT,
+        default_port=443,
+    )
+    rewritten = _rewrite_authorities(
+        rewritten,
+        patterns=_WOOD_REWRITE_PATTERNS,
+        replacement_host=LOCAL_WOOD_HOST,
+        replacement_port=LOCAL_WOOD_PORT,
+        default_port=443,
+    )
+    return rewritten
 
 
 if __name__ == "__main__":
@@ -520,17 +599,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--local-api",
         required=True,
-        help="Hostname or HTTPS URL of your local API server. Explicit ports are ignored and 443 is used.",
+        help="Hostname or HTTPS URL of your local API server. Explicit ports are supported.",
     )
     parser.add_argument(
         "--local-mqtt",
         default=None,
-        help="Hostname or HTTPS URL of your local MQTT server. Explicit ports are ignored and 443 is used.",
+        help="Hostname or URL of your local MQTT server. Omit to reuse the API hostname and preserve the source MQTT port.",
     )
     parser.add_argument(
         "--local-wood",
         default=None,
-        help="Hostname or HTTPS URL of your local Wood server. Explicit ports are ignored and 443 is used.",
+        help="Hostname or HTTPS URL of your local Wood server. Explicit ports are supported.",
     )
     parser.add_argument(
         "--sync-secret",
@@ -546,9 +625,20 @@ if __name__ == "__main__":
     parser.add_argument("--listen-port", default=None, help="mitmweb listen port")
 
     args, extra = parser.parse_known_args()
-    local_api = _normalize_host(args.local_api)
-    local_mqtt = _normalize_host(args.local_mqtt or args.local_api, fallback=local_api)
-    local_wood = _normalize_host(args.local_wood or args.local_api, fallback=local_api)
+    local_api_host, local_api_port = _parse_endpoint(args.local_api)
+    local_api = _format_authority(local_api_host, local_api_port, default_port=443)
+    local_mqtt_host, local_mqtt_port = _parse_endpoint(
+        args.local_mqtt or "",
+        fallback_host=local_api_host,
+        fallback_port=None,
+    )
+    local_mqtt = _format_authority(local_mqtt_host, local_mqtt_port)
+    local_wood_host, local_wood_port = _parse_endpoint(
+        args.local_wood or "",
+        fallback_host=local_api_host,
+        fallback_port=local_api_port,
+    )
+    local_wood = _format_authority(local_wood_host, local_wood_port, default_port=443)
     local_sync_secret = str(args.sync_secret or os.environ.get("MITM_LOCAL_SYNC_SECRET") or _load_local_sync_secret()).strip()
     default_sync_base_url = _default_sync_base_url(args.local_api)
     local_sync_base_url = _normalize_base_url(

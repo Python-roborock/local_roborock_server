@@ -6,14 +6,14 @@ services:
     container_name: roborock-local-server
     restart: unless-stopped
     ports:
-      - "443:443"
-      - "8883:8883"
+      - "555:555"
+      - "8881:8881"
     volumes:
       - ./config.toml:/app/config.toml:ro
       - ./data:/data
       - ./secrets/cloudflare_token:/run/secrets/cloudflare_token:ro
     healthcheck:
-      test: ["CMD", "curl", "-skf", "https://127.0.0.1/admin"]
+      test: ["CMD", "curl", "-skf", "https://127.0.0.1:555/admin"]
       interval: 30s
       timeout: 5s
       retries: 5

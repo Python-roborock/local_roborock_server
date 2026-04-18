@@ -166,32 +166,47 @@ def recv_with_timeout(sock: socket.socket, timeout: float) -> bytes | None:
 
 
 def sanitize_stack_server(url: str) -> str:
-    value = str(url or "").strip()
-    for prefix in ("https://", "http://"):
-        if value.lower().startswith(prefix):
-            value = value[len(prefix) :]
-    value = value.strip().strip("/")
-    if value.lower().startswith("api-"):
-        value = value[4:]
-    if not value:
+    host, port = _parse_server_target(url)
+    if host.lower().startswith("api-"):
+        host = host[4:]
+    authority = _format_authority(host, port=port, default_port=443)
+    if not authority:
         raise ValueError("A server host is required.")
-    return f"{value}/"
+    return f"{authority}/"
 
 
 def normalize_api_base_url(url: str) -> str:
+    host, port = _parse_server_target(url)
+    if not host.lower().startswith("api-"):
+        host = f"api-{host}"
+    authority = _format_authority(host, port=port, default_port=443)
+    return f"https://{authority}"
+
+
+def _parse_server_target(url: str) -> tuple[str, int | None]:
     value = str(url or "").strip()
     if not value:
         raise ValueError("A server host is required.")
-    for prefix in ("https://", "http://"):
-        if value.lower().startswith(prefix):
-            value = value[len(prefix) :]
-            break
-    value = value.strip().strip("/")
-    if not value:
+    parsed = parse.urlsplit(value if "://" in value else f"//{value}")
+    host = str(parsed.hostname or "").strip().strip("/")
+    if not host:
         raise ValueError("A server host is required.")
-    if not value.lower().startswith("api-"):
-        value = f"api-{value}"
-    return f"https://{value}"
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Server port must be numeric.") from exc
+    return host, port
+
+
+def _format_authority(host: str, *, port: int | None = None, default_port: int | None = None) -> str:
+    normalized_host = str(host or "").strip().strip("/")
+    if not normalized_host:
+        return ""
+    if port is None:
+        return normalized_host
+    if default_port is not None and port == default_port:
+        return normalized_host
+    return f"{normalized_host}:{port}"
 
 
 def _format_bool_label(value: bool, true_label: str, false_label: str) -> str:
@@ -344,7 +359,7 @@ def _format_http_error(status_code: int, raw_body: str) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Guided Roborock remote onboarding")
-    parser.add_argument("--server", required=True, help="Main server hostname, usually starting with api-")
+    parser.add_argument("--server", required=True, help="Main server hostname or HTTPS URL, usually starting with api-")
     parser.add_argument("--admin-password", default="")
     parser.add_argument("--ssid", default="")
     parser.add_argument("--password", default="")

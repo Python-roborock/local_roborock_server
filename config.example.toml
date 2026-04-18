@@ -1,7 +1,8 @@
 [network]
-# The one hostname the stack will serve.
+# The one hostname the stack will serve. Keep this as the hostname only.
 stack_fqdn = "roborock.example.com"
 bind_host = "0.0.0.0"
+# Change these if you need the stack to advertise and listen on custom ports.
 https_port = 443
 mqtt_tls_port = 8883
 region = "us"

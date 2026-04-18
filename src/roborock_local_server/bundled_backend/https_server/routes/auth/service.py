@@ -18,10 +18,7 @@ def cloud_snapshot_path(ctx: ServerContext):
 
 
 def current_server_urls(ctx: ServerContext) -> tuple[str, str, str]:
-    api_url = f"https://{ctx.api_host}"
-    mqtt_url = f"ssl://{ctx.mqtt_host}:{ctx.mqtt_tls_port}"
-    wood_url = f"https://{ctx.wood_host}"
-    return api_url, mqtt_url, wood_url
+    return ctx.api_url(), ctx.mqtt_url(), ctx.wood_url()
 
 
 def with_current_server_urls(ctx: ServerContext, cloud_user_data: dict[str, Any]) -> dict[str, Any]:

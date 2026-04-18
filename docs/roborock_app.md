@@ -2,7 +2,7 @@
 
 Use this after [Installation](installation.md) and [Onboarding](onboarding.md) if you want the official Roborock app to talk to your local stack.
 
-During the MITM login step, the script now needs to sync the captured protocol-auth session back to your server. Pass `admin.session_secret` from `config.toml` as `--sync-secret`. The sync callback URL defaults to `https://` plus the `--local-api` host, so you only need to pass `--sync-base-url` when the callback should go somewhere else, such as when `--local-api` is `127.0.0.1`.
+During the MITM login step, the script now needs to sync the captured protocol-auth session back to your server. Pass `admin.session_secret` from `config.toml` as `--sync-secret`. The sync callback URL defaults to `https://` plus the `--local-api` host and port, so you only need to pass `--sync-base-url` when the callback should go somewhere else, such as when `--local-api` is `127.0.0.1`.
 
 ## iPhone
 
@@ -15,6 +15,12 @@ During the MITM login step, the script now needs to sync the captured protocol-a
    ```
 
    Use the `admin.session_secret` value from `config.toml` for `YOUR_ADMIN_SESSION_SECRET`.
+
+   If your stack uses custom ports, include them directly. For example:
+
+   ```bash
+   uv run mitm_redirect.py --local-api api-roborock.example.com:8443 --local-mqtt api-roborock.example.com:9443 --sync-secret YOUR_ADMIN_SESSION_SECRET
+   ```
 
    If you're running on the same machine as the local_roborock_server, you will likely need to pass `--sync-base-url 127.0.0.1` as the server may not resolve locally.
 
@@ -110,6 +116,12 @@ Make sure you have the following installed:
    ```
 
    Use the `admin.session_secret` value from `config.toml` for `YOUR_ADMIN_SESSION_SECRET`.
+
+   If your stack uses custom ports, include them directly. For example:
+
+   ```bash
+      uv run mitm_redirect.py --local-api api-roborock.example.com:8443 --local-mqtt api-roborock.example.com:9443 --sync-secret YOUR_ADMIN_SESSION_SECRET
+   ```
 
    If you're running on the same machine as the local_roborock_server, you will likely need to pass `--sync-base-url 127.0.0.1` as the server may not resolve locally.
 

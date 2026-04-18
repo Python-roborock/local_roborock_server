@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from shared.context import split_host_port
 from shared.context import ServerContext
 from shared.http_helpers import wrap_response
 
@@ -23,10 +24,11 @@ def build(
 ) -> dict[str, Any]:
     did = ctx.extract_did(query_params, body_params)
     host_override = request_host_override(query_params)
-    api_host = host_override or ctx.api_host
-    mqtt_host = host_override or ctx.mqtt_host
-    api_url = f"https://{api_host}"
-    mqtt_url = f"ssl://{mqtt_host}:{ctx.mqtt_tls_port}"
+    override_host, override_port = split_host_port(host_override)
+    api_host = override_host or ctx.api_host
+    mqtt_host = override_host or ctx.mqtt_host
+    api_url = ctx.api_url(host=api_host, port=override_port if override_host else None)
+    mqtt_url = ctx.mqtt_url(host=mqtt_host)
     region_payload = {
         "apiUrl": api_url,
         "mqttUrl": mqtt_url,
