@@ -8,6 +8,8 @@ If this project helps, you can support it or next time you buy a Roborock device
 [![Roborock Affiliate][badge-roborock-affiliate]][link-roborock-affiliate]
 [![Amazon Affiliate][badge-amazon]][link-amazon]
 
+NOTE: if you have not already setup this project, i would recommend waiting a few days. i will be pushing a number of changes that are partially backwards incompatible and the new version should be a bit easier to use!
+
 Roborock Local Server is a private Roborock HTTPS and MQTT stack you run on your own system.
 
 This service is meant to stay private. Point your own DNS at your server's LAN IP and do **NOT** expose it directly to the public internet. In its current state it does not handle internet exposure safely enough. For now, keep it on your LAN only. In the future, I plan to reuse Roborock's auth natively which should make everything secure enough.
