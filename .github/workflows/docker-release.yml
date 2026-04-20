@@ -2,18 +2,10 @@ name: docker-release
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
-    tags:
-      - "v*"
+  release:
+    types:
+      - published
   workflow_dispatch:
-    inputs:
-      publish:
-        description: "Publish the selected ref to GHCR"
-        required: false
-        default: false
-        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -51,7 +43,7 @@ jobs:
 
   docker-validate:
     needs: test
-    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.publish)
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -72,7 +64,7 @@ jobs:
 
   docker-release:
     needs: test
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -89,14 +81,13 @@ jobs:
           python-version-file: pyproject.toml
 
       - name: Validate release tag matches package version
-        if: startsWith(github.ref, 'refs/tags/v')
         shell: python
         run: |
           import re
           import tomllib
           from pathlib import Path
 
-          tag = "${{ github.ref_name }}"
+          tag = "${{ github.event.release.tag_name }}"
           pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
           project_version = str(pyproject["project"]["version"]).strip()
 
@@ -134,11 +125,10 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: latest=false
           tags: |
-            type=edge,branch=main
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ github.event.release.tag_name }}
+            type=semver,pattern={{major}},value=${{ github.event.release.tag_name }}
+            type=raw,value=latest,enable=${{ startsWith(github.event.release.tag_name, 'v') && !contains(github.event.release.tag_name, '-') }}
             type=sha,prefix=sha-
           labels: |
             org.opencontainers.image.title=roborock-local-server
