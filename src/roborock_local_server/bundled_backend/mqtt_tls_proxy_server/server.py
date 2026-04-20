@@ -17,7 +17,7 @@ from shared.constants import MQTT_TYPES
 from shared.decoder import build_decoder
 from shared.io_utils import append_jsonl, payload_preview
 from shared.protocol_auth import ProtocolAuthStore
-from shared.runtime_credentials import RuntimeCredentialsStore
+from shared.runtime_credentials import RuntimeCredentialsStore, parse_mqtt_connect_packet
 from shared.runtime_state import RuntimeState
 from shared.zone_ranges_store import ZoneRangesStore
 
@@ -143,86 +143,6 @@ class MqttTlsProxy:
         return packet[protocol_level_idx]
 
     @staticmethod
-    def _decode_mqtt_string(packet: bytes, cursor: int) -> tuple[str | None, int]:
-        if cursor + 2 > len(packet):
-            return None, cursor
-        length = int.from_bytes(packet[cursor : cursor + 2], "big")
-        start = cursor + 2
-        end = start + length
-        if end > len(packet):
-            return None, cursor
-        return packet[start:end].decode("utf-8", errors="replace"), end
-
-    @staticmethod
-    def _decode_mqtt_binary(packet: bytes, cursor: int) -> tuple[bytes | None, int]:
-        if cursor + 2 > len(packet):
-            return None, cursor
-        length = int.from_bytes(packet[cursor : cursor + 2], "big")
-        start = cursor + 2
-        end = start + length
-        if end > len(packet):
-            return None, cursor
-        return packet[start:end], end
-
-    @classmethod
-    def _parse_connect_packet(cls, packet: bytes) -> dict[str, Any] | None:
-        if not packet or (packet[0] >> 4) != 1:
-            return None
-        remaining_len, remaining_len_bytes = cls._decode_remaining_length(packet, 1)
-        if remaining_len is None or remaining_len_bytes == 0:
-            return None
-        cursor = 1 + remaining_len_bytes
-        protocol_name, cursor = cls._decode_mqtt_string(packet, cursor)
-        if protocol_name is None or cursor + 4 > len(packet):
-            return None
-        protocol_level = packet[cursor]
-        connect_flags = packet[cursor + 1]
-        cursor += 4  # protocol_level + connect_flags + keepalive(2)
-        if protocol_level == 5:
-            property_len, property_len_bytes = cls._decode_remaining_length(packet, cursor)
-            if property_len is None or property_len_bytes == 0:
-                return None
-            cursor += property_len_bytes + property_len
-        client_id, cursor = cls._decode_mqtt_string(packet, cursor)
-        if client_id is None:
-            return None
-
-        will_flag = (connect_flags & 0x04) != 0
-        username_flag = (connect_flags & 0x80) != 0
-        password_flag = (connect_flags & 0x40) != 0
-        if will_flag:
-            if protocol_level == 5:
-                property_len, property_len_bytes = cls._decode_remaining_length(packet, cursor)
-                if property_len is None or property_len_bytes == 0:
-                    return None
-                cursor += property_len_bytes + property_len
-            _, cursor = cls._decode_mqtt_string(packet, cursor)
-            _, cursor = cls._decode_mqtt_binary(packet, cursor)
-            if cursor > len(packet):
-                return None
-
-        username = ""
-        password = ""
-        if username_flag:
-            decoded_username, cursor = cls._decode_mqtt_string(packet, cursor)
-            if decoded_username is None:
-                return None
-            username = decoded_username
-        if password_flag:
-            decoded_password, cursor = cls._decode_mqtt_binary(packet, cursor)
-            if decoded_password is None:
-                return None
-            password = decoded_password.decode("utf-8", errors="replace")
-
-        return {
-            "protocol_name": protocol_name,
-            "protocol_level": protocol_level,
-            "client_id": client_id,
-            "username": username,
-            "password": password,
-        }
-
-    @staticmethod
     def _build_connect_reject_packet(protocol_level: int | None) -> bytes | None:
         if protocol_level == 5:
             # MQTT 5 CONNACK with reason code 0x87 "Not authorized".
@@ -267,7 +187,7 @@ class MqttTlsProxy:
         return username, password, client_id
 
     def _authorize_connect_packet(self, packet: bytes) -> tuple[bool, str, dict[str, Any] | None]:
-        info = self._parse_connect_packet(packet)
+        info = parse_mqtt_connect_packet(packet)
         if info is None:
             return False, "invalid_connect_packet", None
 

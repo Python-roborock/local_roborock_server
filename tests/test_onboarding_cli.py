@@ -410,6 +410,11 @@ def test_onboarding_server_normalization_preserves_custom_ports() -> None:
     assert sanitize_stack_server("https://api-roborock.example.com:8443") == "roborock.example.com:8443/"
 
 
+def test_onboarding_server_normalization_defaults_to_port_555() -> None:
+    assert normalize_api_base_url("api-roborock.example.com") == "https://api-roborock.example.com:555"
+    assert sanitize_stack_server("https://api-roborock.example.com") == "roborock.example.com:555/"
+
+
 def test_remote_onboarding_api_uses_custom_port_base_url() -> None:
     opener = _RecordingOpener()
     api = RemoteOnboardingApi(

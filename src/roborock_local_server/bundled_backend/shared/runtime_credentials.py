@@ -114,7 +114,7 @@ def _decode_mqtt_binary(packet: bytes, cursor: int) -> tuple[bytes | None, int]:
     return packet[start:end], end
 
 
-def _parse_connect_packet(packet: bytes) -> dict[str, str] | None:
+def parse_mqtt_connect_packet(packet: bytes) -> dict[str, Any] | None:
     if not packet or (packet[0] >> 4) != 1:
         return None
     remaining_len, remaining_len_bytes = _decode_remaining_length(packet, 1)
@@ -164,6 +164,8 @@ def _parse_connect_packet(packet: bytes) -> dict[str, str] | None:
         password = decoded_password.decode("utf-8", errors="replace")
 
     return {
+        "protocol_name": protocol_name,
+        "protocol_level": protocol_level,
         "client_id": client_id,
         "username": username,
         "password": password,
@@ -689,7 +691,7 @@ class RuntimeCredentialsStore:
                         packet = bytes.fromhex(hex_value)
                     except ValueError:
                         continue
-                    parsed = _parse_connect_packet(packet)
+                    parsed = parse_mqtt_connect_packet(packet)
                     if parsed is None:
                         continue
                     username = _clean_str(parsed.get("username"))

@@ -38,6 +38,7 @@ CFGWIFI_PRE_KEY = "6433df70f5a3a42e"
 CFGWIFI_UID = "1234567890"
 DEFAULT_COUNTRY_DOMAIN = "us"
 DEFAULT_TIMEZONE = "America/New_York"
+DEFAULT_STACK_HTTPS_PORT = 555
 POLL_INTERVAL_SECONDS = 5.0
 POLL_TIMEOUT_SECONDS = 300.0
 
@@ -166,7 +167,7 @@ def recv_with_timeout(sock: socket.socket, timeout: float) -> bytes | None:
 
 
 def sanitize_stack_server(url: str) -> str:
-    host, port = _parse_server_target(url)
+    host, port = _parse_server_target(url, default_port=DEFAULT_STACK_HTTPS_PORT)
     if host.lower().startswith("api-"):
         host = host[4:]
     authority = _format_authority(host, port=port, default_port=443)
@@ -176,14 +177,14 @@ def sanitize_stack_server(url: str) -> str:
 
 
 def normalize_api_base_url(url: str) -> str:
-    host, port = _parse_server_target(url)
+    host, port = _parse_server_target(url, default_port=DEFAULT_STACK_HTTPS_PORT)
     if not host.lower().startswith("api-"):
         host = f"api-{host}"
     authority = _format_authority(host, port=port, default_port=443)
     return f"https://{authority}"
 
 
-def _parse_server_target(url: str) -> tuple[str, int | None]:
+def _parse_server_target(url: str, *, default_port: int | None = None) -> tuple[str, int | None]:
     value = str(url or "").strip()
     if not value:
         raise ValueError("A server host is required.")
@@ -195,6 +196,8 @@ def _parse_server_target(url: str) -> tuple[str, int | None]:
         port = parsed.port
     except ValueError as exc:
         raise ValueError("Server port must be numeric.") from exc
+    if port is None:
+        port = default_port
     return host, port
 
 

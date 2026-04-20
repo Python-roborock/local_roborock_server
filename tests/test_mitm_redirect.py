@@ -208,3 +208,20 @@ def test_request_routes_to_custom_api_port(monkeypatch) -> None:
     assert flow.request.host == "api-roborock.example.com"
     assert flow.request.port == 8443
     assert flow.request.headers["Host"] == "api-roborock.example.com:8443"
+
+
+def test_parse_endpoint_defaults_to_new_stack_ports(monkeypatch) -> None:
+    mitm_redirect = _load_mitm_redirect(monkeypatch)
+
+    api_host, api_port = mitm_redirect._parse_endpoint(
+        "api-roborock.example.com",
+        fallback_port=mitm_redirect.DEFAULT_LOCAL_API_PORT,
+    )
+    mqtt_host, mqtt_port = mitm_redirect._parse_endpoint(
+        "",
+        fallback_host=api_host,
+        fallback_port=mitm_redirect.DEFAULT_LOCAL_MQTT_PORT,
+    )
+
+    assert (api_host, api_port) == ("api-roborock.example.com", 555)
+    assert (mqtt_host, mqtt_port) == ("api-roborock.example.com", 8881)

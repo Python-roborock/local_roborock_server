@@ -8,7 +8,7 @@ Start here for a first-time setup. After the stack is running, continue with [On
 - Python (I recommend installing [uv](https://docs.astral.sh/uv/getting-started/installation/))
 - Two machines - one to run the server and one to do the onboarding
 - A domain name that you own
-- A machine that can host the stack's HTTPS and MQTT TLS ports internally on your network. The defaults are `443` and `8883`.
+- A machine that can host the stack's HTTPS and MQTT TLS ports internally on your network. The defaults are `555` and `8881`.
 - A Cloudflare API token with DNS edit access for the zone if you want Cloudflare DNS-01 auto-renew. See [Cloudflare setup](cloudflare_setup.md).
 
 ## Network Setup
@@ -48,10 +48,11 @@ uv run roborock-local-server configure
 The wizard asks only for:
 
 - your `stack_fqdn` (the URL for your server - must start with `api-`)
-- your HTTPS and MQTT TLS ports if you do not want the defaults `443` and `8883`
+- your HTTPS and MQTT TLS ports if you do not want the defaults `555` and `8881`
 - embedded MQTT or your own broker
 - whether to use Cloudflare DNS-01 auto-renew
 - your admin password
+- your Home Assistant/app login email and 6-digit PIN
 
 It then writes `config.toml`, generates `admin.password_hash` and `admin.session_secret`, and if you chose Cloudflare it also writes `secrets/cloudflare_token`.
 
@@ -65,7 +66,15 @@ It then writes `config.toml`, generates `admin.password_hash` and `admin.session
    docker compose up -d --build
    ```
 
-8. Go to the admin dashboard: `https://api-roborock.example.com/admin` by default, or `https://api-roborock.example.com:YOUR_HTTPS_PORT/admin` if you chose a custom HTTPS port.
+   If you changed `network.https_port` or `network.mqtt_tls_port` in `config.toml`, set matching Docker Compose variables before you start the stack so the published ports stay aligned. For example:
+
+   ```bash
+   ROBOROCK_SERVER_HTTPS_PORT=8443
+   ROBOROCK_SERVER_MQTT_TLS_PORT=9443
+   docker compose up -d --build
+   ```
+
+8. Go to the admin dashboard: `https://api-roborock.example.com:555/admin` by default, or `https://api-roborock.example.com:YOUR_HTTPS_PORT/admin` if you chose a custom HTTPS port.
 
 9. Import your data from the cloud so things like routines and rooms will work. Enter your email in under cloud import, then hit send code. Once the code is returned enter the code and hit fetch data.
 

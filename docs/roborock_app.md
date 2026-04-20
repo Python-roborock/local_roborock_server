@@ -18,6 +18,8 @@ The launcher now preflights that callback before starting `mitmweb`. If the `--l
 
    Use the `admin.session_secret` value from `config.toml` for `YOUR_ADMIN_SESSION_SECRET`.
 
+   If you use the default local stack ports, host-only values are fine here: the script assumes HTTPS `:555` and MQTT TLS `:8881`.
+
    If your stack uses custom ports, include them directly. For example:
 
    ```bash
@@ -118,6 +120,8 @@ Make sure you have the following installed:
    ```
 
    Use the `admin.session_secret` value from `config.toml` for `YOUR_ADMIN_SESSION_SECRET`.
+
+   If you use the default local stack ports, host-only values are fine here: the script assumes HTTPS `:555` and MQTT TLS `:8881`.
 
    If your stack uses custom ports, include them directly. For example:
 

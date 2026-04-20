@@ -149,8 +149,8 @@ def load_config(path: str | Path) -> AppConfig:
         network=NetworkConfig(
             stack_fqdn=_require_non_empty(network.get("stack_fqdn"), "network.stack_fqdn"),
             bind_host=str(network.get("bind_host", "0.0.0.0")).strip() or "0.0.0.0",
-            https_port=_as_int(network.get("https_port"), "network.https_port", 443),
-            mqtt_tls_port=_as_int(network.get("mqtt_tls_port"), "network.mqtt_tls_port", 8883),
+            https_port=_as_int(network.get("https_port"), "network.https_port", 555),
+            mqtt_tls_port=_as_int(network.get("mqtt_tls_port"), "network.mqtt_tls_port", 8881),
             region=str(network.get("region", "us")).strip().lower() or "us",
             localkey=str(network.get("localkey", "")).strip(),
             duid=str(network.get("duid", "")).strip(),

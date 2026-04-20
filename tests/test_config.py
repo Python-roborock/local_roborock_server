@@ -35,6 +35,8 @@ protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
     paths = resolve_paths(config_file, config)
 
     assert config.network.stack_fqdn == "roborock.example.com"
+    assert config.network.https_port == 555
+    assert config.network.mqtt_tls_port == 8881
     assert config.admin.protocol_auth_enabled is True
     assert config.admin.protocol_login_email == "user@example.com"
     assert paths.data_dir == (tmp_path / "data").resolve()

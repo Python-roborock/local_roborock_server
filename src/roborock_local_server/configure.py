@@ -177,8 +177,8 @@ def collect_configure_answers() -> ConfigureAnswers:
         "Stack FQDN (hostname only (no 'https://'); it needs to start with api-): ",
         field_name="stack_fqdn",
     )
-    https_port = _prompt_port("HTTPS port to advertise and listen on", default=443)
-    mqtt_tls_port = _prompt_port("MQTT TLS port to advertise and listen on", default=8883)
+    https_port = _prompt_port("HTTPS port to advertise and listen on", default=555)
+    mqtt_tls_port = _prompt_port("MQTT TLS port to advertise and listen on", default=8881)
     use_external_broker = _prompt_yes_no("Use your own MQTT broker instead of the embedded one?", default=False)
     use_cloudflare_acme = _prompt_yes_no("Use Cloudflare DNS-01 for automatic TLS renewal?", default=True)
 

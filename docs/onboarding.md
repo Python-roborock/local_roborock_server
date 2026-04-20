@@ -12,7 +12,7 @@ Run onboarding from a second machine, not from the machine hosting the local ser
 uv run start_onboarding.py --server api-roborock.example.com
 ```
 
-If your stack uses a custom HTTPS port, include it in `--server`, for example `api-roborock.example.com:8443`.
+If you omit the port, the CLI assumes the default local stack HTTPS port `555`. If your stack uses a custom HTTPS port, include it in `--server`, for example `api-roborock.example.com:8443`.
 
 This is a standalone script — you can copy `start_onboarding.py` to any machine and run it with just `uv`.
 
@@ -46,7 +46,7 @@ You can still pass them explicitly if you prefer:
 uv run start_onboarding.py --server api-roborock.example.com --ssid "My Wifi" --password "Password123" --timezone "America/New_York" --cst EST5EDT,M3.2.0,M11.1.0 --country-domain us
 ```
 
-`server` should be your real stack hostname, usually the same `api-...` hostname you use for `/admin`. Explicit ports are supported, so if your admin page is at `https://api-roborock.example.com:8443/admin`, use `--server api-roborock.example.com:8443`.
+`server` should be your real stack hostname, usually the same `api-...` hostname you use for `/admin`. If you omit the port, the CLI assumes `:555`. Explicit ports are supported, so if your admin page is at `https://api-roborock.example.com:8443/admin`, use `--server api-roborock.example.com:8443`.
 
 ## CST Examples
 

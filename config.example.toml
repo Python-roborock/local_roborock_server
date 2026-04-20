@@ -3,8 +3,8 @@
 stack_fqdn = "roborock.example.com"
 bind_host = "0.0.0.0"
 # Change these if you need the stack to advertise and listen on custom ports.
-https_port = 443
-mqtt_tls_port = 8883
+https_port = 555
+mqtt_tls_port = 8881
 region = "us"
 
 [broker]

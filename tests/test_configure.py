@@ -8,8 +8,8 @@ from roborock_local_server.configure import ConfigureAnswers, _validate_protocol
 
 def _answers(
     *,
-    https_port: int = 443,
-    mqtt_tls_port: int = 8883,
+    https_port: int = 555,
+    mqtt_tls_port: int = 8881,
     broker_mode: str = "embedded",
     tls_mode: str = "cloudflare_acme",
 ) -> ConfigureAnswers:
@@ -41,8 +41,8 @@ def test_write_config_setup_embedded_cloudflare(tmp_path: Path) -> None:
 
     config = load_config(result.config_file)
     assert config.network.stack_fqdn == "roborock.example.com"
-    assert config.network.https_port == 443
-    assert config.network.mqtt_tls_port == 8883
+    assert config.network.https_port == 555
+    assert config.network.mqtt_tls_port == 8881
     assert config.broker.mode == "embedded"
     assert config.broker.host == "127.0.0.1"
     assert config.broker.port == 18830

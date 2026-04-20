@@ -38,6 +38,8 @@ LOCAL_WOOD: str = ""
 LOCAL_WOOD_HOST: str = ""
 LOCAL_WOOD_PORT: int | None = None
 LOCAL_SYNC_SECRET: str = ""
+DEFAULT_LOCAL_API_PORT = 555
+DEFAULT_LOCAL_MQTT_PORT = 8881
 
 
 # Domains whose responses are candidates for host rewrite.
@@ -222,7 +224,7 @@ def _parse_endpoint(value: str, *, fallback_host: str = "", fallback_port: int |
     host = (parsed.hostname or parsed.path.split("/", 1)[0]).strip().strip("/")
     if not host:
         return fallback_host, fallback_port
-    return host, parsed.port
+    return host, parsed.port if parsed.port is not None else fallback_port
 
 
 def _format_authority(host: str, port: int | None, *, default_port: int | None = None) -> str:
@@ -346,12 +348,15 @@ def load(loader) -> None:
     global LOCAL_MQTT, LOCAL_MQTT_HOST, LOCAL_MQTT_PORT
     global LOCAL_WOOD, LOCAL_WOOD_HOST, LOCAL_WOOD_PORT
     global LOCAL_SYNC_SECRET
-    LOCAL_API_HOST, LOCAL_API_PORT = _parse_endpoint(os.environ["MITM_LOCAL_API"])
+    LOCAL_API_HOST, LOCAL_API_PORT = _parse_endpoint(
+        os.environ["MITM_LOCAL_API"],
+        fallback_port=DEFAULT_LOCAL_API_PORT,
+    )
     LOCAL_API = _format_authority(LOCAL_API_HOST, LOCAL_API_PORT, default_port=443)
     LOCAL_MQTT_HOST, LOCAL_MQTT_PORT = _parse_endpoint(
         os.environ.get("MITM_LOCAL_MQTT", ""),
         fallback_host=LOCAL_API_HOST,
-        fallback_port=None,
+        fallback_port=DEFAULT_LOCAL_MQTT_PORT,
     )
     LOCAL_MQTT = _format_authority(LOCAL_MQTT_HOST, LOCAL_MQTT_PORT)
     LOCAL_WOOD_HOST, LOCAL_WOOD_PORT = _parse_endpoint(
@@ -475,7 +480,7 @@ def request(flow: http.HTTPFlow) -> None:
     source = flow.request.pretty_host
     flow.request.scheme = "https"
     flow.request.host = LOCAL_API_HOST
-    flow.request.port = LOCAL_API_PORT or 443
+    flow.request.port = LOCAL_API_PORT or DEFAULT_LOCAL_API_PORT
     flow.request.headers["Host"] = LOCAL_API
     ctx.log.info(f"[ROUTE] {source}{path} -> {LOCAL_API}{path}")
 
@@ -664,12 +669,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--local-api",
         required=True,
-        help="Hostname or HTTPS URL of your local API server. Explicit ports are supported.",
+        help="Hostname or HTTPS URL of your local API server. Defaults to HTTPS :555 when omitted.",
     )
     parser.add_argument(
         "--local-mqtt",
         default=None,
-        help="Hostname or URL of your local MQTT server. Omit to reuse the API hostname and preserve the source MQTT port.",
+        help="Hostname or URL of your local MQTT server. Omit to reuse the API hostname and default to MQTT TLS :8881.",
     )
     parser.add_argument(
         "--local-wood",
@@ -685,12 +690,15 @@ if __name__ == "__main__":
     parser.add_argument("--listen-port", default=None, help="mitmweb listen port")
 
     args, extra = parser.parse_known_args()
-    local_api_host, local_api_port = _parse_endpoint(args.local_api)
+    local_api_host, local_api_port = _parse_endpoint(
+        args.local_api,
+        fallback_port=DEFAULT_LOCAL_API_PORT,
+    )
     local_api = _format_authority(local_api_host, local_api_port, default_port=443)
     local_mqtt_host, local_mqtt_port = _parse_endpoint(
         args.local_mqtt or "",
         fallback_host=local_api_host,
-        fallback_port=None,
+        fallback_port=DEFAULT_LOCAL_MQTT_PORT,
     )
     local_mqtt = _format_authority(local_mqtt_host, local_mqtt_port)
     local_wood_host, local_wood_port = _parse_endpoint(
