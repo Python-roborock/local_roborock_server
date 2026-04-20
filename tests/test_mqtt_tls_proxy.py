@@ -13,6 +13,7 @@ from roborock_local_server.backend import MqttTlsProxy
 class _FakeSourceSocket:
     def __init__(self, *chunks: bytes) -> None:
         self._chunks = list(chunks)
+        self.sent: list[bytes] = []
         self.closed = False
         self.recv_calls = 0
 
@@ -21,6 +22,9 @@ class _FakeSourceSocket:
         if self._chunks:
             return self._chunks.pop(0)
         return b""
+
+    def sendall(self, chunk: bytes) -> None:
+        self.sent.append(chunk)
 
     def close(self) -> None:
         self.closed = True
@@ -106,14 +110,16 @@ def _seed_protocol_sessions(path: Path) -> None:
     )
 
 
-def _build_connect_packet(*, client_id: str, username: str, password: str) -> bytes:
+def _build_connect_packet(*, client_id: str, username: str, password: str, protocol_level: int = 4) -> bytes:
     protocol_name = b"MQTT"
     variable_header = (
         len(protocol_name).to_bytes(2, "big")
         + protocol_name
-        + bytes([4, 0xC2])  # MQTT 3.1.1 + clean session + username + password
+        + bytes([protocol_level, 0xC2])  # clean session + username + password
         + (60).to_bytes(2, "big")
     )
+    if protocol_level == 5:
+        variable_header += b"\x00"
     payload = (
         len(client_id.encode()).to_bytes(2, "big")
         + client_id.encode()
@@ -572,4 +578,41 @@ def test_handle_client_closes_tls_conn_when_connect_is_rejected(tmp_path, monkey
     proxy._running = True
     proxy._handle_client(tls_conn, ("127.0.0.1", 4321))
 
+    assert tls_conn.sent == [b"\x20\x02\x00\x05"]
+    assert tls_conn.closed is True
+
+
+def test_handle_client_returns_mqtt5_not_authorized_connack_on_rejected_connect(tmp_path, monkeypatch) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+    )
+    tls_conn = _FakeSourceSocket(
+        _build_connect_packet(
+            client_id="bad-client",
+            username="unknown-user",
+            password="unknown-pass",
+            protocol_level=5,
+        )
+    )
+
+    def _unexpected_backend(*args, **kwargs):
+        raise AssertionError("backend socket should not be created for rejected MQTT CONNECT")
+
+    monkeypatch.setattr(socket, "socket", _unexpected_backend)
+
+    proxy._running = True
+    proxy._handle_client(tls_conn, ("127.0.0.1", 4321))
+
+    assert tls_conn.sent == [b"\x20\x03\x00\x87\x00"]
     assert tls_conn.closed is True

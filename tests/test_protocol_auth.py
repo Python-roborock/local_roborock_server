@@ -65,6 +65,13 @@ def _protocol_user_data(
     }
 
 
+def _token_headers(login_payload: dict[str, object]) -> dict[str, str]:
+    return {
+        "Authorization": str(login_payload["token"]),
+        "header_username": str(login_payload["rruid"]),
+    }
+
+
 def _build_supervisor(tmp_path: Path, *, with_snapshot: bool = True) -> tuple[ReleaseSupervisor, object]:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
@@ -96,6 +103,7 @@ def test_protected_routes_require_native_token_and_hawk_auth(tmp_path: Path) -> 
 
     unauth_home = client.get("/api/v1/getHomeDetail")
     assert unauth_home.status_code == 401
+    assert unauth_home.json()["code"] == 2010
     assert unauth_home.json()["data"]["auth"] == "token"
 
     token_headers = {
@@ -108,6 +116,7 @@ def test_protected_routes_require_native_token_and_hawk_auth(tmp_path: Path) -> 
 
     unauth_inbox = client.get("/user/inbox/latest")
     assert unauth_inbox.status_code == 401
+    assert unauth_inbox.json()["code"] == 40101
     assert unauth_inbox.json()["data"]["auth"] == "hawk"
 
     auth_store = ProtocolAuthStore(paths.cloud_snapshot_path)
@@ -126,13 +135,58 @@ def test_protected_routes_require_native_token_and_hawk_auth(tmp_path: Path) -> 
     assert authed_inbox.json()["data"]["count"] == 0
 
 
-def test_protected_routes_require_imported_cloud_snapshot(tmp_path: Path) -> None:
+def test_token_auth_failures_use_roborock_invalid_credentials_code(tmp_path: Path) -> None:
+    supervisor, _paths = _build_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    bad_token = client.get("/api/v1/getHomeDetail", headers={"Authorization": "wrong-token"})
+    assert bad_token.status_code == 401
+    assert bad_token.json()["code"] == 2010
+    assert bad_token.json()["msg"] == "invalid_credentials"
+    assert bad_token.json()["data"]["reason"] == "invalid_token"
+
+    wrong_user = client.get(
+        "/api/v1/getHomeDetail",
+        headers={
+            "Authorization": "local-token-123",
+            "header_username": "wrong-rruid",
+        },
+    )
+    assert wrong_user.status_code == 401
+    assert wrong_user.json()["code"] == 2010
+    assert wrong_user.json()["data"]["reason"] == "invalid_header_username"
+
+
+def test_local_pin_login_succeeds_without_imported_cloud_snapshot(tmp_path: Path) -> None:
     supervisor, _paths = _build_supervisor(tmp_path, with_snapshot=False)
     client = TestClient(supervisor.app)
 
-    response = client.get("/api/v1/getHomeDetail")
-    assert response.status_code == 412
-    assert response.json()["msg"] == "cloud_user_data_required"
+    send_response = client.post(
+        "/api/v5/email/code/send",
+        json={"email": "USER@example.com", "baseUrl": "https://api-us.roborock.com"},
+    )
+    assert send_response.status_code == 200
+    assert send_response.json()["data"]["sent"] is True
+
+    login_response = client.post(
+        "/api/v5/auth/email/login/code",
+        json={"email": "USER@example.com", "code": "123456", "baseUrl": "https://api-us.roborock.com"},
+    )
+    assert login_response.status_code == 200
+    login_payload = login_response.json()["data"]
+    assert login_payload["email"] == "user@example.com"
+    assert login_payload["token"].startswith("rr")
+    assert login_payload["rriot"]["r"]["a"] == supervisor.context.api_url()
+    assert login_payload["rriot"]["r"]["m"] == supervisor.context.mqtt_url()
+    assert login_payload["rriot"]["r"]["l"] == supervisor.context.wood_url()
+
+    home_response = client.get("/api/v1/getHomeDetail", headers=_token_headers(login_payload))
+    assert home_response.status_code == 200
+    assert home_response.json()["data"]["rrHomeId"] == 12345
+
+    user_info = client.get("/api/v1/userInfo", headers=_token_headers(login_payload))
+    assert user_info.status_code == 200
+    assert user_info.json()["data"]["email"] == "user@example.com"
 
 
 def test_protected_routes_skip_protocol_auth_when_disabled(tmp_path: Path) -> None:
@@ -146,51 +200,63 @@ def test_protected_routes_skip_protocol_auth_when_disabled(tmp_path: Path) -> No
     assert inbox_response.status_code == 200
 
 
-def test_protocol_code_login_routes_reuse_cloud_import_manager(tmp_path: Path, monkeypatch) -> None:
+def test_protocol_code_login_routes_use_local_email_and_pin_without_cloud_manager(tmp_path: Path, monkeypatch) -> None:
     supervisor, _paths = _build_supervisor(tmp_path)
     client = TestClient(supervisor.app)
-    captured: dict[str, str] = {}
+    snapshot = json.loads(supervisor.paths.cloud_snapshot_path.read_text(encoding="utf-8"))
+    snapshot.setdefault("meta", {})["username"] = "imported@example.com"
+    snapshot.setdefault("user_data", {})["email"] = "imported@example.com"
+    supervisor.paths.cloud_snapshot_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
 
-    async def fake_request_code(*, email: str, base_url: str = "") -> dict[str, object]:
-        captured["request_email"] = email
-        captured["request_base_url"] = base_url
-        return {"success": True, "step": "code_requested"}
+    async def fail_request_code(*, email: str, base_url: str = "") -> dict[str, object]:
+        _ = email, base_url
+        raise AssertionError("protocol code send must not call cloud_manager.request_code")
 
-    async def fake_submit_code(*, session_id: str, code: str) -> dict[str, object]:
-        captured["submit_session_id"] = session_id
-        captured["submit_code"] = code
-        return {"success": True, "step": "inventory_fetched"}
+    async def fail_submit_code(*, session_id: str, code: str) -> dict[str, object]:
+        _ = session_id, code
+        raise AssertionError("protocol code submit must not call cloud_manager.submit_code")
 
-    monkeypatch.setattr(supervisor.cloud_manager, "request_code", fake_request_code)
-    monkeypatch.setattr(
-        supervisor.cloud_manager,
-        "find_pending_session_id",
-        lambda *, email, base_url="": captured.update({"pending_email": email, "pending_base_url": base_url}) or "pending-1",
-    )
-    monkeypatch.setattr(supervisor.cloud_manager, "submit_code", fake_submit_code)
+    monkeypatch.setattr(supervisor.cloud_manager, "request_code", fail_request_code)
+    monkeypatch.setattr(supervisor.cloud_manager, "submit_code", fail_submit_code)
 
     send_response = client.post(
         "/api/v5/email/code/send",
-        json={"email": "user@example.com", "baseUrl": "https://api-us.roborock.com"},
+        json={"email": "user@example.com", "baseUrl": supervisor.context.api_url()},
     )
     assert send_response.status_code == 200
     assert send_response.json()["data"]["sent"] is True
-    assert captured["request_email"] == "user@example.com"
-    assert captured["request_base_url"] == "https://api-us.roborock.com"
 
     login_response = client.post(
         "/api/v5/auth/email/login/code",
-        json={"email": "user@example.com", "code": "123456", "baseUrl": "https://api-us.roborock.com"},
+        json={"email": "user@example.com", "code": "123456", "baseUrl": supervisor.context.api_url(), "sessionId": "ignored"},
     )
     assert login_response.status_code == 200
     login_payload = login_response.json()["data"]
     assert login_payload["token"] != "local-token-123"
-    assert login_payload["rruid"] == "local-rruid-123"
+    assert login_payload["rruid"] != "local-rruid-123"
     assert login_payload["rriot"]["u"] != "hawk-user-123"
-    assert captured["submit_session_id"] == "pending-1"
-    assert captured["submit_code"] == "123456"
-    assert captured["pending_email"] == "user@example.com"
-    assert captured["pending_base_url"] == "https://api-us.roborock.com"
+    assert login_payload["email"] == "user@example.com"
+
+
+def test_protocol_code_login_rejects_wrong_email_and_wrong_pin(tmp_path: Path) -> None:
+    supervisor, _paths = _build_supervisor(tmp_path, with_snapshot=False)
+    client = TestClient(supervisor.app)
+
+    wrong_email = client.post(
+        "/api/v5/auth/email/login/code",
+        json={"email": "other@example.com", "code": "123456"},
+    )
+    assert wrong_email.status_code == 401
+    assert wrong_email.json()["code"] == 2010
+    assert wrong_email.json()["data"]["reason"] == "invalid_login_email"
+
+    wrong_pin = client.post(
+        "/api/v5/auth/email/login/code",
+        json={"email": "user@example.com", "code": "654321"},
+    )
+    assert wrong_pin.status_code == 401
+    assert wrong_pin.json()["code"] == 2010
+    assert wrong_pin.json()["data"]["reason"] == "invalid_login_pin"
 
 
 def test_protocol_password_login_is_rejected(tmp_path: Path) -> None:

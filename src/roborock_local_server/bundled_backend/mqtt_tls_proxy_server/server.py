@@ -222,6 +222,16 @@ class MqttTlsProxy:
             "password": password,
         }
 
+    @staticmethod
+    def _build_connect_reject_packet(protocol_level: int | None) -> bytes | None:
+        if protocol_level == 5:
+            # MQTT 5 CONNACK with reason code 0x87 "Not authorized".
+            return b"\x20\x03\x00\x87\x00"
+        if protocol_level in (None, 3, 4):
+            # MQTT 3.1/3.1.1 CONNACK with return code 0x05 "Not authorized".
+            return b"\x20\x02\x00\x05"
+        return None
+
     @classmethod
     def _read_first_packet(cls, conn: socket.socket) -> tuple[bytes, bytes] | None:
         buffer = bytearray()
@@ -693,6 +703,16 @@ class MqttTlsProxy:
                     str((connect_info or {}).get("client_id") or ""),
                     str((connect_info or {}).get("username") or ""),
                 )
+                reject_packet = self._build_connect_reject_packet(
+                    connect_info.get("protocol_level") if isinstance(connect_info, dict) else None
+                )
+                if reject_packet is not None:
+                    try:
+                        tls_conn.sendall(reject_packet)
+                    except (OSError, ConnectionResetError, BrokenPipeError):
+                        pass
+                    else:
+                        self._queue_trace_packet(conn_id, "b2c", reject_packet)
                 return
 
             backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

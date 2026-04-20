@@ -52,6 +52,7 @@ class ServerContext:
     mqtt_host: str
     wood_host: str
     region: str
+    protocol_login_email: str
     localkey: str
     duid: str
     mqtt_usr: str

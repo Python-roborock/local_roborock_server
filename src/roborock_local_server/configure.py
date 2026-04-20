@@ -50,6 +50,8 @@ class ConfigureAnswers:
     cloudflare_token: str
     password_hash: str
     session_secret: str
+    protocol_login_email: str
+    protocol_login_pin_hash: str
 
 
 @dataclass(frozen=True)
@@ -139,6 +141,36 @@ def _prompt_password() -> str:
         print("A password is required.")
 
 
+def _prompt_protocol_login_email() -> str:
+    while True:
+        email = _prompt_non_empty("Protocol login email for app/HA sign-in: ")
+        if "@" in email:
+            return email
+        print("Protocol login email must look like an email address.")
+
+
+def _validate_protocol_login_pin(pin: str) -> str:
+    normalized = str(pin or "").strip()
+    if len(normalized) != 6 or not normalized.isdigit():
+        raise ValueError("Protocol login PIN must be exactly 6 digits.")
+    return normalized
+
+
+def _prompt_protocol_login_pin() -> str:
+    while True:
+        pin = getpass("Protocol login PIN (6 digits, input hidden): ").strip()
+        try:
+            normalized_pin = _validate_protocol_login_pin(pin)
+        except ValueError as exc:
+            print(exc)
+            continue
+        confirmation = getpass("Confirm protocol login PIN: ").strip()
+        if normalized_pin != confirmation:
+            print("PIN entries did not match.")
+            continue
+        return normalized_pin
+
+
 def collect_configure_answers() -> ConfigureAnswers:
     print("This writes a small config.toml with opinionated defaults.")
     stack_fqdn = _prompt_hostname(
@@ -168,6 +200,8 @@ def collect_configure_answers() -> ConfigureAnswers:
             cloudflare_token = getpass("Cloudflare API token (input hidden): ").strip()
 
     password = _prompt_password()
+    protocol_login_email = _prompt_protocol_login_email()
+    protocol_login_pin = _prompt_protocol_login_pin()
     return ConfigureAnswers(
         stack_fqdn=stack_fqdn,
         https_port=https_port,
@@ -179,6 +213,8 @@ def collect_configure_answers() -> ConfigureAnswers:
         cloudflare_token=cloudflare_token,
         password_hash=hash_password(password),
         session_secret=secrets.token_urlsafe(32),
+        protocol_login_email=protocol_login_email,
+        protocol_login_pin_hash=hash_password(protocol_login_pin),
     )
 
 
@@ -257,6 +293,8 @@ def render_config_toml(answers: ConfigureAnswers) -> str:
             f"session_secret = {_toml_string(answers.session_secret)}",
             "session_ttl_seconds = 86400",
             "protocol_auth_enabled = true",
+            f"protocol_login_email = {_toml_string(answers.protocol_login_email)}",
+            f"protocol_login_pin_hash = {_toml_string(answers.protocol_login_pin_hash)}",
             "",
         ]
     )

@@ -6,7 +6,7 @@ After auth bootstrap, app API traffic is routed to LOCAL_API so app home/device
 state comes from your local stack.
 
 Usage:
-  uv run mitm_redirect.py --local-api YOUR_SERVER_HOST [--local-mqtt HOST] [--local-wood HOST] [--sync-secret SECRET] [--sync-base-url URL] [--mode wireguard]
+  uv run mitm_redirect.py --local-api YOUR_SERVER_HOST [--local-mqtt HOST] [--local-wood HOST] [--sync-secret SECRET] [--mode wireguard]
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import re
 import ssl
 import tomllib
 from urllib.parse import urlsplit
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 # mitmproxy is only available when loaded as an addon by mitmweb,
@@ -37,7 +38,6 @@ LOCAL_WOOD: str = ""
 LOCAL_WOOD_HOST: str = ""
 LOCAL_WOOD_PORT: int | None = None
 LOCAL_SYNC_SECRET: str = ""
-LOCAL_SYNC_BASE_URL: str = ""
 
 
 # Domains whose responses are candidates for host rewrite.
@@ -150,6 +150,7 @@ LOCAL_ROUTE_PREFIXES = (
 
 PROTOCOL_AUTH_SYNC_PATH = "/internal/protocol/user-data"
 PROTOCOL_AUTH_SYNC_SOURCE = "mitm_cloud_login"
+PROTOCOL_AUTH_PREFLIGHT_SOURCE = "mitm_preflight"
 LOGIN_SYNC_EXACT_PATHS = {
     "/api/v1/loginwithcode",
     "/api/v4/auth/email/login/code",
@@ -175,6 +176,18 @@ _seq_rewrite = 0
 _seq_passthrough = 0
 _sync_warning_emitted = False
 _FILENAME_SAFE_RE = re.compile(r'[^A-Za-z0-9._-]+')
+
+
+class SyncEndpointError(RuntimeError):
+    def __init__(self, sync_url: str, detail: str, *, status: int | None = None) -> None:
+        self.sync_url = str(sync_url or "").strip()
+        self.status = status
+        self.detail = str(detail or "").strip() or "unknown sync error"
+        super().__init__(self.detail)
+
+    def __str__(self) -> str:
+        prefix = f"{self.sync_url}: " if self.sync_url else ""
+        return f"{prefix}{self.detail}"
 
 
 def _next_seq_rewrite() -> int:
@@ -223,29 +236,94 @@ def _format_authority(host: str, port: int | None, *, default_port: int | None =
     return f"{normalized_host}:{port}"
 
 
-def _normalize_base_url(value: str, *, fallback: str = "") -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return fallback
-    parsed = urlsplit(raw if "://" in raw else f"https://{raw}")
-    scheme = (parsed.scheme or "https").strip().lower() or "https"
-    host = (parsed.hostname or parsed.path.split("/", 1)[0]).strip().strip("/")
-    if not host:
-        return fallback
-    authority = host if parsed.port is None else f"{host}:{parsed.port}"
-    return f"{scheme}://{authority}"
+def _sync_callback_url(local_api: str) -> str:
+    authority = str(local_api or "").strip().strip("/")
+    return f"https://{authority}{PROTOCOL_AUTH_SYNC_PATH}"
 
 
-def _default_sync_base_url(value: str, *, fallback: str = "https://127.0.0.1") -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return fallback
-    parsed = urlsplit(raw if "://" in raw else f"//{raw}")
-    host = (parsed.hostname or parsed.path.split("/", 1)[0]).strip().strip("/")
-    if not host:
-        return fallback
-    authority = host if parsed.port is None else f"{host}:{parsed.port}"
-    return f"https://{authority}"
+def _parse_json_object(content: bytes) -> dict[str, object]:
+    try:
+        decoded = content.decode("utf-8")
+        parsed = json.loads(decoded)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _describe_sync_http_result(status: int, body: bytes) -> str:
+    parsed = _parse_json_object(body)
+    msg = str(parsed.get("msg") or "").strip()
+    data = parsed.get("data")
+    reason = ""
+    detail = ""
+    if isinstance(data, dict):
+        reason = str(data.get("reason") or "").strip()
+        detail = str(data.get("detail") or "").strip()
+    parts = [f"HTTP {status}"]
+    if msg:
+        parts.append(msg)
+    if reason:
+        parts.append(reason)
+    if detail:
+        parts.append(detail)
+    return " - ".join(parts)
+
+
+def _post_sync_payload(
+    *,
+    local_api: str,
+    sync_secret: str,
+    payload: dict[str, object],
+    timeout: float = 5.0,
+) -> tuple[str, int, bytes]:
+    sync_url = _sync_callback_url(local_api)
+    request = Request(
+        sync_url,
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-Local-Sync-Secret": sync_secret,
+        },
+        method="POST",
+    )
+    context = ssl.create_default_context()
+    try:
+        with urlopen(request, timeout=timeout, context=context) as response:
+            status = getattr(response, "status", 200)
+            return sync_url, status, response.read()
+    except HTTPError as exc:
+        return sync_url, exc.code, exc.read()
+    except Exception as exc:
+        raise SyncEndpointError(sync_url, f"request failed: {exc}") from exc
+
+
+def _preflight_sync_endpoint(local_api: str, sync_secret: str) -> None:
+    sync_url, status, body = _post_sync_payload(
+        local_api=local_api,
+        sync_secret=sync_secret,
+        payload={"source": PROTOCOL_AUTH_PREFLIGHT_SOURCE},
+    )
+    parsed = _parse_json_object(body)
+    data = parsed.get("data")
+    reason = str(data.get("reason") or "").strip() if isinstance(data, dict) else ""
+    if status == 400 and reason == "missing_user_data":
+        return
+    raise SyncEndpointError(sync_url, f"preflight failed: {_describe_sync_http_result(status, body)}", status=status)
+
+
+def _write_sync_failure_response(flow: http.HTTPFlow, exc: SyncEndpointError) -> None:
+    payload = {
+        "code": 50241,
+        "msg": "local_sync_failed",
+        "data": {
+            "reason": "sync_unreachable",
+            "syncUrl": exc.sync_url,
+            "detail": exc.detail,
+        },
+    }
+    flow.response.status_code = 502
+    flow.response.headers["content-type"] = "application/json"
+    flow.response.content = json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
 def _load_local_sync_secret() -> str:
@@ -267,7 +345,7 @@ def load(loader) -> None:
     global LOCAL_API, LOCAL_API_HOST, LOCAL_API_PORT
     global LOCAL_MQTT, LOCAL_MQTT_HOST, LOCAL_MQTT_PORT
     global LOCAL_WOOD, LOCAL_WOOD_HOST, LOCAL_WOOD_PORT
-    global LOCAL_SYNC_SECRET, LOCAL_SYNC_BASE_URL
+    global LOCAL_SYNC_SECRET
     LOCAL_API_HOST, LOCAL_API_PORT = _parse_endpoint(os.environ["MITM_LOCAL_API"])
     LOCAL_API = _format_authority(LOCAL_API_HOST, LOCAL_API_PORT, default_port=443)
     LOCAL_MQTT_HOST, LOCAL_MQTT_PORT = _parse_endpoint(
@@ -283,15 +361,10 @@ def load(loader) -> None:
     )
     LOCAL_WOOD = _format_authority(LOCAL_WOOD_HOST, LOCAL_WOOD_PORT, default_port=443)
     LOCAL_SYNC_SECRET = str(os.environ.get("MITM_LOCAL_SYNC_SECRET") or "").strip()
-    default_sync_base_url = _default_sync_base_url(os.environ.get("MITM_LOCAL_API") or LOCAL_API)
-    LOCAL_SYNC_BASE_URL = _normalize_base_url(
-        os.environ.get("MITM_LOCAL_SYNC_BASE_URL") or "",
-        fallback=default_sync_base_url,
-    )
     _init_log_dir()
     ctx.log.info(f"[CONFIG] LOCAL_API={LOCAL_API} LOCAL_MQTT={LOCAL_MQTT} LOCAL_WOOD={LOCAL_WOOD}")
     if LOCAL_SYNC_SECRET:
-        ctx.log.info(f"[SYNC] protocol auth session sync enabled via {LOCAL_SYNC_BASE_URL}")
+        ctx.log.info(f"[SYNC] protocol auth session sync enabled via {_sync_callback_url(LOCAL_API)}")
     else:
         ctx.log.warn("[SYNC] protocol auth session sync disabled: no sync secret configured")
 
@@ -446,27 +519,13 @@ def _sync_protocol_user_data(user_data: dict[str, object]) -> None:
             _sync_warning_emitted = True
         return
 
-    payload = json.dumps(
-        {"source": PROTOCOL_AUTH_SYNC_SOURCE, "user_data": user_data},
-        separators=(",", ":"),
-    ).encode("utf-8")
-    sync_url = f"{LOCAL_SYNC_BASE_URL}{PROTOCOL_AUTH_SYNC_PATH}"
-    request = Request(
-        sync_url,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "X-Local-Sync-Secret": LOCAL_SYNC_SECRET,
-        },
-        method="POST",
+    sync_url, status, body = _post_sync_payload(
+        local_api=LOCAL_API,
+        sync_secret=LOCAL_SYNC_SECRET,
+        payload={"source": PROTOCOL_AUTH_SYNC_SOURCE, "user_data": user_data},
     )
-    try:
-        with urlopen(request, timeout=5, context=ssl.create_default_context()) as response:
-            status = getattr(response, "status", 200)
-            response.read()
-    except Exception as exc:
-        ctx.log.warn(f"[SYNC] failed storing protocol auth session via {sync_url}: {exc}")
-        return
+    if not 200 <= status < 300:
+        raise SyncEndpointError(sync_url, _describe_sync_http_result(status, body), status=status)
 
     hawk_id = str(((user_data.get("rriot") or {}) if isinstance(user_data.get("rriot"), dict) else {}).get("u") or "")
     ctx.log.info(
@@ -496,7 +555,13 @@ def response(flow: http.HTTPFlow) -> None:
             if _is_login_sync_candidate(flow.request.path):
                 user_data = _extract_protocol_user_data(body)
                 if user_data is not None:
-                    _sync_protocol_user_data(user_data)
+                    try:
+                        _sync_protocol_user_data(user_data)
+                    except SyncEndpointError as exc:
+                        ctx.log.error(f"[SYNC] blocking login response: {exc}")
+                        _write_sync_failure_response(flow, exc)
+                        _log_flow(flow, rewritten=False)
+                        return
             if _rewrite_json(body, rewrites):
                 _log_flow(flow, rewritten=True, rewrites=rewrites)
                 flow.response.content = json.dumps(body).encode("utf-8")
@@ -616,11 +681,6 @@ if __name__ == "__main__":
         default=None,
         help="Optional admin.session_secret for protocol auth sync. Defaults to config.toml when available.",
     )
-    parser.add_argument(
-        "--sync-base-url",
-        default=None,
-        help="Base URL for protocol auth sync callbacks (default: https://<local-api-host>).",
-    )
     parser.add_argument("--mode", default="wireguard", help="mitmweb proxy mode (default: wireguard)")
     parser.add_argument("--listen-port", default=None, help="mitmweb listen port")
 
@@ -640,17 +700,11 @@ if __name__ == "__main__":
     )
     local_wood = _format_authority(local_wood_host, local_wood_port, default_port=443)
     local_sync_secret = str(args.sync_secret or os.environ.get("MITM_LOCAL_SYNC_SECRET") or _load_local_sync_secret()).strip()
-    default_sync_base_url = _default_sync_base_url(args.local_api)
-    local_sync_base_url = _normalize_base_url(
-        args.sync_base_url or os.environ.get("MITM_LOCAL_SYNC_BASE_URL") or "",
-        fallback=default_sync_base_url,
-    )
 
     for label, original, normalized in (
         ("local-api", args.local_api, local_api),
         ("local-mqtt", args.local_mqtt or "", local_mqtt),
         ("local-wood", args.local_wood or "", local_wood),
-        ("sync-base-url", args.sync_base_url or "", local_sync_base_url),
     ):
         if original and normalized and str(original).strip() != normalized:
             print(f"[CONFIG] normalized --{label} from {original!r} to {normalized!r}")
@@ -660,7 +714,16 @@ if __name__ == "__main__":
     env["MITM_LOCAL_MQTT"] = local_mqtt
     env["MITM_LOCAL_WOOD"] = local_wood
     env["MITM_LOCAL_SYNC_SECRET"] = local_sync_secret
-    env["MITM_LOCAL_SYNC_BASE_URL"] = local_sync_base_url
+
+    if local_sync_secret:
+        try:
+            _preflight_sync_endpoint(local_api, local_sync_secret)
+        except SyncEndpointError as exc:
+            print(f"[SYNC] refusing to start mitmweb: {exc}", file=sys.stderr)
+            sys.exit(2)
+        print(f"[SYNC] verified protocol auth sync endpoint via {_sync_callback_url(local_api)}")
+    else:
+        print("[SYNC] protocol auth session sync disabled: no sync secret configured")
 
     cmd = [
         "uvx",

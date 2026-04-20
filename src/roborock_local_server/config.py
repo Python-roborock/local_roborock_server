@@ -54,6 +54,8 @@ class AdminConfig:
     session_secret: str
     session_ttl_seconds: int
     protocol_auth_enabled: bool
+    protocol_login_email: str
+    protocol_login_pin_hash: str
 
 
 @dataclass(frozen=True)
@@ -182,11 +184,18 @@ def load_config(path: str | Path) -> AppConfig:
             session_secret=_require_non_empty(admin.get("session_secret"), "admin.session_secret"),
             session_ttl_seconds=_as_int(admin.get("session_ttl_seconds"), "admin.session_ttl_seconds", 86400),
             protocol_auth_enabled=_as_bool(admin.get("protocol_auth_enabled"), True),
+            protocol_login_email=_require_non_empty(admin.get("protocol_login_email"), "admin.protocol_login_email"),
+            protocol_login_pin_hash=_require_non_empty(
+                admin.get("protocol_login_pin_hash"),
+                "admin.protocol_login_pin_hash",
+            ),
         ),
     )
 
     if len(config.admin.session_secret) < 24:
         raise ValueError("admin.session_secret must be at least 24 characters")
+    if "@" not in config.admin.protocol_login_email:
+        raise ValueError("admin.protocol_login_email must be an email address")
 
     if config.broker.mode == "external":
         _require_non_empty(config.broker.host, "broker.host")

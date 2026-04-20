@@ -2,7 +2,9 @@
 
 Use this after [Installation](installation.md) and [Onboarding](onboarding.md) if you want the official Roborock app to talk to your local stack.
 
-During the MITM login step, the script now needs to sync the captured protocol-auth session back to your server. Pass `admin.session_secret` from `config.toml` as `--sync-secret`. The sync callback URL defaults to `https://` plus the `--local-api` host and port, so you only need to pass `--sync-base-url` when the callback should go somewhere else, such as when `--local-api` is `127.0.0.1`.
+During the MITM login step, the script now needs to sync the captured protocol-auth session back to your server. Pass `admin.session_secret` from `config.toml` as `--sync-secret`. That sync callback always uses the `--local-api` host and port.
+
+The launcher now preflights that callback before starting `mitmweb`. If the `--local-api` host cannot be reached, if the TLS certificate does not validate for that host, or if the sync secret is rejected, the script exits immediately instead of letting you proceed into a broken login flow.
 
 ## iPhone
 
@@ -22,7 +24,7 @@ During the MITM login step, the script now needs to sync the captured protocol-a
    uv run mitm_redirect.py --local-api api-roborock.example.com:8443 --local-mqtt api-roborock.example.com:9443 --sync-secret YOUR_ADMIN_SESSION_SECRET
    ```
 
-   If you're running on the same machine as the local_roborock_server, you will likely need to pass `--sync-base-url 127.0.0.1` as the server may not resolve locally.
+   The `--local-api` hostname must resolve from the MITM machine and match the HTTPS certificate served by your local stack. A raw IP such as `127.0.0.1` will fail unless your certificate is valid for that IP.
 
 3. Install the WireGuard app on your phone. Then tap the plus button in WireGuard, choose to add from QR code, and scan the code at `http://127.0.0.1:8081/#/capture`.
 
@@ -123,7 +125,7 @@ Make sure you have the following installed:
       uv run mitm_redirect.py --local-api api-roborock.example.com:8443 --local-mqtt api-roborock.example.com:9443 --sync-secret YOUR_ADMIN_SESSION_SECRET
    ```
 
-   If you're running on the same machine as the local_roborock_server, you will likely need to pass `--sync-base-url 127.0.0.1` as the server may not resolve locally.
+   The `--local-api` hostname must resolve from the MITM machine and match the HTTPS certificate served by your local stack. A raw IP such as `127.0.0.1` will fail unless your certificate is valid for that IP.
 
 9. Install the WireGuard app on your phone. Then tap the plus button in WireGuard, choose to add from QR code, and scan the code at `http://127.0.0.1:8081/#/capture`.
 

@@ -23,6 +23,7 @@ def current_server_urls(ctx: ServerContext) -> tuple[str, str, str]:
 
 def with_current_server_urls(ctx: ServerContext, cloud_user_data: dict[str, Any]) -> dict[str, Any]:
     api_url, mqtt_url, wood_url = current_server_urls(ctx)
+    region_code = str(ctx.region or "").upper() or "US"
     patched_user_data = dict(cloud_user_data)
 
     rriot_value = patched_user_data.get("rriot")
@@ -30,7 +31,7 @@ def with_current_server_urls(ctx: ServerContext, cloud_user_data: dict[str, Any]
         rriot = dict(rriot_value)
         ref_value = rriot.get("r")
         ref = dict(ref_value) if isinstance(ref_value, dict) else {}
-        ref.update({"a": api_url, "m": mqtt_url, "l": wood_url})
+        ref.update({"r": region_code, "a": api_url, "m": mqtt_url, "l": wood_url})
         rriot["r"] = ref
         patched_user_data["rriot"] = rriot
 

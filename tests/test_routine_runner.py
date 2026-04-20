@@ -18,6 +18,7 @@ def _test_context(tmp_path: Path) -> ServerContext:
         mqtt_host="mqtt.example.com",
         wood_host="wood.example.com",
         region="us",
+        protocol_login_email="user@example.com",
         localkey="local-key",
         duid="default-duid",
         mqtt_usr="mqtt-user",
@@ -457,4 +458,3 @@ def test_wait_for_step_complete_resume_only_sent_once(monkeypatch) -> None:
         assert len(client.sent_commands) == 2
 
     asyncio.run(exercise())
-

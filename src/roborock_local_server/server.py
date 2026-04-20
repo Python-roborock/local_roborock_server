@@ -49,15 +49,20 @@ from shared.protocol_auth import ProtocolAuthStore
 from https_server.routes.auth.service import (
     build_login_data_response,
     cloud_login_data_required_response,
-    load_cloud_user_data,
 )
 from .bundled_backend.shared.zone_ranges_store import ZoneRangesStore
-from .security import AdminSessionManager
+from .security import AdminSessionManager, verify_password
 
 
 ALL_HTTP_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
 PROTOCOL_AUTH_SYNC_PATH = "/internal/protocol/user-data"
 PROTOCOL_AUTH_SYNC_SECRET_HEADER = "x-local-sync-secret"
+_REGION_COUNTRY_CODE = {
+    "US": "1",
+    "CN": "86",
+    "EU": "49",
+    "RU": "7",
+}
 PROJECT_SUPPORT = {
     "title": "Support This Project",
     "text": (
@@ -396,6 +401,7 @@ class ReleaseSupervisor:
             mqtt_host=self.config.network.stack_fqdn,
             wood_host=self.config.network.stack_fqdn,
             region=self.config.network.region,
+            protocol_login_email=self.config.admin.protocol_login_email,
             localkey=self._bootstrap_credentials["localkey"],
             duid=self._bootstrap_credentials["duid"],
             mqtt_usr=self._bootstrap_credentials["mqtt_usr"],
@@ -474,6 +480,55 @@ class ReleaseSupervisor:
 
     def protocol_auth_enabled(self) -> bool:
         return bool(self.config.admin.protocol_auth_enabled)
+
+    def _protocol_login_email(self) -> str:
+        return str(self.config.admin.protocol_login_email or "").strip()
+
+    @staticmethod
+    def _protocol_login_pin_valid(pin: str) -> bool:
+        normalized = str(pin or "").strip()
+        return len(normalized) == 6 and normalized.isdigit()
+
+    def _protocol_login_email_matches(self, email: str) -> bool:
+        configured_email = self._protocol_login_email()
+        normalized_email = str(email or "").strip()
+        return bool(
+            configured_email
+            and normalized_email
+            and configured_email.casefold() == normalized_email.casefold()
+        )
+
+    def _protocol_login_pin_matches(self, pin: str) -> bool:
+        normalized_pin = str(pin or "").strip()
+        return self._protocol_login_pin_valid(normalized_pin) and verify_password(
+            normalized_pin,
+            self.config.admin.protocol_login_pin_hash,
+        )
+
+    @staticmethod
+    def _default_country_code_for_region(region: str) -> str:
+        return _REGION_COUNTRY_CODE.get(str(region or "").upper(), "1")
+
+    def _local_protocol_identity(self) -> dict[str, Any]:
+        email = self._protocol_login_email()
+        normalized_email = email.casefold()
+        digest = hashlib.sha256(normalized_email.encode("utf-8")).hexdigest()
+        uid = (int(digest[:12], 16) % 900_000_000) + 100_000_000
+        region_upper = self.config.network.region.upper()
+        return {
+            "uid": uid,
+            "rruid": f"rrls-{digest[:20]}",
+            "email": email,
+            "country": region_upper,
+            "countrycode": self._default_country_code_for_region(region_upper),
+            "nickname": "Local User",
+            "hasPassword": True,
+            "rriot": {
+                "r": {
+                    "r": region_upper,
+                }
+            },
+        }
 
     @staticmethod
     def _normalized_path(path: str) -> str:
@@ -605,6 +660,14 @@ class ReleaseSupervisor:
         return {"code": 200, "msg": "success", "data": {"valid": True}}
 
     @staticmethod
+    def _invalid_login_credentials_payload(reason: str) -> tuple[int, dict[str, Any]]:
+        return 401, {
+            "code": 2010,
+            "msg": "invalid_credentials",
+            "data": {"reason": reason, "auth": "code"},
+        }
+
+    @staticmethod
     def _unsupported_password_login_payload() -> dict[str, Any]:
         return {
             "code": 40031,
@@ -613,8 +676,17 @@ class ReleaseSupervisor:
         }
 
     @staticmethod
-    def _protocol_auth_failure_payload(reason: str, auth_kind: str) -> dict[str, Any]:
-        return {
+    def _protocol_auth_failure_response(reason: str, auth_kind: str) -> tuple[int, dict[str, Any]]:
+        if auth_kind == "token":
+            # Home Assistant's python-roborock client only starts reauth when
+            # Roborock's web API returns the invalid-credentials code it
+            # already maps to RoborockInvalidCredentials.
+            return 401, {
+                "code": 2010,
+                "msg": "invalid_credentials",
+                "data": {"reason": reason, "auth": auth_kind},
+            }
+        return 401, {
             "code": 40101,
             "msg": "authentication_required",
             "data": {"reason": reason, "auth": auth_kind},
@@ -699,27 +771,6 @@ class ReleaseSupervisor:
     ) -> tuple[str, int, dict[str, Any]] | None:
         normalized = self._normalized_path(clean_path)
         if self._is_code_send_path(normalized):
-            account = _request_value(
-                query_params,
-                body_params,
-                "email",
-                "username",
-                "account",
-                "mobile",
-                "phone",
-            )
-            base_url = _request_value(query_params, body_params, "base_url", "baseUrl")
-            try:
-                result = await self.cloud_manager.request_code(email=account, base_url=base_url)
-            except Exception as exc:  # noqa: BLE001
-                result = {"success": False, "step": "code_request_failed", "error": str(exc)}
-                self.runtime_state.record_cloud_request(result)
-                return "protocol_login_request_code", 400, {
-                    "code": 40021,
-                    "msg": "code_request_failed",
-                    "data": {"error": str(exc)},
-                }
-            self.runtime_state.record_cloud_request(result)
             return "protocol_login_request_code", 200, self._login_send_success_payload()
 
         if self._is_code_validate_path(normalized):
@@ -735,10 +786,6 @@ class ReleaseSupervisor:
                 "mobile",
                 "phone",
             )
-            base_url = _request_value(query_params, body_params, "base_url", "baseUrl")
-            session_id = _request_value(query_params, body_params, "session_id", "sessionId")
-            if not session_id:
-                session_id = self.cloud_manager.find_pending_session_id(email=account, base_url=base_url)
             code = _request_value(
                 query_params,
                 body_params,
@@ -747,35 +794,23 @@ class ReleaseSupervisor:
                 "emailCode",
                 "smsCode",
             )
-            try:
-                result = await self.cloud_manager.submit_code(session_id=session_id, code=code)
-                self.refresh_inventory_state()
-            except Exception as exc:  # noqa: BLE001
-                result = {"success": False, "step": "code_submit_failed", "error": str(exc)}
-                self.runtime_state.record_cloud_request(result)
-                return "protocol_login_submit_code", 400, {
-                    "code": 40022,
-                    "msg": "code_submit_failed",
-                    "data": {"error": str(exc)},
-                }
-            cloud_user_data = load_cloud_user_data(self.context)
-            if cloud_user_data is None:
-                self.runtime_state.record_cloud_request(result)
-                status_code, response_payload = self._protocol_auth_not_ready_payload()
-                return "protocol_login_submit_code_not_ready", status_code, response_payload
+            if not self._protocol_login_email_matches(account):
+                status_code, payload = self._invalid_login_credentials_payload("invalid_login_email")
+                return "protocol_login_submit_code", status_code, payload
+            if not self._protocol_login_pin_matches(code):
+                status_code, payload = self._invalid_login_credentials_payload("invalid_login_pin")
+                return "protocol_login_submit_code", status_code, payload
             try:
                 issued_user_data = self.protocol_auth.issue_local_session(
-                    cloud_user_data,
+                    self._local_protocol_identity(),
                     source="protocol_code_login",
                 )
             except ValueError as exc:
-                self.runtime_state.record_cloud_request(result)
                 return "protocol_login_submit_code", 400, {
                     "code": 40023,
                     "msg": "local_session_issue_failed",
                     "data": {"error": str(exc)},
                 }
-            self.runtime_state.record_cloud_request(result)
             return "protocol_login_submit_code", 200, build_login_data_response(self.context, issued_user_data)
 
         if self._is_password_login_path(normalized) or self._is_password_reset_path(normalized):
@@ -999,7 +1034,7 @@ class ReleaseSupervisor:
                 )
             if not authenticated:
                 route_name = f"{required_auth}_auth_failed"
-                response_payload = self._protocol_auth_failure_payload(auth_reason, required_auth)
+                status_code, response_payload = self._protocol_auth_failure_response(auth_reason, required_auth)
                 entry["route"] = route_name
                 entry["response_json"] = response_payload
                 try:
@@ -1018,14 +1053,15 @@ class ReleaseSupervisor:
                     logger.warning("runtime_state record_http_event failed: %s", exc)
                 append_jsonl(self.context.http_jsonl, entry)
                 logger.info(
-                    "%s %s host=%s route=%s status=401 body_sha256=%s",
+                    "%s %s host=%s route=%s status=%d body_sha256=%s",
                     request.method,
                     clean_path,
                     host or "-",
                     route_name,
+                    status_code,
                     body_sha256[:16],
                 )
-                return JSONResponse(response_payload, status_code=401)
+                return JSONResponse(response_payload, status_code=status_code)
 
         try:
             plugin_dispatch = await dispatch_plugin_zip_request(
@@ -1596,6 +1632,7 @@ def repair_runtime_identities(*, config_file: Path, links: list[str]) -> int:
             mqtt_host=config.network.stack_fqdn,
             wood_host=config.network.stack_fqdn,
             region=config.network.region,
+            protocol_login_email=config.admin.protocol_login_email,
             localkey=str(runtime_credentials.bootstrap_value("localkey", "") or ""),
             duid=str(runtime_credentials.bootstrap_value("duid", "") or ""),
             mqtt_usr=str(runtime_credentials.bootstrap_value("mqtt_usr", "") or ""),

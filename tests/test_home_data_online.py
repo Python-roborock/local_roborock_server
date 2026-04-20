@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from roborock.data import HomeData
 
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
@@ -140,6 +141,100 @@ def test_home_data_marks_runtime_connected_device_online_via_runtime_credentials
     home_data = response.json()["data"]
     s7 = next(device for device in home_data["devices"] if device["duid"] == "1OVJHS7cL6XxkYkoOGr2Hw")
     assert s7["online"] is True
+
+
+def test_home_data_response_does_not_emit_empty_snake_case_received_devices(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+
+    paths.runtime_dir.mkdir(parents=True, exist_ok=True)
+    paths.state_dir.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps(
+            {
+                "home": {"id": 1316433, "name": "My Home"},
+                "received_devices": [
+                    {
+                        "duid": "6HL2zfniaoYYV01CkVuhkO",
+                        "name": "Roborock Qrevo MaxV 2",
+                        "model": "roborock.vacuum.a87",
+                        "product_id": "5gUei3OIJIXVD3eD85Balg",
+                        "local_key": "xPd5Dr8CGGqtdDlH",
+                        "online": True,
+                        "pv": "1.0",
+                        "share": True,
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _seed_cloud_snapshot(
+        paths.cloud_snapshot_path,
+        {
+            "id": 1316433,
+            "name": "My Home",
+            "receivedDevices": [
+                {
+                    "duid": "6HL2zfniaoYYV01CkVuhkO",
+                    "name": "Roborock Qrevo MaxV 2",
+                    "productId": "5gUei3OIJIXVD3eD85Balg",
+                    "share": True,
+                }
+            ],
+            "products": [
+                {
+                    "id": "5gUei3OIJIXVD3eD85Balg",
+                    "name": "Roborock Qrevo MaxV",
+                    "model": "roborock.vacuum.a87",
+                    "category": "robot.vacuum.cleaner",
+                }
+            ],
+        },
+    )
+    paths.runtime_credentials_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "devices": [
+                    {
+                        "did": "1103821560705",
+                        "duid": "6HL2zfniaoYYV01CkVuhkO",
+                        "name": "Roborock Qrevo MaxV 2",
+                        "model": "roborock.vacuum.a87",
+                        "product_id": "5gUei3OIJIXVD3eD85Balg",
+                        "localkey": "xPd5Dr8CGGqtdDlH",
+                        "local_key_source": "inventory_cloud",
+                        "device_mqtt_usr": "c25b14ceac358d2a",
+                        "updated_at": "2026-03-17T22:50:00+00:00",
+                        "last_nc_at": "",
+                        "last_mqtt_seen_at": "",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    supervisor.refresh_inventory_state()
+
+    client = TestClient(supervisor.app)
+    response = client.get("/v3/user/homes/1316433", headers=_hawk_headers(paths.cloud_snapshot_path, "/v3/user/homes/1316433"))
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert "received_devices" not in payload["data"]
+    assert "received_devices" not in payload["result"]
+
+    parsed_home = HomeData.from_dict(payload["result"])
+    assert parsed_home is not None
+    assert len(parsed_home.received_devices) == 1
+    assert len(parsed_home.device_products) == 1
+    assert "6HL2zfniaoYYV01CkVuhkO" in parsed_home.device_products
 
 
 def test_device_detail_uses_runtime_connection_and_preserves_inventory_fields(tmp_path: Path) -> None:
