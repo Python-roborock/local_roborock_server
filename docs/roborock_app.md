@@ -2,6 +2,10 @@
 
 Use this after [Installation](installation.md) and [Onboarding](onboarding.md) if you want the official Roborock app to talk to your local stack.
 
+During the MITM login step, the script now needs to sync the captured protocol-auth session back to your server. Pass `admin.session_secret` from `config.toml` as `--sync-secret`. That sync callback always uses the `--local-api` host and port.
+
+The launcher now preflights that callback before starting `mitmweb`. If the `--local-api` host cannot be reached, if the TLS certificate does not validate for that host, or if the sync secret is rejected, the script exits immediately instead of letting you proceed into a broken login flow.
+
 ## iPhone
 
 1. Log out of the app on your phone.
@@ -9,8 +13,20 @@ Use this after [Installation](installation.md) and [Onboarding](onboarding.md) i
 2. On a machine that is not running the server, run the MITM script:
 
    ```bash
-   uv run mitm_redirect.py --local-api api-roborock.example.com
+   uv run mitm_redirect.py --local-api api-roborock.example.com --sync-secret YOUR_ADMIN_SESSION_SECRET
    ```
+
+   Use the `admin.session_secret` value from `config.toml` for `YOUR_ADMIN_SESSION_SECRET`.
+
+   If you use the default local stack ports, host-only values are fine here: the script assumes HTTPS `:555` and MQTT TLS `:8881`.
+
+   If your stack uses custom ports, include them directly. For example:
+
+   ```bash
+   uv run mitm_redirect.py --local-api api-roborock.example.com:8443 --local-mqtt api-roborock.example.com:9443 --sync-secret YOUR_ADMIN_SESSION_SECRET
+   ```
+
+   The `--local-api` hostname must resolve from the MITM machine and match the HTTPS certificate served by your local stack. A raw IP such as `127.0.0.1` will fail unless your certificate is valid for that IP.
 
 3. Install the WireGuard app on your phone. Then tap the plus button in WireGuard, choose to add from QR code, and scan the code at `http://127.0.0.1:8081/#/capture`.
 
@@ -100,8 +116,20 @@ Make sure you have the following installed:
 8. On a machine that is not running the server, run the MITM script:
 
    ```bash
-      uv run mitm_redirect.py --local-api api-roborock.example.com
+      uv run mitm_redirect.py --local-api api-roborock.example.com --sync-secret YOUR_ADMIN_SESSION_SECRET
    ```
+
+   Use the `admin.session_secret` value from `config.toml` for `YOUR_ADMIN_SESSION_SECRET`.
+
+   If you use the default local stack ports, host-only values are fine here: the script assumes HTTPS `:555` and MQTT TLS `:8881`.
+
+   If your stack uses custom ports, include them directly. For example:
+
+   ```bash
+      uv run mitm_redirect.py --local-api api-roborock.example.com:8443 --local-mqtt api-roborock.example.com:9443 --sync-secret YOUR_ADMIN_SESSION_SECRET
+   ```
+
+   The `--local-api` hostname must resolve from the MITM machine and match the HTTPS certificate served by your local stack. A raw IP such as `127.0.0.1` will fail unless your certificate is valid for that IP.
 
 9. Install the WireGuard app on your phone. Then tap the plus button in WireGuard, choose to add from QR code, and scan the code at `http://127.0.0.1:8081/#/capture`.
 

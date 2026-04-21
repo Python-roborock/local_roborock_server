@@ -45,11 +45,24 @@ from .backend import (
     start_broker,
     strip_roborock_prefix,
 )
+from shared.protocol_auth import ProtocolAuthStore
+from https_server.routes.auth.service import (
+    build_login_data_response,
+    cloud_login_data_required_response,
+)
 from .bundled_backend.shared.zone_ranges_store import ZoneRangesStore
-from .security import AdminSessionManager
+from .security import AdminSessionManager, verify_password
 
 
 ALL_HTTP_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
+PROTOCOL_AUTH_SYNC_PATH = "/internal/protocol/user-data"
+PROTOCOL_AUTH_SYNC_SECRET_HEADER = "x-local-sync-secret"
+_REGION_COUNTRY_CODE = {
+    "US": "1",
+    "CN": "86",
+    "EU": "49",
+    "RU": "7",
+}
 PROJECT_SUPPORT = {
     "title": "Support This Project",
     "text": (
@@ -64,7 +77,7 @@ PROJECT_SUPPORT = {
             "url": "https://us.roborock.com/discount/RRSAP202602071713342D18X?redirect=%2Fpages%2Froborock-store%3Fuuid%3DEQe6p1jdZczHEN4Q0nbsG9sZRm0RK1gW5eSM%252FCzcW4Q%253D",
         },
         {"label": "Roborock Affiliate", "url": "https://roborock.pxf.io/B0VYV9"},
-        {"label": "Amazon Affiliate", "url": "https://amzn.to/4bGfG6B"},
+        {"label": "Amazon Affiliate", "url": "https://amzn.to/4cx8zg3"},
     ],
 }
 
@@ -73,11 +86,16 @@ def _request_query_params(request: Request) -> dict[str, list[str]]:
     return parse_qs(request.url.query, keep_blank_values=True)
 
 
-def _request_body_params(raw_body: bytes) -> tuple[str, dict[str, list[str]]]:
+def _request_body_params(raw_body: bytes, *, content_type: str = "") -> tuple[str, dict[str, list[str]]]:
     body_text = raw_body.decode("utf-8", errors="replace")
     if not body_text:
         return "", {}
-    return body_text, parse_qs(body_text, keep_blank_values=True)
+    body_params = parse_qs(body_text, keep_blank_values=True)
+    stripped = body_text.lstrip()
+    if "json" in content_type.lower() or stripped.startswith(("{", "[")):
+        body_params = dict(body_params)
+        body_params.setdefault("__json", [body_text])
+    return body_text, body_params
 
 
 def _pick_first_header(headers: dict[str, str], keys: tuple[str, ...]) -> str:
@@ -86,6 +104,47 @@ def _pick_first_header(headers: dict[str, str], keys: tuple[str, ...]) -> str:
         if value:
             return value
     return ""
+
+
+def _request_json_object(body_params: dict[str, list[str]]) -> dict[str, Any]:
+    for raw in body_params.get("__json") or []:
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _request_value(
+    query_params: dict[str, list[str]],
+    body_params: dict[str, list[str]],
+    *keys: str,
+) -> str:
+    json_body = _request_json_object(body_params)
+    for key in keys:
+        for value in query_params.get(key, []):
+            candidate = str(value).strip()
+            if candidate:
+                return candidate
+        for value in body_params.get(key, []):
+            candidate = str(value).strip()
+            if candidate:
+                return candidate
+        json_value = json_body.get(key)
+        candidate = str(json_value).strip() if json_value is not None else ""
+        if candidate:
+            return candidate
+    return ""
+
+
+def _headers_for_log(headers: dict[str, str]) -> dict[str, str]:
+    normalized = dict(headers)
+    for key in list(normalized):
+        if str(key).strip().lower() == PROTOCOL_AUTH_SYNC_SECRET_HEADER:
+            normalized[key] = "<redacted>"
+    return normalized
 
 
 def _extract_explicit_pid(
@@ -267,6 +326,10 @@ class ReleaseSupervisor:
             inventory_path=self.paths.inventory_path,
             snapshot_path=self.paths.cloud_snapshot_path,
         )
+        self.protocol_auth = ProtocolAuthStore(
+            self.paths.cloud_snapshot_path,
+            session_store_path=self.paths.protocol_auth_sessions_path,
+        )
 
         self.loggers = self._setup_loggers()
         if not self.paths.device_key_state_path.exists():
@@ -327,17 +390,24 @@ class ReleaseSupervisor:
             mqtt_backend_port=self.config.broker.port,
         )
         self.runtime_credentials.sync_inventory()
+        recovered_device_passwords = self.runtime_credentials.backfill_device_mqtt_passwords(
+            self.paths.runtime_dir / "mqtt_server.log"
+        )
+        if recovered_device_passwords:
+            self.root_logger.info("Recovered %d device MQTT password(s) from mqtt_server.log", recovered_device_passwords)
 
         self.context = ServerContext(
             api_host=self.config.network.stack_fqdn,
             mqtt_host=self.config.network.stack_fqdn,
             wood_host=self.config.network.stack_fqdn,
             region=self.config.network.region,
+            protocol_login_email=self.config.admin.protocol_login_email,
             localkey=self._bootstrap_credentials["localkey"],
             duid=self._bootstrap_credentials["duid"],
             mqtt_usr=self._bootstrap_credentials["mqtt_usr"],
             mqtt_passwd=self._bootstrap_credentials["mqtt_passwd"],
             mqtt_clientid=self._bootstrap_credentials["mqtt_clientid"],
+            https_port=self.config.network.https_port,
             mqtt_tls_port=self.config.network.mqtt_tls_port,
             http_jsonl=self.paths.http_jsonl_path,
             mqtt_jsonl=self.paths.mqtt_jsonl_path,
@@ -408,6 +478,346 @@ class ReleaseSupervisor:
         if not self._authenticated(request):
             raise HTTPException(status_code=401, detail="Authentication required")
 
+    def protocol_auth_enabled(self) -> bool:
+        return bool(self.config.admin.protocol_auth_enabled)
+
+    def _protocol_login_email(self) -> str:
+        return str(self.config.admin.protocol_login_email or "").strip()
+
+    @staticmethod
+    def _protocol_login_pin_valid(pin: str) -> bool:
+        normalized = str(pin or "").strip()
+        return len(normalized) == 6 and normalized.isdigit()
+
+    def _protocol_login_email_matches(self, email: str) -> bool:
+        configured_email = self._protocol_login_email()
+        normalized_email = str(email or "").strip()
+        return bool(
+            configured_email
+            and normalized_email
+            and configured_email.casefold() == normalized_email.casefold()
+        )
+
+    def _protocol_login_pin_matches(self, pin: str) -> bool:
+        normalized_pin = str(pin or "").strip()
+        return self._protocol_login_pin_valid(normalized_pin) and verify_password(
+            normalized_pin,
+            self.config.admin.protocol_login_pin_hash,
+        )
+
+    @staticmethod
+    def _default_country_code_for_region(region: str) -> str:
+        return _REGION_COUNTRY_CODE.get(str(region or "").upper(), "1")
+
+    def _local_protocol_identity(self) -> dict[str, Any]:
+        email = self._protocol_login_email()
+        normalized_email = email.casefold()
+        digest = hashlib.sha256(normalized_email.encode("utf-8")).hexdigest()
+        uid = (int(digest[:12], 16) % 900_000_000) + 100_000_000
+        region_upper = self.config.network.region.upper()
+        return {
+            "uid": uid,
+            "rruid": f"rrls-{digest[:20]}",
+            "email": email,
+            "country": region_upper,
+            "countrycode": self._default_country_code_for_region(region_upper),
+            "nickname": "Local User",
+            "hasPassword": True,
+            "rriot": {
+                "r": {
+                    "r": region_upper,
+                }
+            },
+        }
+
+    @staticmethod
+    def _normalized_path(path: str) -> str:
+        normalized = str(path or "").rstrip("/")
+        return normalized or "/"
+
+    @classmethod
+    def _is_public_protocol_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/",
+            "/region",
+            "/time",
+            "/location",
+            "/nc/prepare",
+            "/api/v1/getUrlByEmail",
+            "/api/v1/ml/c",
+            "/api/v1/sendEmailCode",
+            "/api/v1/sendSmsCode",
+            "/api/v1/validateEmailCode",
+            "/api/v1/validateSmsCode",
+            "/api/v1/loginWithCode",
+            "/api/v3/key/sign",
+            "/api/v3/sms/sendCode",
+            "/api/v4/key/captcha",
+            "/api/v4/email/code/send",
+            "/api/v4/sms/code/send",
+            "/api/v4/email/code/validate",
+            "/api/v4/sms/code/validate",
+            "/api/v4/auth/email/login/code",
+            "/api/v4/auth/phone/login/code",
+            "/api/v4/auth/mobile/login/code",
+            "/api/v5/email/code/send",
+            "/api/v5/sms/code/send",
+            "/api/v5/email/code/validate",
+            "/api/v5/sms/code/validate",
+            "/api/v5/auth/email/login/code",
+            "/api/v5/auth/phone/login/code",
+            "/api/v5/auth/mobile/login/code",
+            "/api/v1/country/version",
+            "/api/v1/country/list",
+            "/api/v1/appconfig",
+            "/api/v2/appconfig",
+            "/api/v1/appfeatureplugin",
+            "/api/v1/appplugin",
+            "/api/v1/plugins",
+            "/api/v4/agreement/latest",
+        }
+
+    @classmethod
+    def _is_code_send_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/api/v1/sendEmailCode",
+            "/api/v1/sendSmsCode",
+            "/api/v3/sms/sendCode",
+            "/api/v4/email/code/send",
+            "/api/v4/sms/code/send",
+            "/api/v5/email/code/send",
+            "/api/v5/sms/code/send",
+        }
+
+    @classmethod
+    def _is_code_validate_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/api/v1/validateEmailCode",
+            "/api/v1/validateSmsCode",
+            "/api/v4/email/code/validate",
+            "/api/v4/sms/code/validate",
+            "/api/v5/email/code/validate",
+            "/api/v5/sms/code/validate",
+        }
+
+    @classmethod
+    def _is_code_submit_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/api/v1/loginWithCode",
+            "/api/v4/auth/email/login/code",
+            "/api/v4/auth/phone/login/code",
+            "/api/v4/auth/mobile/login/code",
+            "/api/v5/auth/email/login/code",
+            "/api/v5/auth/phone/login/code",
+            "/api/v5/auth/mobile/login/code",
+        }
+
+    @classmethod
+    def _is_password_login_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/api/v1/login",
+            "/api/v3/auth/email/login",
+            "/api/v3/auth/phone/login",
+            "/api/v3/auth/mobile/login",
+            "/api/v5/auth/email/login/pwd",
+            "/api/v5/auth/phone/login/pwd",
+            "/api/v5/auth/mobile/login/pwd",
+        }
+
+    @classmethod
+    def _is_password_reset_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/api/v5/user/password/mobile/reset",
+            "/api/v5/user/password/email/reset",
+        }
+
+    @classmethod
+    def _required_protocol_auth(cls, clean_path: str) -> str | None:
+        normalized = cls._normalized_path(clean_path)
+        if cls._is_public_protocol_path(normalized):
+            return None
+        if normalized.startswith(("/user/", "/v2/user/", "/v3/user/")):
+            return "hawk"
+        if normalized.startswith("/api/"):
+            return "token"
+        return None
+
+    def _required_protocol_auth_for_request(self, clean_path: str) -> str | None:
+        if not self.protocol_auth_enabled():
+            return None
+        return self._required_protocol_auth(clean_path)
+
+    def _login_send_success_payload(self) -> dict[str, Any]:
+        return {"code": 200, "msg": "success", "data": {"sent": True, "validForSec": 300}}
+
+    def _login_validate_success_payload(self) -> dict[str, Any]:
+        return {"code": 200, "msg": "success", "data": {"valid": True}}
+
+    @staticmethod
+    def _invalid_login_credentials_payload(reason: str) -> tuple[int, dict[str, Any]]:
+        return 401, {
+            "code": 2010,
+            "msg": "invalid_credentials",
+            "data": {"reason": reason, "auth": "code"},
+        }
+
+    @staticmethod
+    def _unsupported_password_login_payload() -> dict[str, Any]:
+        return {
+            "code": 40031,
+            "msg": "password_login_not_supported",
+            "data": {"reason": "code_login_only"},
+        }
+
+    @staticmethod
+    def _protocol_auth_failure_response(reason: str, auth_kind: str) -> tuple[int, dict[str, Any]]:
+        if auth_kind == "token":
+            # Home Assistant's python-roborock client only starts reauth when
+            # Roborock's web API returns the invalid-credentials code it
+            # already maps to RoborockInvalidCredentials.
+            return 401, {
+                "code": 2010,
+                "msg": "invalid_credentials",
+                "data": {"reason": reason, "auth": auth_kind},
+            }
+        return 401, {
+            "code": 40101,
+            "msg": "authentication_required",
+            "data": {"reason": reason, "auth": auth_kind},
+        }
+
+    def _protocol_auth_not_ready_payload(self) -> tuple[int, dict[str, Any]]:
+        availability = self.protocol_auth.availability()
+        payload = cloud_login_data_required_response(
+            self.context,
+            reason=availability.reason,
+            missing_fields=list(availability.missing_fields) or None,
+        )
+        return 412, payload
+
+    @classmethod
+    def _is_protocol_sync_path(cls, clean_path: str) -> bool:
+        return cls._normalized_path(clean_path) == PROTOCOL_AUTH_SYNC_PATH
+
+    @staticmethod
+    def _protocol_sync_success_payload(*, source: str) -> dict[str, Any]:
+        return {
+            "code": 200,
+            "msg": "success",
+            "data": {"stored": True, "source": source},
+        }
+
+    @staticmethod
+    def _protocol_sync_failure_payload(*, reason: str, detail: str = "") -> dict[str, Any]:
+        payload: dict[str, Any] = {"reason": reason}
+        if detail:
+            payload["detail"] = detail
+        return {"code": 40041, "msg": "protocol_sync_failed", "data": payload}
+
+    def _sync_secret_matches(self, headers: dict[str, str]) -> bool:
+        provided = _pick_first_header(headers, ("x-local-sync-secret", "X-Local-Sync-Secret"))
+        expected = str(self.config.admin.session_secret or "").strip()
+        return bool(expected) and secrets.compare_digest(provided, expected)
+
+    async def _handle_protocol_sync_route(
+        self,
+        *,
+        method: str,
+        clean_path: str,
+        headers: dict[str, str],
+        body_params: dict[str, list[str]],
+    ) -> tuple[str, int, dict[str, Any]] | None:
+        if not self._is_protocol_sync_path(clean_path):
+            return None
+        if method.upper() != "POST":
+            return "protocol_auth_sync_method_not_allowed", 405, self._protocol_sync_failure_payload(
+                reason="method_not_allowed"
+            )
+        if not self._sync_secret_matches(headers):
+            return "protocol_auth_sync_unauthorized", 401, self._protocol_sync_failure_payload(
+                reason="invalid_sync_secret"
+            )
+
+        payload = _request_json_object(body_params)
+        user_data = payload.get("user_data")
+        if not isinstance(user_data, dict):
+            return "protocol_auth_sync_invalid_payload", 400, self._protocol_sync_failure_payload(
+                reason="missing_user_data"
+            )
+
+        source = str(payload.get("source") or "mitm_cloud_login").strip() or "mitm_cloud_login"
+        try:
+            self.protocol_auth.upsert_user_data(user_data, source=source)
+        except ValueError as exc:
+            return "protocol_auth_sync_invalid_payload", 400, self._protocol_sync_failure_payload(
+                reason="invalid_user_data",
+                detail=str(exc),
+            )
+
+        return "protocol_auth_sync", 200, self._protocol_sync_success_payload(source=source)
+
+    async def _handle_protocol_login_route(
+        self,
+        *,
+        clean_path: str,
+        query_params: dict[str, list[str]],
+        body_params: dict[str, list[str]],
+    ) -> tuple[str, int, dict[str, Any]] | None:
+        normalized = self._normalized_path(clean_path)
+        if self._is_code_send_path(normalized):
+            return "protocol_login_request_code", 200, self._login_send_success_payload()
+
+        if self._is_code_validate_path(normalized):
+            return "protocol_login_validate_code", 200, self._login_validate_success_payload()
+
+        if self._is_code_submit_path(normalized):
+            account = _request_value(
+                query_params,
+                body_params,
+                "email",
+                "username",
+                "account",
+                "mobile",
+                "phone",
+            )
+            code = _request_value(
+                query_params,
+                body_params,
+                "code",
+                "verifyCode",
+                "emailCode",
+                "smsCode",
+            )
+            if not self._protocol_login_email_matches(account):
+                status_code, payload = self._invalid_login_credentials_payload("invalid_login_email")
+                return "protocol_login_submit_code", status_code, payload
+            if not self._protocol_login_pin_matches(code):
+                status_code, payload = self._invalid_login_credentials_payload("invalid_login_pin")
+                return "protocol_login_submit_code", status_code, payload
+            try:
+                issued_user_data = self.protocol_auth.issue_local_session(
+                    self._local_protocol_identity(),
+                    source="protocol_code_login",
+                )
+            except ValueError as exc:
+                return "protocol_login_submit_code", 400, {
+                    "code": 40023,
+                    "msg": "local_session_issue_failed",
+                    "data": {"error": str(exc)},
+                }
+            return "protocol_login_submit_code", 200, build_login_data_response(self.context, issued_user_data)
+
+        if self._is_password_login_path(normalized) or self._is_password_reset_path(normalized):
+            return "protocol_login_password_unsupported", 400, self._unsupported_password_login_payload()
+
+        return None
+
     async def _handle_roborock_request(self, request: Request) -> Response:
         host = (request.headers.get("host") or "").strip()
         group = classify_host(host)
@@ -415,14 +825,18 @@ class ReleaseSupervisor:
         raw_body = await request.body()
         clean_path = strip_roborock_prefix(request.url.path)
         query_params = _request_query_params(request)
-        body_text, body_params = _request_body_params(raw_body)
+        body_text, body_params = _request_body_params(
+            raw_body,
+            content_type=str(request.headers.get("content-type") or ""),
+        )
         body_sha256 = hashlib.sha256(raw_body).hexdigest()
+        is_protocol_sync_request = self._is_protocol_sync_path(clean_path)
 
         if host:
-            host_no_port = host.split(":", 1)[0].strip()
-            if host_no_port:
+            host_authority = host.strip()
+            if host_authority:
                 query_params = {key: list(values) for key, values in query_params.items()}
-                query_params.setdefault("__host", [host_no_port])
+                query_params.setdefault("__host", [host_authority])
 
         explicit_did = self.context.extract_explicit_did(query_params, body_params)
         explicit_pid = _extract_explicit_pid(query_params, body_params)
@@ -476,17 +890,20 @@ class ReleaseSupervisor:
             "raw_path": raw_path,
             "clean_path": clean_path,
             "query": {key: value for key, value in query_params.items()},
-            "headers": dict(request.headers),
+            "headers": _headers_for_log(dict(request.headers)),
             "body_len": len(raw_body),
             "body_sha256": body_sha256,
-            "body_b64": base64.b64encode(raw_body).decode("ascii"),
             "remote": f"{client_host}:{client_port}",
         }
         if explicit_did:
             entry["did"] = explicit_did
         if explicit_pid:
             entry["pid"] = explicit_pid
-        if body_text:
+        if is_protocol_sync_request:
+            entry["body_redacted"] = True
+        else:
+            entry["body_b64"] = base64.b64encode(raw_body).decode("ascii")
+        if body_text and not is_protocol_sync_request:
             entry["body_text"] = body_text
             try:
                 entry["body_json"] = json.loads(body_text)
@@ -500,6 +917,151 @@ class ReleaseSupervisor:
                 "query_sample_added": query_sample_added,
                 "header_sample_added": header_sample_added,
             }
+
+        custom_sync = await self._handle_protocol_sync_route(
+            method=request.method,
+            clean_path=clean_path,
+            headers=dict(request.headers),
+            body_params=body_params,
+        )
+        if custom_sync is not None:
+            route_name, status_code, response_payload = custom_sync
+            entry["route"] = route_name
+            entry["response_json"] = response_payload
+            try:
+                self.runtime_state.record_http_event(
+                    event_time=str(entry["time"]),
+                    route_name=route_name,
+                    clean_path=clean_path,
+                    raw_path=raw_path,
+                    method=request.method,
+                    host=host,
+                    remote=str(entry["remote"]),
+                    did=explicit_did or None,
+                    pid=explicit_pid or None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("runtime_state record_http_event failed: %s", exc)
+            append_jsonl(self.context.http_jsonl, entry)
+            logger.info(
+                "%s %s host=%s route=%s status=%d body_sha256=%s",
+                request.method,
+                clean_path,
+                host or "-",
+                route_name,
+                status_code,
+                body_sha256[:16],
+            )
+            return JSONResponse(response_payload, status_code=status_code)
+
+        custom_login = await self._handle_protocol_login_route(
+            clean_path=clean_path,
+            query_params=query_params,
+            body_params=body_params,
+        )
+        if custom_login is not None:
+            route_name, status_code, response_payload = custom_login
+            entry["route"] = route_name
+            entry["response_json"] = response_payload
+            try:
+                self.runtime_state.record_http_event(
+                    event_time=str(entry["time"]),
+                    route_name=route_name,
+                    clean_path=clean_path,
+                    raw_path=raw_path,
+                    method=request.method,
+                    host=host,
+                    remote=str(entry["remote"]),
+                    did=explicit_did or None,
+                    pid=explicit_pid or None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("runtime_state record_http_event failed: %s", exc)
+            append_jsonl(self.context.http_jsonl, entry)
+            logger.info(
+                "%s %s host=%s route=%s status=%d body_sha256=%s",
+                request.method,
+                clean_path,
+                host or "-",
+                route_name,
+                status_code,
+                body_sha256[:16],
+            )
+            return JSONResponse(response_payload, status_code=status_code)
+
+        required_auth = self._required_protocol_auth_for_request(clean_path)
+        if required_auth is not None:
+            availability = self.protocol_auth.availability()
+            if availability.user is None:
+                status_code, response_payload = self._protocol_auth_not_ready_payload()
+                route_name = f"{required_auth}_auth_not_ready"
+                entry["route"] = route_name
+                entry["response_json"] = response_payload
+                try:
+                    self.runtime_state.record_http_event(
+                        event_time=str(entry["time"]),
+                        route_name=route_name,
+                        clean_path=clean_path,
+                        raw_path=raw_path,
+                        method=request.method,
+                        host=host,
+                        remote=str(entry["remote"]),
+                        did=explicit_did or None,
+                        pid=explicit_pid or None,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("runtime_state record_http_event failed: %s", exc)
+                append_jsonl(self.context.http_jsonl, entry)
+                logger.info(
+                    "%s %s host=%s route=%s status=%d body_sha256=%s",
+                    request.method,
+                    clean_path,
+                    host or "-",
+                    route_name,
+                    status_code,
+                    body_sha256[:16],
+                )
+                return JSONResponse(response_payload, status_code=status_code)
+
+            if required_auth == "token":
+                authenticated, auth_reason = self.protocol_auth.verify_token(request.headers)
+            else:
+                authenticated, auth_reason = self.protocol_auth.verify_hawk(
+                    path=self._normalized_path(clean_path),
+                    query_params=query_params,
+                    body_params=body_params,
+                    headers=request.headers,
+                )
+            if not authenticated:
+                route_name = f"{required_auth}_auth_failed"
+                status_code, response_payload = self._protocol_auth_failure_response(auth_reason, required_auth)
+                entry["route"] = route_name
+                entry["response_json"] = response_payload
+                try:
+                    self.runtime_state.record_http_event(
+                        event_time=str(entry["time"]),
+                        route_name=route_name,
+                        clean_path=clean_path,
+                        raw_path=raw_path,
+                        method=request.method,
+                        host=host,
+                        remote=str(entry["remote"]),
+                        did=explicit_did or None,
+                        pid=explicit_pid or None,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("runtime_state record_http_event failed: %s", exc)
+                append_jsonl(self.context.http_jsonl, entry)
+                logger.info(
+                    "%s %s host=%s route=%s status=%d body_sha256=%s",
+                    request.method,
+                    clean_path,
+                    host or "-",
+                    route_name,
+                    status_code,
+                    body_sha256[:16],
+                )
+                return JSONResponse(response_payload, status_code=status_code)
 
         try:
             plugin_dispatch = await dispatch_plugin_zip_request(
@@ -628,6 +1190,7 @@ class ReleaseSupervisor:
         health["connected_vacuums"] = [vac for vac in merged_vacuums if vac.get("connected")]
         return {
             "health": health,
+            "auth": self._auth_payload(),
             "pairing": self.runtime_state.pairing_snapshot(),
             "support": PROJECT_SUPPORT,
             "inventory_path": str(self.paths.inventory_path),
@@ -671,6 +1234,101 @@ class ReleaseSupervisor:
             "devices": devices,
             "generated_at": utcnow_iso(),
         }
+
+    @staticmethod
+    def _redacted_protocol_session(record: dict[str, Any]) -> dict[str, str]:
+        user_data = record.get("user_data") if isinstance(record.get("user_data"), dict) else record
+        if not isinstance(user_data, dict):
+            return {}
+        rriot = user_data.get("rriot") if isinstance(user_data.get("rriot"), dict) else {}
+        return {
+            "rruid": str(user_data.get("rruid") or "").strip(),
+            "hawk_id": str(rriot.get("u") or "").strip(),
+            "hawk_session": str(rriot.get("s") or "").strip(),
+            "source": str(record.get("source") or user_data.get("source") or "").strip(),
+            "updated_at_utc": str(record.get("updated_at_utc") or user_data.get("updated_at_utc") or "").strip(),
+        }
+
+    def _pending_device_mqtt_recovery_payload(self) -> list[dict[str, str]]:
+        devices: list[dict[str, str]] = []
+        for device in self.runtime_credentials.recovery_pending_devices():
+            devices.append(
+                {
+                    "did": str(device.get("did") or "").strip(),
+                    "duid": str(device.get("duid") or "").strip(),
+                    "name": str(device.get("name") or device.get("duid") or device.get("did") or "").strip(),
+                    "model": str(device.get("model") or "").strip(),
+                    "device_mqtt_usr": str(device.get("device_mqtt_usr") or "").strip(),
+                }
+            )
+        return devices
+
+    def _auth_payload(self) -> dict[str, Any]:
+        sessions = [
+            session
+            for session in (
+                self._redacted_protocol_session(record)
+                for record in self.protocol_auth.persisted_sessions()
+            )
+            if session.get("hawk_id") and session.get("hawk_session")
+        ]
+        return {
+            "protocol_auth_enabled": self.protocol_auth_enabled(),
+            "protocol_sessions": sessions,
+            "protocol_session_count": len(sessions),
+            "pending_device_mqtt_recovery": self._pending_device_mqtt_recovery_payload(),
+        }
+
+    def _rewrite_admin_bool_setting(self, *, key: str, value: bool) -> None:
+        config_path = self.paths.config_file
+        lines = config_path.read_text(encoding="utf-8").splitlines()
+        rendered_value = "true" if value else "false"
+        output: list[str] = []
+        in_admin_section = False
+        admin_section_found = False
+        updated = False
+
+        for line in lines:
+            stripped = line.strip()
+            is_section = stripped.startswith("[") and stripped.endswith("]")
+            if is_section and in_admin_section and not updated:
+                output.append(f"{key} = {rendered_value}")
+                updated = True
+            if stripped == "[admin]":
+                admin_section_found = True
+                in_admin_section = True
+            elif is_section:
+                in_admin_section = False
+            if in_admin_section:
+                is_comment = stripped.startswith(("#", ";"))
+                if not is_comment and "=" in line:
+                    existing_key, _existing_value = line.split("=", 1)
+                    if existing_key.strip() == key:
+                        indent = line[: len(line) - len(line.lstrip())]
+                        output.append(f"{indent}{key} = {rendered_value}")
+                        updated = True
+                        continue
+            output.append(line)
+
+        if admin_section_found and in_admin_section and not updated:
+            output.append(f"{key} = {rendered_value}")
+            updated = True
+
+        if not admin_section_found:
+            if output and output[-1].strip():
+                output.append("")
+            output.extend(["[admin]", f"{key} = {rendered_value}"])
+
+        config_path.write_text("\n".join(output) + "\n", encoding="utf-8")
+
+    def set_protocol_auth_enabled(self, enabled: bool) -> dict[str, Any]:
+        normalized_enabled = bool(enabled)
+        self._rewrite_admin_bool_setting(key="protocol_auth_enabled", value=normalized_enabled)
+        self.config = load_config(self.paths.config_file)
+        return self._auth_payload()
+
+    def remove_protocol_session(self, *, hawk_id: str, hawk_session: str) -> bool:
+        return self.protocol_auth.remove_session(hawk_id=hawk_id, hawk_session=hawk_session)
 
     def start_onboarding_session(self, *, duid: str) -> dict[str, Any]:
         normalized_duid = str(duid or "").strip()
@@ -746,11 +1404,17 @@ class ReleaseSupervisor:
 
     def _register_protocol_routes(self, app: FastAPI) -> None:
         @app.get("/ui/api/health")
-        async def ui_health() -> JSONResponse:
+        async def ui_health(request: Request) -> JSONResponse:
+            if not self.enable_standalone_admin:
+                return JSONResponse({"error": "Not Found"}, status_code=404)
+            self._require_admin(request)
             return JSONResponse(self._ui_health_payload())
 
         @app.get("/ui/api/vacuums")
-        async def ui_vacuums() -> JSONResponse:
+        async def ui_vacuums(request: Request) -> JSONResponse:
+            if not self.enable_standalone_admin:
+                return JSONResponse({"error": "Not Found"}, status_code=404)
+            self._require_admin(request)
             return JSONResponse(self._ui_vacuums_payload())
 
         @app.api_route("/", methods=list(ALL_HTTP_METHODS))
@@ -801,6 +1465,9 @@ class ReleaseSupervisor:
             localkey=self.context.localkey,
             logger=self.loggers["mqtt"],
             decoded_jsonl=self.context.mqtt_jsonl,
+            cloud_snapshot_path=self.paths.cloud_snapshot_path,
+            protocol_auth_sessions_path=self.paths.protocol_auth_sessions_path,
+            protocol_auth_enabled=self.protocol_auth_enabled,
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self.context.zone_ranges_store,
@@ -965,11 +1632,13 @@ def repair_runtime_identities(*, config_file: Path, links: list[str]) -> int:
             mqtt_host=config.network.stack_fqdn,
             wood_host=config.network.stack_fqdn,
             region=config.network.region,
+            protocol_login_email=config.admin.protocol_login_email,
             localkey=str(runtime_credentials.bootstrap_value("localkey", "") or ""),
             duid=str(runtime_credentials.bootstrap_value("duid", "") or ""),
             mqtt_usr=str(runtime_credentials.bootstrap_value("mqtt_usr", "") or ""),
             mqtt_passwd=str(runtime_credentials.bootstrap_value("mqtt_passwd", "") or ""),
             mqtt_clientid=str(runtime_credentials.bootstrap_value("mqtt_clientid", "") or ""),
+            https_port=config.network.https_port,
             mqtt_tls_port=config.network.mqtt_tls_port,
             http_jsonl=paths.http_jsonl_path,
             mqtt_jsonl=paths.mqtt_jsonl_path,

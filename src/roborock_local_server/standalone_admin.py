@@ -58,6 +58,13 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           <button id="fetchData">Fetch Data</button>
           <pre id="cloudResult">No cloud request yet.</pre>
         </section>
+        <section><h2>Protocol Auth</h2>
+          <label><input id="protocolAuthEnabled" type="checkbox" /> Require token/Hawk auth on protocol API routes</label>
+          <button id="saveAuth" style="margin-left:8px">Save</button>
+          <div id="authMeta" style="margin-top:8px;color:#333">Loading auth state...</div>
+          <div id="pendingRecovery" style="margin-top:8px"></div>
+          <div id="sessionList" style="display:grid;gap:8px;margin-top:12px">Loading sessions...</div>
+        </section>
 
         <section><h2>Health</h2><pre id="health"></pre></section>
         <section><h2>Vacuums</h2><pre id="vacuums"></pre></section>
@@ -128,11 +135,73 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
             container.appendChild(card);
           }}
         }}
+        function renderAuth(auth) {{
+          const enabled = Boolean(auth.protocol_auth_enabled);
+          document.getElementById("protocolAuthEnabled").checked = enabled;
+          document.getElementById("authMeta").textContent =
+            `Protocol auth: ${{enabled ? "Enabled" : "Disabled"}}. Persisted sessions: ${{Number(auth.protocol_session_count || 0)}}.`;
+
+          const pendingContainer = document.getElementById("pendingRecovery");
+          const pendingItems = Array.isArray(auth.pending_device_mqtt_recovery) ? auth.pending_device_mqtt_recovery : [];
+          if (!pendingItems.length) {{
+            pendingContainer.textContent = "No devices are waiting for MQTT password recovery.";
+          }} else {{
+            pendingContainer.textContent =
+              "Devices waiting for first reconnect MQTT password recovery: " +
+              pendingItems.map((item) => item.name || item.duid || item.did || item.device_mqtt_usr).join(", ");
+          }}
+
+          const sessionList = document.getElementById("sessionList");
+          sessionList.innerHTML = "";
+          const sessions = Array.isArray(auth.protocol_sessions) ? auth.protocol_sessions : [];
+          if (!sessions.length) {{
+            const empty = document.createElement("div");
+            empty.textContent = "No persisted protocol sessions.";
+            empty.style.color = "#555";
+            sessionList.appendChild(empty);
+            return;
+          }}
+          for (const session of sessions) {{
+            const card = document.createElement("div");
+            card.style.border = "1px solid #ddd";
+            card.style.borderRadius = "6px";
+            card.style.padding = "10px";
+            card.style.background = "#fafafa";
+            const label = document.createElement("div");
+            label.textContent = session.rruid || session.hawk_id || "Protocol session";
+            label.style.fontWeight = "600";
+            card.appendChild(label);
+
+            const detail = document.createElement("div");
+            detail.textContent = `source=${{session.source || "unknown"}} updated=${{session.updated_at_utc || "unknown"}} hawk_id=${{session.hawk_id || ""}}`;
+            detail.style.marginTop = "6px";
+            detail.style.fontSize = "12px";
+            card.appendChild(detail);
+
+            const remove = document.createElement("button");
+            remove.textContent = "Remove";
+            remove.style.marginTop = "8px";
+            remove.addEventListener("click", async () => {{
+              try {{
+                await fetchJson(
+                  `/admin/api/auth/sessions/${{encodeURIComponent(session.hawk_id || "")}}/${{encodeURIComponent(session.hawk_session || "")}}`,
+                  {{method: "DELETE"}}
+                );
+                await refresh();
+              }} catch (error) {{
+                document.getElementById("authMeta").textContent = error.message;
+              }}
+            }});
+            card.appendChild(remove);
+            sessionList.appendChild(card);
+          }}
+        }}
 
         async function refresh() {{
           const status = await fetchJson("/admin/api/status");
           document.getElementById("overall").textContent = status.health.overall_ok ? "Healthy" : "Needs Attention";
           document.getElementById("health").textContent = JSON.stringify(status.health, null, 2);
+          renderAuth(await fetchJson("/admin/api/auth"));
           const vacuums = await fetchJson("/admin/api/vacuums");
           renderVacuumSummary(vacuums.vacuums);
           document.getElementById("vacuums").textContent = JSON.stringify(vacuums.vacuums, null, 2);
@@ -162,6 +231,21 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
             await refresh();
           }} catch (error) {{
             document.getElementById("cloudResult").textContent = error.message;
+          }}
+        }});
+        document.getElementById("saveAuth").addEventListener("click", async () => {{
+          try {{
+            const payload = await fetchJson("/admin/api/auth", {{
+              method: "POST",
+              headers: {{"Content-Type":"application/json"}},
+              body: JSON.stringify({{
+                protocol_auth_enabled: document.getElementById("protocolAuthEnabled").checked
+              }})
+            }});
+            renderAuth(payload);
+            await refresh();
+          }} catch (error) {{
+            document.getElementById("authMeta").textContent = error.message;
           }}
         }});
 
@@ -224,6 +308,38 @@ def register_standalone_admin_routes(
     async def admin_vacuums(request: Request) -> JSONResponse:
         supervisor._require_admin(request)
         return JSONResponse(supervisor._vacuums_payload())
+
+    @app.get("/admin/api/auth")
+    async def admin_auth(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        return JSONResponse(supervisor._auth_payload())
+
+    @app.post("/admin/api/auth")
+    async def admin_auth_update(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
+        if "protocol_auth_enabled" not in body:
+            return JSONResponse({"error": "protocol_auth_enabled is required"}, status_code=400)
+        protocol_auth_enabled = body.get("protocol_auth_enabled")
+        if not isinstance(protocol_auth_enabled, bool):
+            return JSONResponse({"error": "protocol_auth_enabled must be a boolean"}, status_code=400)
+        try:
+            payload = supervisor.set_protocol_auth_enabled(protocol_auth_enabled)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse(payload)
+
+    @app.delete("/admin/api/auth/sessions/{hawk_id}/{hawk_session}")
+    async def admin_auth_delete_session(hawk_id: str, hawk_session: str, request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        if not supervisor.remove_protocol_session(hawk_id=hawk_id, hawk_session=hawk_session):
+            return JSONResponse({"error": "Protocol session not found"}, status_code=404)
+        return JSONResponse({"ok": True, "auth": supervisor._auth_payload()})
 
     @app.get("/admin/api/onboarding/devices")
     async def admin_onboarding_devices(request: Request) -> JSONResponse:

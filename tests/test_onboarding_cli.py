@@ -4,7 +4,15 @@ from io import StringIO
 
 import pytest
 
-from start_onboarding import GuidedOnboardingConfig, run_guided_onboarding
+from start_onboarding import (
+    ApiReachabilityError,
+    GuidedOnboardingConfig,
+    RemoteOnboardingApi,
+    normalize_api_base_url,
+    poll_session_until_progress,
+    run_guided_onboarding,
+    sanitize_stack_server,
+)
 
 
 class FakeApi:
@@ -46,6 +54,27 @@ class FakeApi:
     def delete_session(self, *, session_id: str) -> dict:
         self.deleted_sessions.append(session_id)
         return {"ok": True}
+
+
+class _RecordingResponse:
+    def __enter__(self) -> "_RecordingResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return b"{}"
+
+
+class _RecordingOpener:
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    def open(self, request, timeout=None, context=None):
+        _ = timeout, context
+        self.urls.append(request.full_url)
+        return _RecordingResponse()
 
 
 @pytest.fixture
@@ -323,3 +352,81 @@ def test_guided_onboarding_duplicate_names_still_selects_requested_device(
     assert api.started_duids == ["cloud-q7-b"]
     assert "cloud-q7-a" in output.getvalue()
     assert "cloud-q7-b" in output.getvalue()
+
+
+def test_poll_session_retries_while_machine_reconnects_to_normal_wifi() -> None:
+    class FlakyApi:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_session(self, *, session_id: str) -> dict:
+            assert session_id == "sess-1"
+            self.calls += 1
+            if self.calls <= 2:
+                raise ApiReachabilityError(
+                    "Unable to reach https://api-roborock.example.com: [Errno -2] Name or service not known"
+                )
+            return {
+                "session_id": session_id,
+                "query_samples": 2,
+                "has_public_key": True,
+                "public_key_state": "ready",
+                "connected": True,
+                "guidance": "Device paired and connected.",
+                "target": {"name": "Q7 Upstairs", "duid": "cloud-q7-a", "did": "1103821560705"},
+            }
+
+    api = FlakyApi()
+    output = StringIO()
+    sleeps: list[float] = []
+
+    result, status = poll_session_until_progress(
+        api,
+        session_id="sess-1",
+        baseline_samples=0,
+        baseline_status={
+            "session_id": "sess-1",
+            "query_samples": 0,
+            "has_public_key": False,
+            "public_key_state": "missing",
+            "connected": False,
+            "target": {"name": "Q7 Upstairs", "duid": "cloud-q7-a", "did": ""},
+        },
+        output=output,
+        poll_interval_seconds=5.0,
+        timeout_seconds=20.0,
+        sleep_fn=sleeps.append,
+    )
+
+    assert result == "connected"
+    assert status["connected"] is True
+    assert sleeps == [5.0, 5.0]
+    assert "The main server is not reachable yet from this machine." in output.getvalue()
+    assert "Still waiting for this machine to reach the main server again..." in output.getvalue()
+
+
+def test_onboarding_server_normalization_preserves_custom_ports() -> None:
+    assert normalize_api_base_url("api-roborock.example.com:8443") == "https://api-roborock.example.com:8443"
+    assert sanitize_stack_server("https://api-roborock.example.com:8443") == "roborock.example.com:8443/"
+
+
+def test_onboarding_server_normalization_defaults_to_port_555() -> None:
+    assert normalize_api_base_url("api-roborock.example.com") == "https://api-roborock.example.com:555"
+    assert sanitize_stack_server("https://api-roborock.example.com") == "roborock.example.com:555/"
+
+
+def test_remote_onboarding_api_uses_custom_port_base_url() -> None:
+    opener = _RecordingOpener()
+    api = RemoteOnboardingApi(
+        base_url="https://api-roborock.example.com:8443",
+        admin_password="secret",
+        opener=opener,
+    )
+
+    api.login()
+    api.list_devices()
+
+    assert opener.urls == [
+        "https://api-roborock.example.com:8443/admin/api/login",
+        "https://api-roborock.example.com:8443/admin/api/onboarding/devices",
+    ]

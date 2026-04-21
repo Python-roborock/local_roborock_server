@@ -16,7 +16,8 @@ RUN mkdir -p /opt/acme.sh \
 
 WORKDIR /app
 
-COPY . /app
+COPY pyproject.toml README.md /app/
+COPY src /app/src
 
 RUN pip install --no-cache-dir /app
 

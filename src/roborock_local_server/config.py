@@ -53,6 +53,9 @@ class AdminConfig:
     password_hash: str
     session_secret: str
     session_ttl_seconds: int
+    protocol_auth_enabled: bool
+    protocol_login_email: str
+    protocol_login_pin_hash: str
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,7 @@ class AppPaths:
     acme_dir: Path
     inventory_path: Path
     cloud_snapshot_path: Path
+    protocol_auth_sessions_path: Path
     runtime_credentials_path: Path
     device_key_state_path: Path
     http_jsonl_path: Path
@@ -145,8 +149,8 @@ def load_config(path: str | Path) -> AppConfig:
         network=NetworkConfig(
             stack_fqdn=_require_non_empty(network.get("stack_fqdn"), "network.stack_fqdn"),
             bind_host=str(network.get("bind_host", "0.0.0.0")).strip() or "0.0.0.0",
-            https_port=_as_int(network.get("https_port"), "network.https_port", 443),
-            mqtt_tls_port=_as_int(network.get("mqtt_tls_port"), "network.mqtt_tls_port", 8883),
+            https_port=_as_int(network.get("https_port"), "network.https_port", 555),
+            mqtt_tls_port=_as_int(network.get("mqtt_tls_port"), "network.mqtt_tls_port", 8881),
             region=str(network.get("region", "us")).strip().lower() or "us",
             localkey=str(network.get("localkey", "")).strip(),
             duid=str(network.get("duid", "")).strip(),
@@ -179,11 +183,19 @@ def load_config(path: str | Path) -> AppConfig:
             password_hash=_require_non_empty(admin.get("password_hash"), "admin.password_hash"),
             session_secret=_require_non_empty(admin.get("session_secret"), "admin.session_secret"),
             session_ttl_seconds=_as_int(admin.get("session_ttl_seconds"), "admin.session_ttl_seconds", 86400),
+            protocol_auth_enabled=_as_bool(admin.get("protocol_auth_enabled"), True),
+            protocol_login_email=_require_non_empty(admin.get("protocol_login_email"), "admin.protocol_login_email"),
+            protocol_login_pin_hash=_require_non_empty(
+                admin.get("protocol_login_pin_hash"),
+                "admin.protocol_login_pin_hash",
+            ),
         ),
     )
 
     if len(config.admin.session_secret) < 24:
         raise ValueError("admin.session_secret must be at least 24 characters")
+    if "@" not in config.admin.protocol_login_email:
+        raise ValueError("admin.protocol_login_email must be an email address")
 
     if config.broker.mode == "external":
         _require_non_empty(config.broker.host, "broker.host")
@@ -230,6 +242,7 @@ def resolve_paths(config_file: str | Path, config: AppConfig) -> AppPaths:
         acme_dir=acme_dir,
         inventory_path=runtime_dir / "web_api_inventory.json",
         cloud_snapshot_path=runtime_dir / "web_api_inventory_full_snapshot.json",
+        protocol_auth_sessions_path=state_dir / "protocol_auth_sessions.json",
         runtime_credentials_path=runtime_dir / "runtime_credentials.json",
         device_key_state_path=state_dir / "device_key_state.json",
         http_jsonl_path=runtime_dir / "decompiled_http.jsonl",

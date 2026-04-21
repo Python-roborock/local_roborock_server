@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
 from roborock_local_server.server import ReleaseSupervisor, resolve_route
+from shared.protocol_auth import ProtocolAuthStore, build_hawk_authorization
 
 
 def _scene_zone_step(
@@ -146,6 +147,48 @@ def _write_scene_zone_trace(mqtt_jsonl_path: Path) -> None:
     )
 
 
+def _seed_protocol_snapshot(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "user_data": {
+                    "uid": 1001,
+                    "token": "local-token-123",
+                    "rruid": "local-rruid-123",
+                    "rriot": {
+                        "u": "hawk-user-123",
+                        "s": "hawk-session-123",
+                        "h": "hawk-secret-123",
+                        "k": "hawk-mqtt-key-123",
+                        "r": {
+                            "r": "US",
+                            "a": "https://api-us.roborock.com",
+                            "m": "ssl://mqtt-us.roborock.com:8883",
+                            "l": "https://wood-us.roborock.com",
+                        },
+                    },
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _hawk_headers(snapshot_path: Path, path: str, *, form_values: dict[str, object] | None = None, json_values: dict[str, object] | None = None) -> dict[str, str]:
+    user = ProtocolAuthStore(snapshot_path).availability().user
+    assert user is not None
+    return {
+        "Authorization": build_hawk_authorization(
+            user=user,
+            path=path,
+            form_values=form_values or json_values,
+            nonce=f"nonce-{path.replace('/', '-')}",
+        )
+    }
+
+
 def test_admin_login_and_status_flow(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
@@ -177,7 +220,7 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
         "https://paypal.me/LLashley304",
         "https://us.roborock.com/discount/RRSAP202602071713342D18X?redirect=%2Fpages%2Froborock-store%3Fuuid%3DEQe6p1jdZczHEN4Q0nbsG9sZRm0RK1gW5eSM%252FCzcW4Q%253D",
         "https://roborock.pxf.io/B0VYV9",
-        "https://amzn.to/4bGfG6B",
+        "https://amzn.to/4cx8zg3",
     ]
     assert payload["health"]["services"]
     assert payload["pairing"]["active"] is False
@@ -189,6 +232,7 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
     dashboard_page = client.get("/admin")
     assert dashboard_page.status_code == 200
     assert "Cloud Import" in dashboard_page.text
+    assert "Protocol Auth" in dashboard_page.text
 
     assert "Num query samples" in dashboard_page.text
     assert "Public Key determined" in dashboard_page.text
@@ -204,6 +248,98 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
 
     status_after_logout = client.get("/admin/api/status")
     assert status_after_logout.status_code == 401
+
+
+def test_admin_auth_endpoints_toggle_protocol_auth_and_manage_sessions(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    issued = supervisor.protocol_auth.issue_local_session(
+        json.loads(paths.cloud_snapshot_path.read_text(encoding="utf-8"))["user_data"],
+        source="admin_test_session",
+    )
+
+    client = TestClient(supervisor.app)
+
+    assert client.get("/admin/api/auth").status_code == 401
+
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
+
+    auth_payload = client.get("/admin/api/auth")
+    assert auth_payload.status_code == 200
+    auth_json = auth_payload.json()
+    assert auth_json["protocol_auth_enabled"] is True
+    assert auth_json["protocol_session_count"] >= 1
+    session = next(item for item in auth_json["protocol_sessions"] if item["hawk_id"] == issued["rriot"]["u"])
+
+    toggled = client.post("/admin/api/auth", json={"protocol_auth_enabled": False})
+    assert toggled.status_code == 200
+    assert toggled.json()["protocol_auth_enabled"] is False
+    assert 'protocol_auth_enabled = false' in paths.config_file.read_text(encoding="utf-8")
+
+    unauthed_home = client.get("/api/v1/getHomeDetail")
+    assert unauthed_home.status_code == 200
+
+    deleted = client.delete(f"/admin/api/auth/sessions/{session['hawk_id']}/{session['hawk_session']}")
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+    assert deleted.json()["auth"]["protocol_session_count"] == 0
+
+    missing = client.delete(f"/admin/api/auth/sessions/{session['hawk_id']}/{session['hawk_session']}")
+    assert missing.status_code == 404
+
+
+def test_admin_auth_update_rejects_invalid_payload_types(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+
+    client = TestClient(supervisor.app)
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
+
+    invalid_string = client.post("/admin/api/auth", json={"protocol_auth_enabled": "false"})
+    assert invalid_string.status_code == 400
+    assert invalid_string.json()["error"] == "protocol_auth_enabled must be a boolean"
+
+    invalid_container = client.post("/admin/api/auth", json=["not-an-object"])
+    assert invalid_container.status_code == 400
+    assert invalid_container.json()["error"] == "JSON body must be an object"
+
+    invalid_json = client.post(
+        "/admin/api/auth",
+        content="{",
+        headers={"Content-Type": "application/json"},
+    )
+    assert invalid_json.status_code == 400
+    assert invalid_json.json()["error"] == "Invalid JSON body"
+
+
+def test_set_protocol_auth_enabled_rewrites_only_exact_admin_key(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    original = config_file.read_text(encoding="utf-8")
+    modified = original.replace(
+        "protocol_auth_enabled = true",
+        "# protocol_auth_enabled = true\nprotocol_auth_enabled_backup = true",
+    )
+    config_file.write_text(modified, encoding="utf-8")
+
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+
+    payload = supervisor.set_protocol_auth_enabled(False)
+
+    rendered = config_file.read_text(encoding="utf-8")
+    assert payload["protocol_auth_enabled"] is False
+    assert "# protocol_auth_enabled = true" in rendered
+    assert "protocol_auth_enabled_backup = true" in rendered
+    assert "protocol_auth_enabled = false" in rendered
+    assert rendered.count("protocol_auth_enabled = false") == 1
 
 
 def test_admin_onboarding_endpoints_require_auth_and_manage_session(tmp_path: Path) -> None:
@@ -321,13 +457,13 @@ def test_core_only_mode_disables_standalone_admin_routes(tmp_path: Path) -> None
     assert admin_page.status_code == 404
 
     ui_health = client.get("/ui/api/health")
-    assert ui_health.status_code == 200
+    assert ui_health.status_code == 404
 
     region_response = client.get("/region")
     assert region_response.status_code == 200
 
 
-def test_ui_api_health_and_vacuums_return_runtime_payload_without_auth(tmp_path: Path) -> None:
+def test_ui_api_health_and_vacuums_require_admin_auth(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
     paths = resolve_paths(config_file, config)
@@ -361,6 +497,12 @@ def test_ui_api_health_and_vacuums_return_runtime_payload_without_auth(tmp_path:
     )
 
     client = TestClient(supervisor.app)
+
+    assert client.get("/ui/api/health").status_code == 401
+    assert client.get("/ui/api/vacuums").status_code == 401
+
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
 
     health = client.get("/ui/api/health")
     assert health.status_code == 200
@@ -576,16 +718,34 @@ def test_scene_update_routes_persist_name_and_zone_ranges(tmp_path: Path) -> Non
         + "\n",
         encoding="utf-8",
     )
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
     _write_scene_zone_trace(paths.mqtt_jsonl_path)
 
     supervisor = ReleaseSupervisor(config=config, paths=paths)
     client = TestClient(supervisor.app)
 
-    rename_response = client.put("/user/scene/4491073/name", data={"name": "After dinner"})
+    rename_response = client.put(
+        "/user/scene/4491073/name",
+        data={"name": "After dinner"},
+        headers=_hawk_headers(
+            paths.cloud_snapshot_path,
+            "/user/scene/4491073/name",
+            form_values={"name": "After dinner"},
+        ),
+    )
     assert rename_response.status_code == 200
     assert rename_response.json()["data"]["name"] == "After dinner"
 
-    update_response = client.put("/user/scene/4491073/param", json=_after_dinner_param_payload(device_id, include_ranges=False))
+    update_payload = _after_dinner_param_payload(device_id, include_ranges=False)
+    update_response = client.put(
+        "/user/scene/4491073/param",
+        json=update_payload,
+        headers=_hawk_headers(
+            paths.cloud_snapshot_path,
+            "/user/scene/4491073/param",
+            json_values=update_payload,
+        ),
+    )
     assert update_response.status_code == 200
 
     stored_inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))

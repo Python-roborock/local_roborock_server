@@ -74,6 +74,104 @@ def _extract_pid_from_key_state_item(item: dict[str, Any]) -> str:
     return ""
 
 
+def _decode_remaining_length(data: bytes, start: int) -> tuple[int | None, int]:
+    multiplier = 1
+    value = 0
+    consumed = 0
+    idx = start
+    while idx < len(data):
+        byte_val = data[idx]
+        consumed += 1
+        value += (byte_val & 0x7F) * multiplier
+        if (byte_val & 0x80) == 0:
+            return value, consumed
+        multiplier *= 128
+        idx += 1
+        if consumed >= 4:
+            break
+    return None, 0
+
+
+def _decode_mqtt_string(packet: bytes, cursor: int) -> tuple[str | None, int]:
+    if cursor + 2 > len(packet):
+        return None, cursor
+    length = int.from_bytes(packet[cursor : cursor + 2], "big")
+    start = cursor + 2
+    end = start + length
+    if end > len(packet):
+        return None, cursor
+    return packet[start:end].decode("utf-8", errors="replace"), end
+
+
+def _decode_mqtt_binary(packet: bytes, cursor: int) -> tuple[bytes | None, int]:
+    if cursor + 2 > len(packet):
+        return None, cursor
+    length = int.from_bytes(packet[cursor : cursor + 2], "big")
+    start = cursor + 2
+    end = start + length
+    if end > len(packet):
+        return None, cursor
+    return packet[start:end], end
+
+
+def parse_mqtt_connect_packet(packet: bytes) -> dict[str, Any] | None:
+    if not packet or (packet[0] >> 4) != 1:
+        return None
+    remaining_len, remaining_len_bytes = _decode_remaining_length(packet, 1)
+    if remaining_len is None or remaining_len_bytes == 0:
+        return None
+    cursor = 1 + remaining_len_bytes
+    protocol_name, cursor = _decode_mqtt_string(packet, cursor)
+    if protocol_name is None or cursor + 4 > len(packet):
+        return None
+    protocol_level = packet[cursor]
+    connect_flags = packet[cursor + 1]
+    cursor += 4
+    if protocol_level == 5:
+        property_len, property_len_bytes = _decode_remaining_length(packet, cursor)
+        if property_len is None or property_len_bytes == 0:
+            return None
+        cursor += property_len_bytes + property_len
+    client_id, cursor = _decode_mqtt_string(packet, cursor)
+    if client_id is None:
+        return None
+
+    will_flag = (connect_flags & 0x04) != 0
+    username_flag = (connect_flags & 0x80) != 0
+    password_flag = (connect_flags & 0x40) != 0
+    if will_flag:
+        if protocol_level == 5:
+            property_len, property_len_bytes = _decode_remaining_length(packet, cursor)
+            if property_len is None or property_len_bytes == 0:
+                return None
+            cursor += property_len_bytes + property_len
+        _, cursor = _decode_mqtt_string(packet, cursor)
+        _, cursor = _decode_mqtt_binary(packet, cursor)
+        if cursor > len(packet):
+            return None
+
+    username = ""
+    password = ""
+    if username_flag:
+        decoded_username, cursor = _decode_mqtt_string(packet, cursor)
+        if decoded_username is None:
+            return None
+        username = decoded_username
+    if password_flag:
+        decoded_password, cursor = _decode_mqtt_binary(packet, cursor)
+        if decoded_password is None:
+            return None
+        password = decoded_password.decode("utf-8", errors="replace")
+
+    return {
+        "protocol_name": protocol_name,
+        "protocol_level": protocol_level,
+        "client_id": client_id,
+        "username": username,
+        "password": password,
+    }
+
+
 class RuntimeCredentialsStore:
     """Persists stack credentials and per-device onboarding keys."""
 
@@ -149,6 +247,7 @@ class RuntimeCredentialsStore:
             "localkey": _clean_str(raw.get("localkey") or raw.get("local_key") or raw.get("localKey") or raw.get("k")),
             "local_key_source": _clean_str(raw.get("local_key_source") or raw.get("source")),
             "device_mqtt_usr": _clean_str(raw.get("device_mqtt_usr") or raw.get("mqtt_usr")),
+            "device_mqtt_pass": _clean_str(raw.get("device_mqtt_pass") or raw.get("mqtt_pass") or raw.get("mqtt_password")),
             "updated_at": _clean_str(raw.get("updated_at")),
             "last_nc_at": _clean_str(raw.get("last_nc_at")),
             "last_mqtt_seen_at": _clean_str(raw.get("last_mqtt_seen_at")),
@@ -201,6 +300,7 @@ class RuntimeCredentialsStore:
             "localkey": localkey,
             "local_key_source": "bootstrap",
             "device_mqtt_usr": "",
+            "device_mqtt_pass": "",
             "updated_at": "",
             "last_nc_at": "",
             "last_mqtt_seen_at": "",
@@ -264,6 +364,7 @@ class RuntimeCredentialsStore:
             "localkey",
             "local_key_source",
             "device_mqtt_usr",
+            "device_mqtt_pass",
         ):
             if primary.get(key) or not secondary.get(key):
                 continue
@@ -297,6 +398,7 @@ class RuntimeCredentialsStore:
         localkey: str = "",
         local_key_source: str = "",
         device_mqtt_usr: str = "",
+        device_mqtt_pass: str = "",
         last_nc_at: str = "",
         last_mqtt_seen_at: str = "",
         assign_localkey: bool = False,
@@ -309,6 +411,7 @@ class RuntimeCredentialsStore:
         normalized_localkey = _clean_str(localkey)
         normalized_source = _clean_str(local_key_source)
         normalized_device_mqtt_usr = _clean_str(device_mqtt_usr)
+        normalized_device_mqtt_pass = _clean_str(device_mqtt_pass)
         normalized_last_nc_at = _clean_str(last_nc_at)
         normalized_last_mqtt_seen_at = _clean_str(last_mqtt_seen_at)
 
@@ -340,6 +443,7 @@ class RuntimeCredentialsStore:
                     "localkey": "",
                     "local_key_source": "",
                     "device_mqtt_usr": "",
+                    "device_mqtt_pass": "",
                     "updated_at": "",
                     "last_nc_at": "",
                     "last_mqtt_seen_at": "",
@@ -354,6 +458,7 @@ class RuntimeCredentialsStore:
                 ("model", normalized_model),
                 ("product_id", normalized_product_id),
                 ("device_mqtt_usr", normalized_device_mqtt_usr),
+                ("device_mqtt_pass", normalized_device_mqtt_pass),
                 ("last_nc_at", normalized_last_nc_at),
                 ("last_mqtt_seen_at", normalized_last_mqtt_seen_at),
             ):
@@ -452,6 +557,16 @@ class RuntimeCredentialsStore:
                 return None
             return dict(self._devices[index])
 
+    def resolve_device_by_mqtt_username(self, username: str) -> dict[str, str] | None:
+        normalized_username = _clean_str(username)
+        if not normalized_username:
+            return None
+        with self._lock:
+            for device in self._devices:
+                if _clean_str(device.get("device_mqtt_usr")) == normalized_username:
+                    return dict(device)
+        return None
+
     def device_for_selector(self, selector: str = "") -> dict[str, str] | None:
         normalized = _clean_str(selector).lower()
         devices = self.devices()
@@ -503,6 +618,104 @@ class RuntimeCredentialsStore:
                     assign_localkey=False,
                 )
 
+    def verify_device_mqtt_credentials(self, *, username: str, password: str) -> tuple[bool, str, dict[str, str] | None]:
+        normalized_username = _clean_str(username)
+        normalized_password = _clean_str(password)
+        if not normalized_username or not normalized_password:
+            return False, "missing_mqtt_credentials", None
+
+        with self._lock:
+            for device in self._devices:
+                if _clean_str(device.get("device_mqtt_usr")) != normalized_username:
+                    continue
+                stored_password = _clean_str(device.get("device_mqtt_pass"))
+                if not stored_password:
+                    return False, "device_mqtt_password_missing", dict(device)
+                if stored_password == normalized_password:
+                    return True, "device_mqtt_user", dict(device)
+                return False, "invalid_device_mqtt_password", dict(device)
+        return False, "unknown_device_mqtt_username", None
+
+    def recover_device_mqtt_password(self, *, username: str, password: str) -> dict[str, str] | None:
+        normalized_username = _clean_str(username)
+        normalized_password = _clean_str(password)
+        if not normalized_username or not normalized_password:
+            return None
+        with self._lock:
+            for device in self._devices:
+                if _clean_str(device.get("device_mqtt_usr")) != normalized_username:
+                    continue
+                if _clean_str(device.get("device_mqtt_pass")):
+                    return dict(device)
+                device["device_mqtt_pass"] = normalized_password
+                device["updated_at"] = utcnow_iso()
+                self._save_locked()
+                return dict(device)
+        return None
+
+    def recovery_pending_devices(self) -> list[dict[str, str]]:
+        with self._lock:
+            pending = [
+                dict(device)
+                for device in self._devices
+                if _clean_str(device.get("device_mqtt_usr")) and not _clean_str(device.get("device_mqtt_pass"))
+            ]
+        pending.sort(key=lambda item: (item.get("name") or "", item.get("duid") or item.get("did") or ""))
+        return pending
+
+    def backfill_device_mqtt_passwords(self, log_path: str | Path) -> int:
+        path = Path(log_path)
+        if not path.exists():
+            return 0
+        changed = 0
+        with self._lock:
+            pending_usernames = {
+                _clean_str(device.get("device_mqtt_usr"))
+                for device in self._devices
+                if _clean_str(device.get("device_mqtt_usr")) and not _clean_str(device.get("device_mqtt_pass"))
+            }
+        if not pending_usernames:
+            return 0
+
+        recovered_by_username: dict[str, str] = {}
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                for raw_line in handle:
+                    line = str(raw_line or "")
+                    if " CONNECT " not in line or " hex=" not in line:
+                        continue
+                    hex_value = line.rsplit(" hex=", 1)[-1].strip()
+                    if not hex_value:
+                        continue
+                    try:
+                        packet = bytes.fromhex(hex_value)
+                    except ValueError:
+                        continue
+                    parsed = parse_mqtt_connect_packet(packet)
+                    if parsed is None:
+                        continue
+                    username = _clean_str(parsed.get("username"))
+                    password = _clean_str(parsed.get("password"))
+                    if username in pending_usernames and password:
+                        recovered_by_username[username] = password
+        except OSError:
+            return 0
+
+        with self._lock:
+            for username, password in recovered_by_username.items():
+                for device in self._devices:
+                    if _clean_str(device.get("device_mqtt_usr")) != username:
+                        continue
+                    if _clean_str(device.get("device_mqtt_pass")):
+                        break
+                    device["device_mqtt_pass"] = password
+                    device["updated_at"] = utcnow_iso()
+                    changed += 1
+                    break
+            if changed:
+                self._save_locked()
+        return changed
+
     def sync_inventory(self) -> None:
         inventory_devices = self._load_inventory_devices()
         key_models_by_did = self._load_key_models_by_did()
@@ -531,6 +744,7 @@ class RuntimeCredentialsStore:
                             "localkey": "",
                             "local_key_source": "",
                             "device_mqtt_usr": "",
+                            "device_mqtt_pass": "",
                             "updated_at": "",
                             "last_nc_at": "",
                             "last_mqtt_seen_at": "",

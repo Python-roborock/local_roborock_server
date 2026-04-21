@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 import secrets
 from typing import Any
+from urllib.parse import urlsplit
 
 from .bootstrap_crypto import BootstrapEncryptor
 from .device_key_recovery import DeviceKeyCache
@@ -17,17 +18,47 @@ from .runtime_state import RuntimeState
 from .zone_ranges_store import ZoneRangesStore
 
 
+def split_host_port(value: str) -> tuple[str, int | None]:
+    raw = str(value or "").strip()
+    if not raw:
+        return "", None
+    try:
+        parsed = urlsplit(raw if "://" in raw else f"//{raw}")
+        host = (parsed.hostname or parsed.path.split("/", 1)[0]).strip().strip("/")
+        port = parsed.port
+    except ValueError:
+        candidate = raw.split("/", 1)[0].strip()
+        host, _sep, port_text = candidate.partition(":")
+        host = host.strip().strip("[]")
+        port = int(port_text) if port_text.isdigit() else None
+    return host, port
+
+
+def format_authority(host: str, *, port: int | None = None, default_port: int | None = None) -> str:
+    normalized_host, embedded_port = split_host_port(host)
+    resolved_port = port if port is not None else embedded_port
+    if not normalized_host:
+        return ""
+    if resolved_port is None:
+        return normalized_host
+    if default_port is not None and resolved_port == default_port:
+        return normalized_host
+    return f"{normalized_host}:{resolved_port}"
+
+
 @dataclass
 class ServerContext:
     api_host: str
     mqtt_host: str
     wood_host: str
     region: str
+    protocol_login_email: str
     localkey: str
     duid: str
     mqtt_usr: str
     mqtt_passwd: str
     mqtt_clientid: str
+    https_port: int
     mqtt_tls_port: int
     http_jsonl: Path
     mqtt_jsonl: Path
@@ -48,10 +79,25 @@ class ServerContext:
         if self.runtime_credentials is not None:
             self.runtime_credentials.sync_inventory()
 
+    def api_url(self, *, host: str | None = None, port: int | None = None) -> str:
+        return (
+            f"https://"
+            f"{format_authority(host or self.api_host, port=self.https_port if port is None else port, default_port=443)}"
+        )
+
+    def wood_url(self, *, host: str | None = None, port: int | None = None) -> str:
+        return (
+            f"https://"
+            f"{format_authority(host or self.wood_host, port=self.https_port if port is None else port, default_port=443)}"
+        )
+
+    def mqtt_url(self, *, host: str | None = None, port: int | None = None) -> str:
+        return f"ssl://{format_authority(host or self.mqtt_host, port=self.mqtt_tls_port if port is None else port)}"
+
     def region_payload(self) -> dict[str, Any]:
-        api_url = f"https://{self.api_host}"
-        mqtt_url = f"ssl://{self.mqtt_host}:{self.mqtt_tls_port}"
-        wood_url = f"https://{self.wood_host}"
+        api_url = self.api_url()
+        mqtt_url = self.mqtt_url()
+        wood_url = self.wood_url()
         return {
             "apiUrl": api_url,
             "mqttUrl": mqtt_url,
@@ -171,8 +217,8 @@ class ServerContext:
             source="onboarding_nc",
             assign_if_missing=True,
         )
-        api_url = f"https://{self.api_host}"
-        mqtt_url = f"ssl://{self.mqtt_host}:{self.mqtt_tls_port}"
+        api_url = self.api_url()
+        mqtt_url = self.mqtt_url()
         if self.runtime_credentials is not None:
             self.runtime_credentials.ensure_device(
                 did=did,
@@ -201,7 +247,7 @@ class ServerContext:
                     "r": self.region.upper(),
                     "a": api_url,
                     "m": mqtt_url,
-                    "l": f"https://{self.wood_host}",
+                    "l": self.wood_url(),
                 },
             },
         }

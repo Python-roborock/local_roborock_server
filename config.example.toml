@@ -1,9 +1,10 @@
 [network]
-# The one hostname the stack will serve.
+# The one hostname the stack will serve. Keep this as the hostname only.
 stack_fqdn = "roborock.example.com"
 bind_host = "0.0.0.0"
-https_port = 443
-mqtt_tls_port = 8883
+# Change these if you need the stack to advertise and listen on custom ports.
+https_port = 555
+mqtt_tls_port = 8881
 region = "us"
 
 [broker]
@@ -31,3 +32,7 @@ acme_server = "zerossl"
 password_hash = "pbkdf2_sha256$600000$replace_me$replace_me"
 session_secret = "replace-with-at-least-24-random-characters"
 session_ttl_seconds = 86400
+protocol_auth_enabled = true
+# Home Assistant/app logins use this email plus a local 6-digit PIN entered as the "code".
+protocol_login_email = "you@example.com"
+protocol_login_pin_hash = "pbkdf2_sha256$600000$replace_me$replace_me"

@@ -41,6 +41,8 @@ _CLOUDFLARE_TOKEN_CONTAINER_PATH = "/run/secrets/cloudflare_token"
 @dataclass(frozen=True)
 class ConfigureAnswers:
     stack_fqdn: str
+    https_port: int
+    mqtt_tls_port: int
     broker_mode: str
     tls_mode: str
     base_domain: str
@@ -48,6 +50,8 @@ class ConfigureAnswers:
     cloudflare_token: str
     password_hash: str
     session_secret: str
+    protocol_login_email: str
+    protocol_login_pin_hash: str
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,21 @@ def _prompt_hostname(prompt: str, *, field_name: str) -> str:
             print(exc)
 
 
+def _prompt_port(prompt: str, *, default: int) -> int:
+    while True:
+        raw_value = input(f"{prompt} [{default}]: ").strip()
+        if not raw_value:
+            return default
+        try:
+            port = int(raw_value)
+        except ValueError:
+            print("Please enter a valid port number.")
+            continue
+        if 1 <= port <= 65535:
+            return port
+        print("Port must be between 1 and 65535.")
+
+
 def _prompt_yes_no(prompt: str, *, default: bool) -> bool:
     suffix = "Y/n" if default else "y/N"
     while True:
@@ -122,12 +141,44 @@ def _prompt_password() -> str:
         print("A password is required.")
 
 
+def _prompt_protocol_login_email() -> str:
+    while True:
+        email = _prompt_non_empty("Protocol login email for app/HA sign-in: ")
+        if "@" in email:
+            return email
+        print("Protocol login email must look like an email address.")
+
+
+def _validate_protocol_login_pin(pin: str) -> str:
+    normalized = str(pin or "").strip()
+    if len(normalized) != 6 or not normalized.isdigit():
+        raise ValueError("Protocol login PIN must be exactly 6 digits.")
+    return normalized
+
+
+def _prompt_protocol_login_pin() -> str:
+    while True:
+        pin = getpass("Protocol login PIN (6 digits, input hidden): ").strip()
+        try:
+            normalized_pin = _validate_protocol_login_pin(pin)
+        except ValueError as exc:
+            print(exc)
+            continue
+        confirmation = getpass("Confirm protocol login PIN: ").strip()
+        if normalized_pin != confirmation:
+            print("PIN entries did not match.")
+            continue
+        return normalized_pin
+
+
 def collect_configure_answers() -> ConfigureAnswers:
     print("This writes a small config.toml with opinionated defaults.")
     stack_fqdn = _prompt_hostname(
         "Stack FQDN (hostname only (no 'https://'); it needs to start with api-): ",
         field_name="stack_fqdn",
     )
+    https_port = _prompt_port("HTTPS port to advertise and listen on", default=555)
+    mqtt_tls_port = _prompt_port("MQTT TLS port to advertise and listen on", default=8881)
     use_external_broker = _prompt_yes_no("Use your own MQTT broker instead of the embedded one?", default=False)
     use_cloudflare_acme = _prompt_yes_no("Use Cloudflare DNS-01 for automatic TLS renewal?", default=True)
 
@@ -149,8 +200,12 @@ def collect_configure_answers() -> ConfigureAnswers:
             cloudflare_token = getpass("Cloudflare API token (input hidden): ").strip()
 
     password = _prompt_password()
+    protocol_login_email = _prompt_protocol_login_email()
+    protocol_login_pin = _prompt_protocol_login_pin()
     return ConfigureAnswers(
         stack_fqdn=stack_fqdn,
+        https_port=https_port,
+        mqtt_tls_port=mqtt_tls_port,
         broker_mode=broker_mode,
         tls_mode=tls_mode,
         base_domain=base_domain,
@@ -158,6 +213,8 @@ def collect_configure_answers() -> ConfigureAnswers:
         cloudflare_token=cloudflare_token,
         password_hash=hash_password(password),
         session_secret=secrets.token_urlsafe(32),
+        protocol_login_email=protocol_login_email,
+        protocol_login_pin_hash=hash_password(protocol_login_pin),
     )
 
 
@@ -166,8 +223,8 @@ def render_config_toml(answers: ConfigureAnswers) -> str:
         "[network]",
         f"stack_fqdn = {_toml_string(answers.stack_fqdn)}",
         'bind_host = "0.0.0.0"',
-        "https_port = 443",
-        "mqtt_tls_port = 8883",
+        f"https_port = {answers.https_port}",
+        f"mqtt_tls_port = {answers.mqtt_tls_port}",
         'region = "us"',
         "",
         "[broker]",
@@ -235,6 +292,9 @@ def render_config_toml(answers: ConfigureAnswers) -> str:
             f"password_hash = {_toml_string(answers.password_hash)}",
             f"session_secret = {_toml_string(answers.session_secret)}",
             "session_ttl_seconds = 86400",
+            "protocol_auth_enabled = true",
+            f"protocol_login_email = {_toml_string(answers.protocol_login_email)}",
+            f"protocol_login_pin_hash = {_toml_string(answers.protocol_login_pin_hash)}",
             "",
         ]
     )
