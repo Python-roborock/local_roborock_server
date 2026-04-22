@@ -13,7 +13,7 @@ The following vacuums are confirmed working:
 
 - Roborock S7 MaxV
 - Roborock S8 Pro Ultra (a70)
-- Roborock Saros 10R
+- Roborock Saros 10R / G30U
 - Roborock Qrevo S5V
 - QRevo MaxV
 - QRevo Master
