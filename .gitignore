@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+dist/
 data/
 site/
 secrets/

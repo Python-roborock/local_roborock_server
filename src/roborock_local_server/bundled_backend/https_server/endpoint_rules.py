@@ -103,6 +103,10 @@ from .routes.user.devices.detail import build as _build_get_device
 from .routes.user.devices.detail import build_extra as _build_get_device_extra
 from .routes.user.devices.detail import match as _match_get_device
 from .routes.user.devices.detail import match_extra as _match_get_device_extra
+from .routes.user.deviceshare import build_received_devices as _build_get_received_devices
+from .routes.user.deviceshare import build_rooms as _build_get_shared_device_rooms
+from .routes.user.deviceshare import match_received_devices as _match_get_received_devices
+from .routes.user.deviceshare import match_rooms as _match_get_shared_device_rooms
 from .routes.user.devices.jobs import build as _build_get_schedules
 from .routes.user.devices.jobs import match as _match_get_schedules
 from .routes.user.devices.newadd import build as _build_add_device
@@ -567,6 +571,8 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("post_home_rooms", _match_post_home_rooms, _build_post_home_rooms),
         EndpointRule("post_scene_create", _match_post_scene_create, _build_post_scene_create),
         EndpointRule("get_home_rooms", _match_get_home_rooms, _build_get_home_rooms),
+        EndpointRule("get_received_devices", _match_get_received_devices, _build_get_received_devices),
+        EndpointRule("get_shared_device_rooms", _match_get_shared_device_rooms, _build_get_shared_device_rooms),
         EndpointRule("get_scenes", _match_get_scenes, _build_get_scenes),
         EndpointRule("get_home_scenes", _match_get_home_scenes, _build_get_home_scenes),
         EndpointRule("get_scene_order", _match_get_scene_order, _build_get_scene_order),

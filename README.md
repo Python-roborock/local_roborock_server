@@ -2,9 +2,8 @@
 The best way to support this project is the next time you are buying a Roborock device come back here and use one of my affiliate links where I will receive a commission.
 
 [![Amazon Affiliate][badge-amazon]][link-amazon]
-[![Roborock 5 Off][badge-roborock-discount]][link-roborock-discount]
 [![Roborock Affiliate][badge-roborock-affiliate]][link-roborock-affiliate]
-
+[![Roborock 5 Off][badge-roborock-discount]][link-roborock-discount]
 
 You can also support via BMAC or paypal:
 
@@ -40,6 +39,7 @@ Additional docs:
 - [Docs index](docs/index.md)
 - [Tested vacuums](docs/tested_vacuums.md)
 - [Home Assistant](docs/home_assistant.md)
+- [Home Assistant app files](roborock_local_server_addon/config.yaml)
 - [Using the Roborock App](docs/roborock_app.md)
 - [Custom MQTT](docs/custom_mqtt.md)
 - [Custom certificate management](docs/custom_cert_management.md)

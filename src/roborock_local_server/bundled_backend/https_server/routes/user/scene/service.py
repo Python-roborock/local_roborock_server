@@ -563,7 +563,9 @@ def _routine_runner_for_context(ctx: ServerContext) -> RoutineRunner:
 
 
 def list_scenes_for_device(ctx: ServerContext, device_id: str) -> list[dict[str, Any]]:
-    scenes = _scene_state(ctx)["scenes"]
+    state = _scene_state(ctx)
+    scenes = state["scenes"]
+    home_id = state["home_id"]
     filtered: list[dict[str, Any]] = []
     for scene in scenes:
         if not isinstance(scene, dict):
@@ -571,7 +573,7 @@ def list_scenes_for_device(ctx: ServerContext, device_id: str) -> list[dict[str,
         scene_device = get_value(scene, "device_id", "deviceId", "duid")
         if scene_device and str(scene_device) != str(device_id):
             continue
-        filtered.append(build_scene_payload(scene, home_id=None, include_device_context=False))
+        filtered.append(build_scene_payload(scene, home_id=home_id, include_device_context=True))
     return filtered
 
 

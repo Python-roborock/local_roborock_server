@@ -23,6 +23,10 @@ def _md5hex(value: str) -> str:
     return hashlib.md5(value.encode("utf-8")).hexdigest()
 
 
+def _md5hex_bytes(value: bytes) -> str:
+    return hashlib.md5(value).hexdigest()
+
+
 def _parse_json_body_param_map(body_params: dict[str, list[str]]) -> dict[str, Any]:
     for raw in body_params.get("__json") or []:
         try:
@@ -63,9 +67,17 @@ def _build_hawk_mac(
     path: str,
     query_values: dict[str, Any] | None,
     form_values: dict[str, Any] | None,
+    json_body: bytes | str | None = None,
     timestamp: int,
     nonce: str,
 ) -> str:
+    query_hash = _process_extra_hawk_values(query_values)
+    if json_body is None:
+        body_hash = _process_extra_hawk_values(form_values)
+    else:
+        if isinstance(json_body, str):
+            json_body = json_body.encode("utf-8")
+        body_hash = _md5hex_bytes(json_body)
     prestr = ":".join(
         [
             hawk_id,
@@ -73,8 +85,8 @@ def _build_hawk_mac(
             nonce,
             str(timestamp),
             _md5hex(path),
-            _process_extra_hawk_values(query_values),
-            _process_extra_hawk_values(form_values),
+            query_hash,
+            body_hash,
         ]
     )
     return base64.b64encode(hmac.new(hawk_key.encode(), prestr.encode(), hashlib.sha256).digest()).decode()
@@ -162,11 +174,16 @@ def build_hawk_authorization(
     path: str,
     query_values: dict[str, Any] | None = None,
     form_values: dict[str, Any] | None = None,
+    json_body: bytes | str | None = None,
     timestamp: int | None = None,
     nonce: str | None = None,
 ) -> str:
     ts = int(time.time() if timestamp is None else timestamp)
     normalized_nonce = _clean_str(nonce) or secrets.token_urlsafe(6)
+    if json_body is None and isinstance(form_values, Mapping):
+        raw_json = form_values.get("__json")
+        if isinstance(raw_json, (str, bytes)):
+            json_body = raw_json
     mac = _build_hawk_mac(
         hawk_id=user.hawk_id,
         hawk_session=user.hawk_session,
@@ -174,6 +191,7 @@ def build_hawk_authorization(
         path=path,
         query_values=query_values,
         form_values=form_values,
+        json_body=json_body,
         timestamp=ts,
         nonce=normalized_nonce,
     )
@@ -533,6 +551,7 @@ class ProtocolAuthStore:
         query_params: dict[str, list[str]],
         body_params: dict[str, list[str]],
         headers: Mapping[str, str],
+        raw_body: bytes | None = None,
         now_ts: float | None = None,
     ) -> tuple[bool, str]:
         availability = self.availability()
@@ -565,13 +584,21 @@ class ProtocolAuthStore:
         if not nonce:
             return False, "missing_hawk_nonce"
 
+        json_body: bytes | None = None
+        if body_params.get("__json"):
+            if raw_body is not None:
+                json_body = raw_body
+            else:
+                json_raw = next((value for value in body_params.get("__json", []) if isinstance(value, str)), "")
+                json_body = json_raw.encode("utf-8")
         expected_mac = _build_hawk_mac(
             hawk_id=user.hawk_id,
             hawk_session=user.hawk_session,
             hawk_key=user.hawk_key,
             path=path,
             query_values=_normalize_param_values(query_params),
-            form_values=_normalize_param_values(body_params, include_json=True),
+            form_values=None if json_body is not None else _normalize_param_values(body_params, include_json=True),
+            json_body=json_body,
             timestamp=timestamp,
             nonce=nonce,
         )
