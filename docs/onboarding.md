@@ -80,6 +80,52 @@ You still need to reset the vacuum's Wi-Fi manually. On many Roborock models tha
 
 Congrats! Once the script reports that the vacuum is connected to the local server, the onboarding flow is complete.
 
+## Web UI (start_onboarding_gui.py)
+
+If you would rather not use the terminal, there is a web UI version of the same flow. It is a standalone script that runs a small local server on your machine and opens your browser automatically:
+
+```bash
+uv run start_onboarding_gui.py
+```
+
+No CLI flags. All configuration happens in the browser form on first load.
+
+The main reason to use the GUI version is that this flow makes you switch your machine between your normal Wi-Fi and the vacuum's Wi-Fi hotspot several times. A browser talking to `127.0.0.1` keeps working through those switches. The CLI version can get into a bad state if a blocking network call hits while you are still on the vacuum hotspot.
+
+### What it does on startup
+
+1. Picks a random free port on `127.0.0.1`.
+2. Generates a random per-run access token.
+3. Starts a local server bound to localhost only.
+4. Opens your default browser to `http://127.0.0.1:<port>/?token=<token>`.
+
+The server is not reachable from your LAN. The token is included in the launch URL and is required for the protected UI/API requests, so other processes or browser tabs on the same machine cannot drive the onboarding flow unless they have that URL. If the browser does not open on its own, copy the URL printed in the terminal (including the `?token=...` part) and open it manually.
+
+### The five phases
+
+The UI shows a stepper across the top and walks you through five phases:
+
+1. **Configure.** Fill in the server host, admin password, your home Wi-Fi SSID and password, timezone, and country domain. The POSIX TZ string and country domain are auto-derived from the timezone if you leave them blank. Same fields as the CLI, just in a form.
+2. **Select vacuum.** The script logs into the main server and lists the known vacuums with pills showing whether each has a public key, is connected, and how many query samples it has. Click one to start a session.
+3. **Send onboarding.** Reset the vacuum's Wi-Fi, join its hotspot on this machine, then click "Send onboarding packet". The script sends the cfgwifi packet to `192.168.8.1` over the hotspot.
+4. **Reconnect and poll.** Switch back to your normal Wi-Fi. The UI waits for the main server to become reachable again (up to two minutes), then polls every few seconds for up to five minutes. If you know you are already back online, click "I'm back online, skip the wait".
+5. **Done.** The UI tells you whether to run another cycle, pick a different vacuum, or finish.
+
+A live log pane below the stepper shows every packet, status check, and state transition. This is the same information the CLI prints to the terminal.
+
+Your inputs live only in memory for the duration of the run and are discarded when you click Quit or shut down the server.
+
+### Same caveats as the CLI
+
+Everything in "What To Expect" above still applies. Some vacuums need 2-4 cycles, the Wi-Fi reset on the vacuum is still manual, and the POSIX TZ examples are the same. Only the interface changed, the underlying packet flow is identical.
+
+### Troubleshooting
+
+- **The browser didn't open.** Copy the URL printed in the terminal (including the `?token=...` query string) and open it manually.
+- **"Onboarding send failed" right after clicking send.** You are probably not joined to the vacuum's hotspot yet, or the vacuum is not in pairing mode. Reset its Wi-Fi and try again.
+- **"Could not reach the server after leaving the vacuum hotspot."** Your machine did not rejoin your normal Wi-Fi within two minutes. Check your network and click Retry.
+- **The UI is stuck on "Polling...".** Give it the full five-minute timeout. If nothing changes, check the log pane for errors, then click Retry or Pick another vacuum.
+
 ## Related Docs
 
 - [Installation](installation.md)

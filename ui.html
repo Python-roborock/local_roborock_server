@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Vacuum Onboarding</title>
+    <style>
+        :root {
+          --bg: #101214;
+          --panel: #171a1d;
+          --panel-2: #1c2024;
+          --border: #2b3138;
+          --border-2: #3a424c;
+          --text: #e3e7eb;
+          --muted: #9aa3ad;
+          --faint: #77818c;
+          --blue: #6ea8fe;
+          --green: #7dd3a0;
+          --yellow: #d8b15a;
+          --red: #e07a7a;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+          margin: 0;
+          padding: 0;
+          background: var(--bg);
+          color: var(--text);
+          font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          -webkit-font-smoothing: antialiased;
+        }
+
+        .wrap {
+          max-width: 1120px;
+          margin: 0 auto;
+          padding: 18px 18px 28px;
+        }
+
+        header {
+          margin-bottom: 14px;
+        }
+
+        header h1 {
+          margin: 0 0 4px;
+          font-size: 20px;
+          font-weight: 600;
+        }
+
+        header .sub {
+          color: var(--muted);
+          margin-bottom: 8px;
+        }
+
+        .phase {
+          font-size: 12px;
+          color: var(--faint);
+        }
+
+        .steps {
+          display: flex;
+          gap: 12px;
+          flex-wrap: wrap;
+          margin: 0 0 14px;
+          padding: 0;
+          list-style: none;
+          color: var(--faint);
+          font-size: 12px;
+        }
+
+        .steps li.active {
+          color: var(--text);
+          font-weight: 600;
+        }
+
+        .steps li.done {
+          color: var(--green);
+        }
+
+        .layout {
+          display: grid;
+          grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+          gap: 14px;
+          align-items: start;
+        }
+
+        .panel {
+          background: var(--panel);
+          border: 1px solid var(--border);
+        }
+
+        .panel-body {
+          padding: 14px;
+        }
+
+        .panel h2 {
+          margin: 0 0 12px;
+          font-size: 15px;
+          font-weight: 600;
+        }
+
+        .note {
+          color: var(--muted);
+          font-size: 13px;
+          margin: -4px 0 12px;
+        }
+
+        .field {
+          margin-bottom: 12px;
+        }
+
+        .field label {
+          display: block;
+          margin-bottom: 5px;
+          font-size: 12px;
+          color: var(--muted);
+          font-weight: 600;
+        }
+
+        .field input,
+        .field select {
+          width: 100%;
+          background: var(--panel-2);
+          color: var(--text);
+          border: 1px solid var(--border-2);
+          border-radius: 0;
+          padding: 9px 10px;
+          font: inherit;
+          outline: none;
+        }
+
+        .field input:focus,
+        .field select:focus {
+          border-color: var(--blue);
+        }
+
+        .hint {
+          color: var(--faint);
+          font-size: 12px;
+          margin-top: 5px;
+        }
+
+        .row {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+        }
+
+        .actions {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          margin-top: 14px;
+        }
+
+        .btn {
+          appearance: none;
+          border: 1px solid var(--border-2);
+          background: var(--panel-2);
+          color: var(--text);
+          padding: 9px 12px;
+          font: inherit;
+          font-weight: 600;
+          cursor: pointer;
+          border-radius: 0;
+        }
+
+        .btn:hover {
+          border-color: #56606c;
+        }
+
+        .btn.primary {
+          background: #1c2733;
+          border-color: #355277;
+          color: #cfe2ff;
+        }
+
+        .btn.primary:hover {
+          border-color: #4d709d;
+        }
+
+        .btn.danger {
+          background: #241b1b;
+          border-color: #5f3a3a;
+          color: #f0b3b3;
+        }
+
+        .btn:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+
+        .device-list {
+          display: grid;
+          gap: 8px;
+        }
+
+        .device {
+          width: 100%;
+          text-align: left;
+          background: var(--panel-2);
+          border: 1px solid var(--border);
+          color: var(--text);
+          padding: 12px;
+          cursor: pointer;
+          border-radius: 0;
+        }
+
+        .device:hover {
+          border-color: #4a5562;
+        }
+
+        .device .name {
+          display: block;
+          font-weight: 600;
+          margin-bottom: 6px;
+        }
+
+        .device .meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          font-size: 12px;
+          color: var(--muted);
+        }
+
+        .tag {
+          display: inline-block;
+          padding: 2px 6px;
+          border: 1px solid var(--border-2);
+          background: #1a1e22;
+        }
+
+        .tag.ok {
+          color: var(--green);
+          border-color: #355746;
+        }
+
+        .callout {
+          border: 1px solid var(--border-2);
+          background: var(--panel-2);
+          padding: 12px;
+          margin-bottom: 12px;
+        }
+
+        .callout strong {
+          display: block;
+          margin-bottom: 4px;
+          font-size: 14px;
+        }
+
+        .callout .sub {
+          color: var(--muted);
+          font-size: 13px;
+        }
+
+        .callout.ok {
+          border-left: 3px solid var(--green);
+        }
+
+        .callout.err {
+          border-left: 3px solid var(--red);
+        }
+
+        .callout.info {
+          border-left: 3px solid var(--blue);
+        }
+
+        .stats {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-bottom: 4px;
+        }
+
+        .stat {
+          min-width: 120px;
+          border: 1px solid var(--border);
+          background: var(--panel-2);
+          padding: 9px 10px;
+        }
+
+        .stat .k {
+          display: block;
+          color: var(--faint);
+          font-size: 11px;
+          margin-bottom: 2px;
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
+        }
+
+        .stat .v {
+          font-weight: 600;
+        }
+
+        .log {
+          background: #0d0f11;
+          border: 1px solid var(--border);
+          padding: 10px;
+          max-height: 560px;
+          overflow-y: auto;
+        }
+
+        .log .line {
+          display: grid;
+          grid-template-columns: 62px 1fr;
+          gap: 10px;
+          padding: 4px 0;
+          font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+
+        .log .line:last-child {
+          border-bottom: 0;
+        }
+
+        .log .t {
+          color: var(--faint);
+        }
+
+        .log .msg {
+          color: #c2cad3;
+          word-break: break-word;
+        }
+
+        .log .line.ok .msg { color: var(--green); }
+        .log .line.warn .msg { color: var(--yellow); }
+        .log .line.err .msg { color: var(--red); }
+
+        .spinner {
+          display: inline-block;
+          width: 12px;
+          height: 12px;
+          border: 2px solid #3a424c;
+          border-top-color: var(--blue);
+          border-radius: 50%;
+          animation: spin .8s linear infinite;
+          vertical-align: -2px;
+          margin-right: 6px;
+        }
+
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+
+        .hidden {
+          display: none !important;
+        }
+
+        footer {
+          display: flex;
+          justify-content: space-between;
+          gap: 10px;
+          margin-top: 12px;
+          color: var(--faint);
+          font-size: 12px;
+        }
+
+        footer a {
+          color: var(--muted);
+          text-decoration: none;
+        }
+
+        footer a:hover {
+          color: var(--text);
+        }
+
+        @media (max-width: 900px) {
+          .layout {
+            grid-template-columns: 1fr;
+          }
+
+          .row {
+            grid-template-columns: 1fr;
+          }
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <header>
+        <h1>Vacuum Onboarding</h1>
+        <div class="sub">Local onboarding tool. This page stays up while you switch Wi-Fi networks.</div>
+        <div class="phase">Phase: <span id="phase-name">—</span></div>
+    </header>
+
+    <ul class="steps" id="stepper">
+        <li class="step" data-phase="needs_config">1. Configure</li>
+        <li class="step" data-phase="choosing_device">2. Select vacuum</li>
+        <li class="step" data-phase="awaiting_vacuum_wifi">3. Send onboarding</li>
+        <li class="step" data-phase="awaiting_normal_wifi">4. Reconnect and poll</li>
+        <li class="step" data-phase="done">5. Done</li>
+    </ul>
+
+    <div class="layout">
+        <main>
+            <section id="view-config" class="panel hidden">
+                <div class="panel-body">
+                    <h2>Connection details</h2>
+                    <div class="note">Enter the server and home Wi-Fi details used during onboarding.</div>
+
+                    <div class="field">
+                        <label for="cfg-server">Server host</label>
+                        <input id="cfg-server" placeholder="example.com" autocomplete="off" />
+                        <div class="hint">The API host is derived automatically.</div>
+                    </div>
+
+                    <div class="field">
+                        <label for="cfg-admin">Admin password</label>
+                        <input id="cfg-admin" type="password" autocomplete="off" />
+                    </div>
+
+                    <div class="row">
+                        <div class="field">
+                            <label for="cfg-ssid">Home Wi-Fi name</label>
+                            <input id="cfg-ssid" autocomplete="off" />
+                        </div>
+                        <div class="field">
+                            <label for="cfg-wifi">Home Wi-Fi password</label>
+                            <input id="cfg-wifi" type="password" autocomplete="off" />
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="field">
+                            <label for="cfg-tz">Timezone</label>
+                            <select id="cfg-tz"></select>
+                        </div>
+                        <div class="field">
+                            <label for="cfg-country">Country domain</label>
+                            <input id="cfg-country" placeholder="optional" autocomplete="off" />
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="cfg-cst">POSIX TZ string</label>
+                        <input id="cfg-cst" placeholder="optional" autocomplete="off" />
+                        <div class="hint">Leave blank unless you need to override it.</div>
+                    </div>
+
+                    <div class="field">
+                        <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;">
+                            <input type="checkbox" id="cfg-insecure-tls" />
+                            Skip TLS certificate verification (self-signed certs)
+                        </label>
+                        <div class="hint" style="color:var(--c-warn,#b45309);">&#9888; Only enable if your server uses a self-signed certificate. Disables MITM protection.</div>
+                    </div>
+
+                    <div id="cfg-err" class="callout err hidden"></div>
+
+                    <div class="actions">
+                        <button class="btn primary" id="cfg-submit">Connect</button>
+                    </div>
+                </div>
+            </section>
+
+            <section id="view-devices" class="panel hidden">
+                <div class="panel-body">
+                    <h2>Available vacuums</h2>
+                    <div class="note">Pick the device you want to onboard.</div>
+                    <div id="device-list" class="device-list"></div>
+                    <div class="actions">
+                        <button class="btn" id="devices-refresh">Refresh</button>
+                        <button class="btn danger" id="devices-quit">Shut down</button>
+                    </div>
+                </div>
+            </section>
+
+            <section id="view-onboard" class="panel hidden">
+                <div class="panel-body">
+                    <h2>Onboarding <span id="target-name" style="font-weight:400;color:var(--muted)"></span></h2>
+                    <div id="phase-callout"></div>
+                    <div class="stats" id="status-line"></div>
+                    <div class="actions" id="onboard-buttons"></div>
+                </div>
+            </section>
+        </main>
+
+        <aside id="view-log" class="panel hidden">
+            <div class="panel-body">
+                <h2>Log</h2>
+                <div class="note">Worker and server output.</div>
+                <div id="log" class="log"></div>
+            </div>
+        </aside>
+    </div>
+
+    <footer>
+        <span>127.0.0.1 only</span>
+        <a href="#" id="quit-link">shut down local server</a>
+    </footer>
+</div>
+
+<script>
+    const TOKEN = new URLSearchParams(location.search).get("token") || "";
+    const H = { "Content-Type": "application/json", "X-Token": TOKEN };
+    const $ = (id) => document.getElementById(id);
+
+    async function api(method, path, body) {
+      const opts = { method, headers: H };
+      if (body !== undefined) opts.body = JSON.stringify(body);
+      const r = await fetch(path, opts);
+      if (!r.ok) {
+        let detail = "";
+        try { detail = (await r.json()).detail || ""; } catch {}
+        throw new Error(detail || `${method} ${path} failed (${r.status})`);
+      }
+      return r.json();
+    }
+
+    let lastPhase = null;
+    let timezones = [];
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }[c]));
+    }
+
+    function setStepper(phase) {
+      const order = ["needs_config", "choosing_device", "awaiting_vacuum_wifi", "awaiting_normal_wifi", "done"];
+      const map = {
+        needs_config: "needs_config",
+        logging_in: "needs_config",
+        choosing_device: "choosing_device",
+        awaiting_vacuum_wifi: "awaiting_vacuum_wifi",
+        sending_onboarding: "awaiting_vacuum_wifi",
+        awaiting_normal_wifi: "awaiting_normal_wifi",
+        polling: "awaiting_normal_wifi",
+        done: "done",
+        error: lastPhase || "needs_config",
+      };
+      const active = map[phase] || "needs_config";
+      const activeIdx = order.indexOf(active);
+
+      document.querySelectorAll(".step").forEach((el) => {
+        const p = el.dataset.phase;
+        const idx = order.indexOf(p);
+        el.classList.toggle("active", p === active);
+        el.classList.toggle("done", idx >= 0 && idx < activeIdx);
+      });
+    }
+
+    function showView(name) {
+      ["config", "devices", "onboard"].forEach((v) => {
+        $("view-" + v).classList.toggle("hidden", v !== name);
+      });
+    }
+
+    function renderLog(entries) {
+      const el = $("log");
+      const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+      el.innerHTML = entries.map((e) => {
+        const cls = e.level || "";
+        const t = new Date(e.ts * 1000).toLocaleTimeString([], { hour12: false });
+        return `<div class="line ${cls}">
+          <div class="t">${t}</div>
+          <div class="msg">${escapeHtml(e.msg)}</div>
+        </div>`;
+      }).join("");
+      if (wasAtBottom) el.scrollTop = el.scrollHeight;
+    }
+
+    function renderDevices(devices) {
+      const list = $("device-list");
+      if (!devices || !devices.length) {
+        list.innerHTML = `<div class="callout info">
+          <strong>No devices found</strong>
+          <div class="sub">Refresh after the server has discovered the vacuum.</div>
+        </div>`;
+        return;
+      }
+
+      list.innerHTML = devices.map((d) => {
+        const samples = d.query_samples || 0;
+        const hasKey = d.has_public_key;
+        const connected = d.connected;
+        return `<button class="device" data-duid="${escapeHtml(d.duid)}">
+          <span class="name">${escapeHtml(d.name || d.duid || "Unknown device")}</span>
+          <span class="meta">
+            <span class="tag ${hasKey ? "ok" : ""}">${hasKey ? "public key ready" : "no public key"}</span>
+            <span class="tag ${connected ? "ok" : ""}">${connected ? "connected" : "disconnected"}</span>
+            <span class="tag">${samples} samples</span>
+            <span class="tag">${escapeHtml(d.duid || "")}</span>
+          </span>
+        </button>`;
+      }).join("");
+
+      list.querySelectorAll(".device").forEach((btn) => {
+        btn.addEventListener("click", () => selectDevice(btn.dataset.duid));
+      });
+    }
+
+    function renderStats(state) {
+      const status = state.status || {};
+      $("status-line").innerHTML = `
+        <div class="stat"><span class="k">samples</span><span class="v">${status.query_samples || 0}</span></div>
+        <div class="stat"><span class="k">public key</span><span class="v">${status.has_public_key ? "ready" : "missing"}</span></div>
+        <div class="stat"><span class="k">connected</span><span class="v">${status.connected ? "yes" : "no"}</span></div>
+        ${state.baseline_samples != null ? `<div class="stat"><span class="k">baseline</span><span class="v">${state.baseline_samples}</span></div>` : ""}
+      `;
+    }
+
+    function renderOnboard(state) {
+      $("target-name").textContent = state.target_name ? `for ${state.target_name}` : "";
+      renderStats(state);
+
+      const callout = $("phase-callout");
+      const btns = $("onboard-buttons");
+      btns.innerHTML = "";
+
+      const addBtn = (label, cls, action) => {
+        const b = document.createElement("button");
+        b.className = "btn " + (cls || "");
+        b.textContent = label;
+        b.addEventListener("click", action);
+        btns.appendChild(b);
+      };
+
+      const phase = state.phase;
+
+      if (phase === "awaiting_vacuum_wifi") {
+        callout.className = "callout info";
+        callout.innerHTML = `
+          <strong>Join the vacuum hotspot</strong>
+          <div class="sub">Connect this machine to the vacuum's Wi-Fi network, then send the onboarding packet.</div>
+        `;
+        addBtn("Send onboarding", "primary", sendOnboarding);
+        addBtn("Choose another device", "", reselect);
+        addBtn("Shut down", "danger", quit);
+
+      } else if (phase === "sending_onboarding") {
+        callout.className = "callout info";
+        callout.innerHTML = `
+          <strong><span class="spinner"></span>Sending onboarding packet</strong>
+          <div class="sub">Talking to the vacuum at 192.168.8.1. Stay on the hotspot for now.</div>
+        `;
+
+      } else if (phase === "awaiting_normal_wifi") {
+        callout.className = "callout info";
+        callout.innerHTML = `
+          <strong><span class="spinner"></span>Reconnect to normal Wi-Fi</strong>
+          <div class="sub">After this machine is back on your usual network, the tool will wait for the server to respond again.</div>
+        `;
+        addBtn("I'm back online", "", () => api("POST", "/api/ready"));
+        addBtn("Choose another device", "", reselect);
+
+      } else if (phase === "polling") {
+        callout.className = "callout info";
+        callout.innerHTML = `
+          <strong><span class="spinner"></span>Waiting for server-side progress</strong>
+          <div class="sub">Looking for new samples, a public key, or a completed connection.</div>
+        `;
+
+      } else if (phase === "done") {
+        callout.className = "callout ok";
+        callout.innerHTML = `
+          <strong>${escapeHtml(state.result_message || "Step complete")}</strong>
+          <div class="sub">${escapeHtml(state.result_detail || "")}</div>
+        `;
+        if (state.can_continue) addBtn("Run another cycle", "primary", anotherCycle);
+        addBtn("Choose another device", "", reselect);
+        addBtn("Shut down", "danger", quit);
+
+      } else if (phase === "error") {
+        callout.className = "callout err";
+        callout.innerHTML = `
+          <strong>Error</strong>
+          <div class="sub">${escapeHtml(state.error_message || "Something went wrong.")}</div>
+        `;
+        addBtn("Retry", "primary", retry);
+        addBtn("Choose another device", "", reselect);
+        addBtn("Shut down", "danger", quit);
+      }
+    }
+
+    async function submitConfig() {
+      $("cfg-err").classList.add("hidden");
+      $("cfg-submit").disabled = true;
+      try {
+        await api("POST", "/api/config", {
+          server: $("cfg-server").value,
+          admin_password: $("cfg-admin").value,
+          ssid: $("cfg-ssid").value,
+          wifi_password: $("cfg-wifi").value,
+          timezone: $("cfg-tz").value,
+          country_domain: $("cfg-country").value,
+          cst: $("cfg-cst").value,
+          allow_insecure_tls: $("cfg-insecure-tls").checked,
+        });
+      } catch (e) {
+        $("cfg-err").innerHTML = `<strong>Could not continue</strong><div class="sub">${escapeHtml(e.message)}</div>`;
+        $("cfg-err").classList.remove("hidden");
+      } finally {
+        $("cfg-submit").disabled = false;
+      }
+    }
+
+    async function selectDevice(duid) {
+      try { await api("POST", "/api/select-device", { duid }); }
+      catch (e) { alert(e.message); }
+    }
+
+    async function sendOnboarding() {
+      try { await api("POST", "/api/send-onboarding"); }
+      catch (e) { alert(e.message); }
+    }
+
+    async function reselect() {
+      try { await api("POST", "/api/reselect"); }
+      catch (e) { alert(e.message); }
+    }
+
+    async function retry() {
+      try { await api("POST", "/api/retry"); }
+      catch (e) { alert(e.message); }
+    }
+
+    async function anotherCycle() {
+      try { await api("POST", "/api/retry"); }
+      catch (e) { alert(e.message); }
+    }
+
+    let _pollInterval = null;
+    let _stopped = false;
+
+    async function quit() {
+      if (!confirm("Shut down the local server?")) return;
+      _stopped = true;
+      if (_pollInterval !== null) { clearInterval(_pollInterval); _pollInterval = null; }
+      try { await api("POST", "/api/quit"); } catch {}
+      document.body.innerHTML = '<div class="wrap"><div class="panel"><div class="panel-body"><h2>Server stopped</h2><div class="note">You can close this tab now.</div></div></div></div>';
+    }
+
+    async function poll() {
+      try {
+        const state = await api("GET", "/api/state");
+        $("phase-name").textContent = state.phase;
+        setStepper(state.phase);
+        renderLog(state.log || []);
+
+        if (state.phase === "needs_config") {
+          if (!timezones.length && state.timezones) {
+            timezones = state.timezones;
+            const sel = $("cfg-tz");
+            sel.innerHTML = timezones.map((tz) =>
+              `<option value="${tz}"${tz === state.default_timezone ? " selected" : ""}>${tz}</option>`
+            ).join("");
+          }
+          showView("config");
+          $("view-log").classList.add("hidden");
+
+        } else if (state.phase === "logging_in") {
+          showView("config");
+          $("cfg-submit").disabled = true;
+          $("cfg-submit").textContent = "Connecting...";
+          $("view-log").classList.remove("hidden");
+
+        } else if (state.phase === "choosing_device") {
+          $("cfg-submit").disabled = false;
+          $("cfg-submit").textContent = "Connect";
+          renderDevices(state.devices || []);
+          showView("devices");
+          $("view-log").classList.remove("hidden");
+
+        } else {
+          showView("onboard");
+          renderOnboard(state);
+          $("view-log").classList.remove("hidden");
+        }
+
+        if (state.config_error) {
+          $("cfg-err").innerHTML = `<strong>Could not continue</strong><div class="sub">${escapeHtml(state.config_error)}</div>`;
+          $("cfg-err").classList.remove("hidden");
+          $("cfg-submit").disabled = false;
+          $("cfg-submit").textContent = "Connect";
+        }
+
+        lastPhase = state.phase;
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    $("cfg-submit").addEventListener("click", submitConfig);
+    $("devices-refresh").addEventListener("click", () => api("POST", "/api/refresh-devices").catch((e) => alert(e.message)));
+    $("devices-quit").addEventListener("click", quit);
+    $("quit-link").addEventListener("click", (e) => { e.preventDefault(); quit(); });
+
+    async function safePoll() { if (!_stopped) await poll(); }
+    safePoll();
+    _pollInterval = setInterval(safePoll, 1000);
+</script>
+</body>
+</html>
