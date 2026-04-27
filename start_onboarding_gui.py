@@ -247,6 +247,7 @@ class GuidedOnboardingConfig:
     timezone: str
     cst: str
     country_domain: str
+    allow_insecure_tls: bool = False
 
 
 class RemoteOnboardingApi:
@@ -390,9 +391,10 @@ def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout) ->
         }
         wifi_pkt = build_wifi_packet(session_key, body)
         sock.sendto(wifi_pkt, target)
-        output.write(f"TOKEN_S={token_s}\n")
-        output.write(f"TOKEN_T={token_t}\n")
-        output.write(f"WIFI_BODY_SENT={json.dumps(body, separators=(',', ':'))}\n")
+        output.write(f"TOKEN_S=<redacted>\n")
+        output.write(f"TOKEN_T=<redacted>\n")
+        redacted_body = {**body, "passwd": "<redacted>", "token": {**body["token"], "s": "<redacted>", "t": "<redacted>"}}
+        output.write(f"WIFI_BODY_SENT={json.dumps(redacted_body, separators=(',', ':'))}\n")
 
         wifi_resp = recv_with_timeout(sock, CFGWIFI_TIMEOUT_SECONDS)
         if wifi_resp is None:
@@ -425,6 +427,7 @@ class _UILogBuffer(io.TextIOBase):
         self._entries: list[LogEntry] = []
         self._max = max_entries
         self._pending = ""
+        self._lock = threading.Lock()
 
     def write(self, s: str) -> int:  # type: ignore[override]
         self._pending += s
@@ -455,12 +458,14 @@ class _UILogBuffer(io.TextIOBase):
             elif "ok" in low.split() or "success" in low or "reachable" in low or "connected" in low:
                 lvl = "ok"
         entry = LogEntry(ts=time.time(), level=lvl, msg=msg)
-        self._entries.append(entry)
-        if len(self._entries) > self._max:
-            self._entries = self._entries[-self._max :]
+        with self._lock:
+            self._entries.append(entry)
+            if len(self._entries) > self._max:
+                self._entries = self._entries[-self._max :]
 
     def snapshot(self) -> list[dict[str, Any]]:
-        return [{"ts": e.ts, "level": e.level, "msg": e.msg} for e in self._entries]
+        with self._lock:
+            return [{"ts": e.ts, "level": e.level, "msg": e.msg} for e in self._entries]
 
 
 @dataclass
@@ -543,6 +548,7 @@ def _build_config_from_payload(payload: dict[str, Any]) -> GuidedOnboardingConfi
     timezone = str(payload.get("timezone") or "").strip() or DEFAULT_TIMEZONE
     cst = str(payload.get("cst") or "").strip() or posix_tz_from_iana(timezone) or DEFAULT_CST
     country_domain = str(payload.get("country_domain") or "").strip() or country_from_iana(timezone) or DEFAULT_COUNTRY_DOMAIN
+    allow_insecure_tls = bool(payload.get("allow_insecure_tls") or False)
     return GuidedOnboardingConfig(
         api_base_url=api_base_url,
         stack_server=stack_server,
@@ -552,6 +558,7 @@ def _build_config_from_payload(payload: dict[str, Any]) -> GuidedOnboardingConfi
         timezone=timezone,
         cst=cst,
         country_domain=country_domain,
+        allow_insecure_tls=allow_insecure_tls,
     )
 
 
@@ -828,10 +835,15 @@ def _worker_loop() -> None:
 
         _set_phase("logging_in", config=config, config_error=None)
         _log.info(f"Logging in to {config.api_base_url}...")
+        if config.allow_insecure_tls:
+            _log.warn("TLS certificate verification is DISABLED. Connection is not fully secure.")
+            _ssl_ctx: ssl.SSLContext | None = ssl._create_unverified_context()
+        else:
+            _ssl_ctx = None  # use default verification
         api = RemoteOnboardingApi(
             base_url=config.api_base_url,
             admin_password=config.admin_password,
-            ssl_context=ssl._create_unverified_context(),
+            ssl_context=_ssl_ctx,
         )
 
         try:
@@ -870,6 +882,7 @@ def _check_token(request: Request) -> None:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
+    _check_token(request)
     return HTMLResponse(_INDEX_HTML)
 
 
@@ -903,6 +916,7 @@ class ConfigPayload(BaseModel):
     timezone: str = ""
     country_domain: str = ""
     cst: str = ""
+    allow_insecure_tls: bool = False
 
 
 @app.post("/api/config")

@@ -438,6 +438,14 @@
                         <div class="hint">Leave blank unless you need to override it.</div>
                     </div>
 
+                    <div class="field">
+                        <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;">
+                            <input type="checkbox" id="cfg-insecure-tls" />
+                            Skip TLS certificate verification (self-signed certs)
+                        </label>
+                        <div class="hint" style="color:var(--c-warn,#b45309);">&#9888; Only enable if your server uses a self-signed certificate. Disables MITM protection.</div>
+                    </div>
+
                     <div id="cfg-err" class="callout err hidden"></div>
 
                     <div class="actions">
@@ -682,6 +690,7 @@
           timezone: $("cfg-tz").value,
           country_domain: $("cfg-country").value,
           cst: $("cfg-cst").value,
+          allow_insecure_tls: $("cfg-insecure-tls").checked,
         });
       } catch (e) {
         $("cfg-err").innerHTML = `<strong>Could not continue</strong><div class="sub">${escapeHtml(e.message)}</div>`;
@@ -716,8 +725,13 @@
       catch (e) { alert(e.message); }
     }
 
+    let _pollInterval = null;
+    let _stopped = false;
+
     async function quit() {
       if (!confirm("Shut down the local server?")) return;
+      _stopped = true;
+      if (_pollInterval !== null) { clearInterval(_pollInterval); _pollInterval = null; }
       try { await api("POST", "/api/quit"); } catch {}
       document.body.innerHTML = '<div class="wrap"><div class="panel"><div class="panel-body"><h2>Server stopped</h2><div class="note">You can close this tab now.</div></div></div></div>';
     }
@@ -777,8 +791,9 @@
     $("devices-quit").addEventListener("click", quit);
     $("quit-link").addEventListener("click", (e) => { e.preventDefault(); quit(); });
 
-    poll();
-    setInterval(poll, 1000);
+    async function safePoll() { if (!_stopped) await poll(); }
+    safePoll();
+    _pollInterval = setInterval(safePoll, 1000);
 </script>
 </body>
 </html>
