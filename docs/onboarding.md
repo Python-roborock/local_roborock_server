@@ -97,7 +97,7 @@ The main reason to use the GUI version is that this flow makes you switch your m
 3. Starts a local server bound to localhost only.
 4. Opens your default browser to `http://127.0.0.1:<port>/?token=<token>`.
 
-The server is not reachable from your LAN. The token is required on every request, so other processes or browser tabs on the same machine cannot poke at it either. If the browser does not open on its own, copy the URL printed in the terminal (including the `?token=...` part) and open it manually.
+The server is not reachable from your LAN. The token is included in the launch URL and is required for the protected UI/API requests, so other processes or browser tabs on the same machine cannot drive the onboarding flow unless they have that URL. If the browser does not open on its own, copy the URL printed in the terminal (including the `?token=...` part) and open it manually.
 
 ### The five phases
 
