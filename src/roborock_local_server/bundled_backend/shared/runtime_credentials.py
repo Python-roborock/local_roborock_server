@@ -653,6 +653,25 @@ class RuntimeCredentialsStore:
                 return dict(device)
         return None
 
+    def learn_device_mqtt_credentials(self, *, username: str, password: str) -> dict[str, str] | None:
+        normalized_username = _clean_str(username)
+        normalized_password = _clean_str(password)
+        if not normalized_username or not normalized_password:
+            return None
+        with self._lock:
+            candidates = [
+                d for d in self._devices
+                if not _clean_str(d.get("device_mqtt_usr")) and _clean_str(d.get("did"))
+            ]
+            if len(candidates) != 1:
+                return None
+            device = candidates[0]
+            device["device_mqtt_usr"] = normalized_username
+            device["device_mqtt_pass"] = normalized_password
+            device["updated_at"] = utcnow_iso()
+            self._save_locked()
+            return dict(device)
+
     def recovery_pending_devices(self) -> list[dict[str, str]]:
         with self._lock:
             pending = [
