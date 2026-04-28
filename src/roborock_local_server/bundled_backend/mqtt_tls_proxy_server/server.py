@@ -224,6 +224,13 @@ class MqttTlsProxy:
                 )
                 if recovered_device is not None:
                     return True, "device_mqtt_recovered", info
+            if auth_reason == "unknown_device_mqtt_username":
+                learned_device = self.runtime_credentials.learn_device_mqtt_credentials(
+                    username=username,
+                    password=password,
+                )
+                if learned_device is not None:
+                    return True, "device_mqtt_learned", info
 
         return False, "invalid_mqtt_credentials", info
 
