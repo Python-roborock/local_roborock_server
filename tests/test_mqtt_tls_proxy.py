@@ -486,6 +486,50 @@ def test_read_first_packet_rejects_invalid_remaining_length() -> None:
     assert src.recv_calls == 1
 
 
+def test_accept_client_connection_returns_raw_socket_when_tls_disabled(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    proxy = MqttTlsProxy(
+        cert_file=None,
+        key_file=None,
+        listen_host="127.0.0.1",
+        listen_port=18883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        tls_enabled=False,
+    )
+    raw_conn = _FakeSourceSocket()
+
+    accepted = proxy._accept_client_connection(raw_conn=raw_conn, addr=("127.0.0.1", 4321), tls_ctx=None)
+
+    assert accepted is raw_conn
+    assert raw_conn.closed is False
+
+
+def test_build_tls_context_requires_cert_paths_when_tls_enabled(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    proxy = MqttTlsProxy(
+        cert_file=None,
+        key_file=None,
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+    )
+
+    with pytest.raises(RuntimeError, match="requires cert_file and key_file"):
+        proxy._build_tls_context()
+
+
 def test_handle_client_traces_packets_already_buffered_before_relay(tmp_path, monkeypatch) -> None:
     cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
     _seed_cloud_snapshot(cloud_snapshot_path)

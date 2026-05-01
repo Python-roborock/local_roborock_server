@@ -2,9 +2,54 @@
 
 Use this after [Installation](installation.md) and [Onboarding](onboarding.md) if you want Home Assistant to talk to your local stack.
 
-To use this server with Home Assistant, edit your config entry at `config/.storage/core.config_entries`.
+## Testing unpublished changes on a real Home Assistant instance
 
-Find `"roborock.com"` and replace the endpoint values with your local stack URLs:
+If you want Home Assistant to build your current local branch instead of pulling the published GHCR image:
+
+1. Export a self-contained local add-on repository:
+   - `uv run python scripts/export_home_assistant_dev_addon.py`
+2. Copy the generated folder `dist/home_assistant_dev_addon_repo/` to your Home Assistant host under:
+   - `/addons/local_roborock_server_dev_repo/`
+3. In Home Assistant, open **Settings -> Add-ons -> App Store** and refresh.
+4. Open the **Local add-ons** repository and install **Roborock Local Server Dev**.
+5. Fill the app options and start it.
+
+This path is for unpublished development work. It bundles your current `src/` tree into the add-on so Home Assistant can build it locally on the real device.
+
+## Option 1: Home Assistant App (same GHCR image)
+
+This repository contains a Home Assistant app definition at `roborock_local_server_addon/` that uses:
+
+- `ghcr.io/python-roborock/local_roborock_server`
+
+To install it as a custom repository:
+
+1. In Home Assistant, go to **Settings -> Apps -> App Store -> Repositories**.
+2. Add this repository URL:
+   - `https://github.com/Python-roborock/local_roborock_server`
+3. Install **Roborock Local Server**.
+4. Fill the app options (`stack_fqdn`, `listener_mode`, `admin_password`, `protocol_login_email`, `protocol_login_pin`, TLS settings).
+5. Start the app.
+
+Then open:
+
+- `https://<your-home-assistant-host>:555/admin` (or your configured HTTPS port)
+
+Important: installing the Home Assistant app does not automatically rewrite your Roborock integration entry. You still need to update `config/.storage/core.config_entries` endpoint values as shown below so Home Assistant points at your local stack.
+
+Notes:
+
+- `listener_mode = local_tls` means this app terminates TLS for both HTTPS and MQTT.
+- `listener_mode = external_tls` means your external proxy must terminate TLS for both HTTPS and MQTT and forward plaintext to the app's internal `listen_https_port` and `listen_mqtt_port`.
+- If you use Home Assistant's Nginx Proxy Manager add-on for certificate issuance, this add-on can read those PEM files directly through `/all_addon_configs/a0d7b954_nginxproxymanager/letsencrypt/live/...`.
+
+## Option 2: Existing Docker deployment
+
+If you keep using Docker Compose, edit your Home Assistant Roborock config entry at:
+
+- `config/.storage/core.config_entries`
+
+Find `"roborock.com"` and replace endpoint values with your local stack URLs:
 
 - `base_url` -> `https://api-roborock.example.com:555`
 - `"a"` -> `https://api-roborock.example.com:555`

@@ -176,14 +176,24 @@ def _seed_protocol_snapshot(path: Path) -> None:
     )
 
 
-def _hawk_headers(snapshot_path: Path, path: str, *, form_values: dict[str, object] | None = None, json_values: dict[str, object] | None = None) -> dict[str, str]:
+def _hawk_headers(
+    snapshot_path: Path,
+    path: str,
+    *,
+    form_values: dict[str, object] | None = None,
+    json_values: dict[str, object] | None = None,
+    json_body: str | None = None,
+) -> dict[str, str]:
     user = ProtocolAuthStore(snapshot_path).availability().user
     assert user is not None
+    if json_body is None and json_values is not None:
+        json_body = json.dumps(json_values, separators=(",", ":"))
     return {
         "Authorization": build_hawk_authorization(
             user=user,
             path=path,
-            form_values=form_values or json_values,
+            form_values=form_values,
+            json_body=json_body,
             nonce=f"nonce-{path.replace('/', '-')}",
         )
     }
@@ -737,14 +747,18 @@ def test_scene_update_routes_persist_name_and_zone_ranges(tmp_path: Path) -> Non
     assert rename_response.json()["data"]["name"] == "After dinner"
 
     update_payload = _after_dinner_param_payload(device_id, include_ranges=False)
+    update_body = json.dumps(update_payload, separators=(",", ":"))
     update_response = client.put(
         "/user/scene/4491073/param",
-        json=update_payload,
-        headers=_hawk_headers(
+        content=update_body,
+        headers={
+            "content-type": "application/json",
+            **_hawk_headers(
             paths.cloud_snapshot_path,
             "/user/scene/4491073/param",
-            json_values=update_payload,
+            json_body=update_body,
         ),
+        },
     )
     assert update_response.status_code == 200
 
@@ -759,6 +773,200 @@ def test_scene_update_routes_persist_name_and_zone_ranges(tmp_path: Path) -> Non
     second_step = json.loads(second_item["param"])
     assert first_step["params"]["data"][0]["zones"][0]["range"] == [32800, 22750, 34550, 25350]
     assert second_step["params"]["data"][0]["zones"][0]["range"] == [32550, 22650, 34550, 25200]
+
+
+def test_get_scenes_for_device_includes_edit_context(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    device_id = "6HL2zfniaoYYV01CkVuhkO"
+
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps(
+            {
+                "home": {"id": 1233716, "name": "My Home"},
+                "devices": [
+                    {
+                        "duid": device_id,
+                        "name": "Qrevo MaxV",
+                        "model": "roborock.vacuum.a87",
+                    }
+                ],
+                "scenes": [
+                    {
+                        "id": 4491073,
+                        "name": "After dinner",
+                        "device_id": device_id,
+                        "device_name": "Qrevo MaxV",
+                        "enabled": True,
+                        "type": "WORKFLOW",
+                        "param": json.dumps(_after_dinner_param_payload(device_id, include_ranges=True), separators=(",", ":")),
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    response = client.get(
+        f"/user/scene/device/{device_id}",
+        headers=_hawk_headers(paths.cloud_snapshot_path, f"/user/scene/device/{device_id}"),
+    )
+    assert response.status_code == 200
+
+    scenes = response.json()["data"]
+    assert len(scenes) == 1
+    assert scenes[0]["homeId"] == 1233716
+    assert scenes[0]["deviceId"] == device_id
+    assert scenes[0]["deviceName"] == "Qrevo MaxV"
+
+
+def test_post_scene_create_accepts_hawk_json_body_signature(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    device_id = "6HL2zfniaoYYV01CkVuhkO"
+
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps(
+            {
+                "home": {"id": 1233716, "name": "My Home"},
+                "devices": [
+                    {
+                        "duid": device_id,
+                        "name": "Qrevo MaxV",
+                        "model": "roborock.vacuum.a87",
+                    }
+                ],
+                "scenes": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+    _write_scene_zone_trace(paths.mqtt_jsonl_path)
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    create_payload = {
+        "name": "Party prep",
+        "homeId": "1233716",
+        "param": {
+            **_after_dinner_param_payload(device_id, include_ranges=False),
+            "tagId": 1002,
+        },
+    }
+    create_body = json.dumps(create_payload, separators=(",", ":"))
+    response = client.post(
+        "/v2/user/scene",
+        content=create_body,
+        headers={
+            "content-type": "application/json",
+            **_hawk_headers(
+                paths.cloud_snapshot_path,
+                "/v2/user/scene",
+                json_body=create_body,
+            ),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["name"] == "Party prep"
+
+    stored_inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    assert any(scene["name"] == "Party prep" for scene in stored_inventory["scenes"])
+
+
+def test_shared_device_query_routes_return_rooms_and_received_devices(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    device_id = "6HL2zfniaoYYV01CkVuhkO"
+
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps(
+            {
+                "home": {
+                    "id": 1316433,
+                    "name": "My Home",
+                    "rooms": [
+                        {"id": 10283928, "name": "Kitchen"},
+                        {"id": 10283924, "name": "Living room"},
+                    ],
+                },
+                "received_devices": [
+                    {
+                        "duid": device_id,
+                        "name": "Roborock Qrevo MaxV 2",
+                        "model": "roborock.vacuum.a87",
+                        "product_id": "5gUei3OIJIXVD3eD85Balg",
+                        "local_key": "xPd5Dr8CGGqtdDlH",
+                        "online": True,
+                        "pv": "1.0",
+                        "share": True,
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+    cloud_snapshot = json.loads(paths.cloud_snapshot_path.read_text(encoding="utf-8"))
+    cloud_snapshot.update(
+        {
+            "id": 1316433,
+            "name": "My Home",
+            "receivedDevices": [
+                {
+                    "duid": device_id,
+                    "name": "Roborock Qrevo MaxV 2",
+                    "productId": "5gUei3OIJIXVD3eD85Balg",
+                    "share": True,
+                }
+            ],
+            "products": [
+                {
+                    "id": "5gUei3OIJIXVD3eD85Balg",
+                    "name": "Roborock Qrevo MaxV",
+                    "model": "roborock.vacuum.a87",
+                    "category": "robot.vacuum.cleaner",
+                }
+            ],
+        }
+    )
+    paths.cloud_snapshot_path.write_text(json.dumps(cloud_snapshot) + "\n", encoding="utf-8")
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    received_devices_response = client.get(
+        "/user/deviceshare/query/receiveddevices",
+        headers=_hawk_headers(paths.cloud_snapshot_path, "/user/deviceshare/query/receiveddevices"),
+    )
+    assert received_devices_response.status_code == 200
+    received_devices = received_devices_response.json()["data"]
+    assert len(received_devices) == 1
+    assert received_devices[0]["duid"] == device_id
+
+    rooms_response = client.get(
+        f"/user/deviceshare/query/{device_id}/rooms",
+        headers=_hawk_headers(paths.cloud_snapshot_path, f"/user/deviceshare/query/{device_id}/rooms"),
+    )
+    assert rooms_response.status_code == 200
+    assert rooms_response.json()["data"] == [
+        {"id": 10283928, "name": "Kitchen"},
+        {"id": 10283924, "name": "Living room"},
+    ]
 
 
 def test_execute_scene_hydrates_missing_zone_ranges_from_mqtt(tmp_path: Path) -> None:

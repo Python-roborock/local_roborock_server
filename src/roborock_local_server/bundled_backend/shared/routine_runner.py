@@ -50,6 +50,7 @@ _STEP_START_TIMEOUT_SECONDS = 20.0
 _STEP_COMPLETE_TIMEOUT_SECONDS = 4 * 60 * 60
 _STEP_START_POLL_INTERVAL_SECONDS = 0.5
 _STATUS_POLL_INTERVAL_SECONDS = 5.0
+_STEP_COMPLETE_CONFIRM_SECONDS = 30.0
 _ROUTINE_READY_STATES = {3, 8, 100}
 _RESUME_BATTERY_THRESHOLD = 80
 _POST_STEP_SETTLE_SECONDS = 15.0
@@ -571,6 +572,7 @@ class _RoutineMqttClient:
         saw_activity = False
         saw_cleaning = False
         sent_resume = False
+        completion_candidate_since: float | None = None
 
         try:
             while True:
@@ -594,8 +596,9 @@ class _RoutineMqttClient:
                 if in_cleaning != RoborockInCleaning.complete.value:
                     saw_cleaning = True
 
+                is_non_cleaning = in_cleaning == RoborockInCleaning.complete.value
                 is_ready = (
-                    in_cleaning == RoborockInCleaning.complete.value
+                    is_non_cleaning
                     and state in _ROUTINE_READY_STATES
                 )
 
@@ -627,8 +630,17 @@ class _RoutineMqttClient:
                     saw_activity = True
                     if sent_resume and state not in (8, 23, 26):
                         sent_resume = False
-                elif saw_cleaning:
-                    return
+                if saw_cleaning:
+                    if is_non_cleaning:
+                        if completion_candidate_since is None:
+                            completion_candidate_since = loop.time()
+                        elif (
+                            loop.time() - completion_candidate_since
+                            >= _STEP_COMPLETE_CONFIRM_SECONDS
+                        ):
+                            return
+                    else:
+                        completion_candidate_since = None
                 elif saw_activity:
                     self._logger.info(
                         "Routine wait: dock activity cycle ended (no cleaning observed), resetting"
@@ -676,11 +688,10 @@ class _RoutineMqttClient:
         while True:
             remaining = deadline - loop.time()
             if remaining <= 0:
-                self._logger.warning(
-                    "Post-step settle: timed out after %.0fs waiting for dock activity to finish",
-                    _POST_STEP_SETTLE_TIMEOUT_SECONDS,
+                raise RoutineExecutionError(
+                    "Timed out waiting for dock activity to finish "
+                    f"after {_POST_STEP_SETTLE_TIMEOUT_SECONDS}s"
                 )
-                break
 
             status = await asyncio.wait_for(self.get_status(), timeout=remaining)
             state = _enum_or_int_value(status.state)

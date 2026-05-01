@@ -103,12 +103,14 @@ def test_ios_app_init_contract_from_anonymized_capture(tmp_path: Path, monkeypat
     for index, request in enumerate(fixture["requests"]):
         headers = dict(default_headers)
         headers.update(request.get("headers", {}))
+        json_body = json.dumps(request["json"], separators=(",", ":")) if request.get("json") is not None else None
         if request["path"].startswith(("/user/", "/v2/user/", "/v3/user/")):
             headers["authorization"] = build_hawk_authorization(
                 user=user,
                 path=request["path"],
                 query_values=request.get("query"),
-                form_values=request.get("form") or request.get("json"),
+                form_values=request.get("form"),
+                json_body=json_body,
                 timestamp=fixture["frozen_time"],
                 nonce=f"contract-{index}",
             )
@@ -117,7 +119,7 @@ def test_ios_app_init_contract_from_anonymized_capture(tmp_path: Path, monkeypat
             url=request["path"],
             headers=headers,
             params=request.get("query"),
-            json=request.get("json"),
+            content=json_body if json_body is not None else None,
             data=request.get("form"),
         )
         assert response.status_code == 200, request["name"]

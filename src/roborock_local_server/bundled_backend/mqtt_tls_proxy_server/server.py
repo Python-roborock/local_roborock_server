@@ -29,8 +29,8 @@ class MqttTlsProxy:
     def __init__(
         self,
         *,
-        cert_file: Path,
-        key_file: Path,
+        cert_file: Path | None,
+        key_file: Path | None,
         listen_host: str,
         listen_port: int,
         backend_host: str,
@@ -44,9 +44,11 @@ class MqttTlsProxy:
         runtime_state: RuntimeState | None = None,
         runtime_credentials: RuntimeCredentialsStore | None = None,
         zone_ranges_store: ZoneRangesStore | None = None,
+        tls_enabled: bool = True,
     ) -> None:
         self.cert_file = cert_file
         self.key_file = key_file
+        self.tls_enabled = tls_enabled
         self.listen_host = listen_host
         self.listen_port = listen_port
         self.backend_host = backend_host
@@ -63,8 +65,7 @@ class MqttTlsProxy:
         self._running = False
         self._counter = 0
         self._lock = threading.Lock()
-        self._conn_protocol_levels: dict[str, int] = {}
-        self._trace_queue: queue.Queue[tuple[str, str, bytes] | None] = queue.Queue()
+        self._conn_protocol_levels: dict[str, int] = {}        self._trace_queue: queue.Queue[tuple[str, str, bytes] | None] = queue.Queue()
         self._trace_thread: threading.Thread | None = None
         self._protocol_auth = (
             ProtocolAuthStore(
@@ -407,8 +408,7 @@ class MqttTlsProxy:
 
         topic, payload = self._extract_publish(packet, self._get_conn_protocol_level(conn_id))
         if topic is None or payload is None:
-            return
-        if self.runtime_state is not None:
+            return        if self.runtime_state is not None:
             self.runtime_state.record_mqtt_message(
                 conn_id=conn_id,
                 direction=direction,
@@ -589,7 +589,7 @@ class MqttTlsProxy:
                 except OSError:
                     pass
 
-    def _handle_client(self, tls_conn: ssl.SSLSocket, addr: tuple[str, int]) -> None:
+    def _handle_client(self, tls_conn: socket.socket | ssl.SSLSocket, addr: tuple[str, int]) -> None:
         conn_id = self._next_conn()
         backend: socket.socket | None = None
         relay_started = False
@@ -675,7 +675,9 @@ class MqttTlsProxy:
         thread.start()
         return thread
 
-    def _run(self) -> None:
+    def _build_tls_context(self) -> ssl.SSLContext:
+        if self.cert_file is None or self.key_file is None:
+            raise RuntimeError("TLS-enabled MQTT proxy requires cert_file and key_file")
         tls_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls_ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
         # Older Roborock firmware MQTT clients negotiate TLSv1.0/1.1.
@@ -691,6 +693,31 @@ class MqttTlsProxy:
         tls_ctx.load_cert_chain(str(self.cert_file), str(self.key_file))
         tls_ctx.check_hostname = False
         tls_ctx.verify_mode = ssl.CERT_NONE
+        return tls_ctx
+
+    def _accept_client_connection(
+        self,
+        *,
+        raw_conn: socket.socket,
+        addr: tuple[str, int],
+        tls_ctx: ssl.SSLContext | None,
+    ) -> socket.socket | ssl.SSLSocket | None:
+        if not self.tls_enabled:
+            self.logger.info("Plain MQTT accept from %s:%d", addr[0], addr[1])
+            return raw_conn
+        if tls_ctx is None:
+            raise RuntimeError("TLS MQTT accept requires an SSL context")
+        try:
+            tls_conn = tls_ctx.wrap_socket(raw_conn, server_side=True)
+            self.logger.info("TLS handshake ok from %s:%d (%s)", addr[0], addr[1], tls_conn.version())
+            return tls_conn
+        except (ssl.SSLError, ConnectionResetError, OSError) as exc:
+            self.logger.warning("TLS handshake failed from %s:%d: %s", addr[0], addr[1], exc)
+            raw_conn.close()
+            return None
+
+    def _run(self) -> None:
+        tls_ctx = self._build_tls_context() if self.tls_enabled else None
 
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -698,7 +725,8 @@ class MqttTlsProxy:
         self._server_socket.listen(10)
         self._running = True
         self.logger.info(
-            "TLS MQTT proxy listening on %s:%d -> %s:%d",
+            "%s MQTT proxy listening on %s:%d -> %s:%d",
+            "TLS" if self.tls_enabled else "Plain",
             self.listen_host,
             self.listen_port,
             self.backend_host,
@@ -708,14 +736,10 @@ class MqttTlsProxy:
         while self._running:
             try:
                 raw_conn, addr = self._server_socket.accept()
-                try:
-                    tls_conn = tls_ctx.wrap_socket(raw_conn, server_side=True)
-                    self.logger.info("TLS handshake ok from %s:%d (%s)", addr[0], addr[1], tls_conn.version())
-                except (ssl.SSLError, ConnectionResetError, OSError) as exc:
-                    self.logger.warning("TLS handshake failed from %s:%d: %s", addr[0], addr[1], exc)
-                    raw_conn.close()
+                client_conn = self._accept_client_connection(raw_conn=raw_conn, addr=addr, tls_ctx=tls_ctx)
+                if client_conn is None:
                     continue
-                threading.Thread(target=self._handle_client, args=(tls_conn, addr), daemon=True).start()
+                threading.Thread(target=self._handle_client, args=(client_conn, addr), daemon=True).start()
             except OSError as exc:
                 if not self._running:
                     break

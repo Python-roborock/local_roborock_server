@@ -173,28 +173,36 @@ class ManagedFastApiServer:
         app: FastAPI,
         bind_host: str,
         port: int,
-        cert_file: Path,
-        key_file: Path,
+        tls_enabled: bool,
+        cert_file: Path | None = None,
+        key_file: Path | None = None,
     ) -> None:
         self._app = app
         self._bind_host = bind_host
         self._port = port
+        self._tls_enabled = tls_enabled
         self._cert_file = cert_file
         self._key_file = key_file
         self._server: uvicorn.Server | None = None
         self._serve_task: asyncio.Task[bool] | None = None
 
     async def start(self) -> None:
-        config = uvicorn.Config(
-            app=self._app,
-            host=self._bind_host,
-            port=self._port,
-            log_level="warning",
-            access_log=False,
-            ssl_certfile=str(self._cert_file),
-            ssl_keyfile=str(self._key_file),
-            ssl_ciphers="DEFAULT:@SECLEVEL=0",
-        )
+        config_kwargs: dict[str, Any] = {
+            "app": self._app,
+            "host": self._bind_host,
+            "port": self._port,
+            "log_level": "warning",
+            "access_log": False,
+        }
+        if self._tls_enabled:
+            if self._cert_file is None or self._key_file is None:
+                raise RuntimeError("TLS-enabled HTTP server requires cert_file and key_file")
+            config_kwargs.update(
+                ssl_certfile=str(self._cert_file),
+                ssl_keyfile=str(self._key_file),
+                ssl_ciphers="DEFAULT:@SECLEVEL=0",
+            )
+        config = uvicorn.Config(**config_kwargs)
         self._server = uvicorn.Server(config)
         self._serve_task = asyncio.create_task(self._server.serve(), name="release-https-server")
         await self._wait_started()
@@ -350,14 +358,20 @@ class ReleaseSupervisor:
             running=False,
             required=True,
             enabled=True,
-            detail=f"{self.config.network.bind_host}:{self.config.network.https_port}",
+            detail=(
+                f"{self.config.network.listener_mode}:"
+                f"{self.config.network.bind_host}:{self.config.network.listen_https_port}"
+            ),
         )
         self.runtime_state.set_service(
             "mqtt_tls_proxy",
             running=False,
             required=True,
             enabled=True,
-            detail=f"{self.config.network.bind_host}:{self.config.network.mqtt_tls_port}",
+            detail=(
+                f"{self.config.network.listener_mode}:"
+                f"{self.config.network.bind_host}:{self.config.network.listen_mqtt_port}"
+            ),
         )
         self.runtime_state.set_service(
             "mqtt_backend_broker",
@@ -420,6 +434,9 @@ class ReleaseSupervisor:
         )
         self.endpoint_rules = default_endpoint_rules()
         self.app = self._create_app()
+
+    def _uses_local_tls(self) -> bool:
+        return self.config.network.listener_mode == "local_tls"
 
     def _init_zone_ranges_store(self) -> ZoneRangesStore:
         store = ZoneRangesStore(self.paths.http_jsonl_path.parent)
@@ -1443,24 +1460,25 @@ class ReleaseSupervisor:
         return app
 
     async def _start_http_server(self) -> None:
-        cert_paths = self.certificate_manager.certificate_paths
+        cert_paths = self.certificate_manager.certificate_paths if self._uses_local_tls() else None
         self._http_server = ManagedFastApiServer(
             app=self.app,
             bind_host=self.config.network.bind_host,
-            port=self.config.network.https_port,
-            cert_file=cert_paths.cert_file,
-            key_file=cert_paths.key_file,
+            port=self.config.network.listen_https_port,
+            tls_enabled=self._uses_local_tls(),
+            cert_file=cert_paths.cert_file if cert_paths is not None else None,
+            key_file=cert_paths.key_file if cert_paths is not None else None,
         )
         await self._http_server.start()
         self.runtime_state.set_service("https_server", running=True, required=True, enabled=True)
 
     def _start_mqtt_proxy(self) -> None:
-        cert_paths = self.certificate_manager.certificate_paths
+        cert_paths = self.certificate_manager.certificate_paths if self._uses_local_tls() else None
         self._mqtt_proxy = MqttTlsProxy(
-            cert_file=cert_paths.cert_file,
-            key_file=cert_paths.key_file,
+            cert_file=cert_paths.cert_file if cert_paths is not None else None,
+            key_file=cert_paths.key_file if cert_paths is not None else None,
             listen_host=self.config.network.bind_host,
-            listen_port=self.config.network.mqtt_tls_port,
+            listen_port=self.config.network.listen_mqtt_port,
             backend_host=self.config.broker.host,
             backend_port=self.config.broker.port,
             localkey=self.context.localkey,
@@ -1472,6 +1490,7 @@ class ReleaseSupervisor:
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self.context.zone_ranges_store,
+            tls_enabled=self._uses_local_tls(),
         )
         self._mqtt_proxy.start()
         self.runtime_state.set_service("mqtt_tls_proxy", running=True, required=True, enabled=True)
@@ -1503,7 +1522,8 @@ class ReleaseSupervisor:
         for path in (self.paths.data_dir, self.paths.runtime_dir, self.paths.state_dir, self.paths.certs_dir, self.paths.acme_dir):
             path.mkdir(parents=True, exist_ok=True)
 
-        self.certificate_manager.ensure_certificate()
+        if self._uses_local_tls():
+            self.certificate_manager.ensure_certificate()
         self.refresh_inventory_state()
 
         if self.config.broker.mode == "embedded":
@@ -1535,14 +1555,16 @@ class ReleaseSupervisor:
         self._start_mqtt_proxy()
 
         self.root_logger.info(
-            "HTTPS server listening on %s:%d",
+            "%s server listening on %s:%d",
+            "HTTPS" if self._uses_local_tls() else "HTTP",
             self.config.network.bind_host,
-            self.config.network.https_port,
+            self.config.network.listen_https_port,
         )
         self.root_logger.info(
-            "MQTT TLS proxy listening on %s:%d",
+            "MQTT %s proxy listening on %s:%d",
+            "TLS" if self._uses_local_tls() else "plaintext",
             self.config.network.bind_host,
-            self.config.network.mqtt_tls_port,
+            self.config.network.listen_mqtt_port,
         )
         self.root_logger.info(
             "MQTT backend %s on %s:%d",
@@ -1551,7 +1573,7 @@ class ReleaseSupervisor:
             self.config.broker.port,
         )
 
-        if self.config.tls.mode == "cloudflare_acme":
+        if self._uses_local_tls() and self.config.tls.mode == "cloudflare_acme":
             self._renew_task = asyncio.create_task(self._renew_loop(), name="tls-renew-loop")
 
     async def stop(self) -> None:

@@ -41,8 +41,11 @@ _CLOUDFLARE_TOKEN_CONTAINER_PATH = "/run/secrets/cloudflare_token"
 @dataclass(frozen=True)
 class ConfigureAnswers:
     stack_fqdn: str
+    listener_mode: str
     https_port: int
     mqtt_tls_port: int
+    listen_https_port: int
+    listen_mqtt_port: int
     broker_mode: str
     tls_mode: str
     base_domain: str
@@ -65,7 +68,7 @@ def _toml_string(value: str) -> str:
     return json.dumps(value)
 
 
-def _normalize_hostname(raw_value: str, *, field_name: str) -> str:
+def _normalize_hostname(raw_value: str, *, field_name: str, require_api_prefix: bool = False) -> str:
     text = str(raw_value or "").strip()
     if not text:
         raise ValueError(f"{field_name} is required")
@@ -85,6 +88,8 @@ def _normalize_hostname(raw_value: str, *, field_name: str) -> str:
         raise ValueError(f"{field_name} must be a hostname without a scheme or path")
     if "." not in normalized:
         raise ValueError(f"{field_name} must be a fully qualified domain name")
+    if require_api_prefix and not normalized.startswith("api-"):
+        raise ValueError(f"{field_name} must start with api-")
     return normalized
 
 
@@ -100,7 +105,11 @@ def _prompt_hostname(prompt: str, *, field_name: str) -> str:
     while True:
         raw_value = _prompt_non_empty(prompt)
         try:
-            return _normalize_hostname(raw_value, field_name=field_name)
+            return _normalize_hostname(
+                raw_value,
+                field_name=field_name,
+                require_api_prefix=field_name == "stack_fqdn",
+            )
         except ValueError as exc:
             print(exc)
 
@@ -177,10 +186,21 @@ def collect_configure_answers() -> ConfigureAnswers:
         "Stack FQDN (hostname only (no 'https://'); it needs to start with api-): ",
         field_name="stack_fqdn",
     )
-    https_port = _prompt_port("HTTPS port to advertise and listen on", default=555)
-    mqtt_tls_port = _prompt_port("MQTT TLS port to advertise and listen on", default=8881)
+    https_port = _prompt_port("Advertised HTTPS port", default=555)
+    mqtt_tls_port = _prompt_port("Advertised MQTT TLS port", default=8881)
+    use_external_tls = _prompt_yes_no(
+        "Will an external proxy terminate TLS for both HTTPS and MQTT?",
+        default=False,
+    )
+    listener_mode = "external_tls" if use_external_tls else "local_tls"
+    listen_https_port = _prompt_port("Internal HTTPS listen port", default=https_port)
+    listen_mqtt_port = _prompt_port("Internal MQTT listen port", default=mqtt_tls_port)
     use_external_broker = _prompt_yes_no("Use your own MQTT broker instead of the embedded one?", default=False)
-    use_cloudflare_acme = _prompt_yes_no("Use Cloudflare DNS-01 for automatic TLS renewal?", default=True)
+    use_cloudflare_acme = (
+        _prompt_yes_no("Use Cloudflare DNS-01 for automatic TLS renewal?", default=True)
+        if listener_mode == "local_tls"
+        else False
+    )
 
     broker_mode = "external" if use_external_broker else "embedded"
     tls_mode = "cloudflare_acme" if use_cloudflare_acme else "provided"
@@ -204,8 +224,11 @@ def collect_configure_answers() -> ConfigureAnswers:
     protocol_login_pin = _prompt_protocol_login_pin()
     return ConfigureAnswers(
         stack_fqdn=stack_fqdn,
+        listener_mode=listener_mode,
         https_port=https_port,
         mqtt_tls_port=mqtt_tls_port,
+        listen_https_port=listen_https_port,
+        listen_mqtt_port=listen_mqtt_port,
         broker_mode=broker_mode,
         tls_mode=tls_mode,
         base_domain=base_domain,
@@ -222,9 +245,12 @@ def render_config_toml(answers: ConfigureAnswers) -> str:
     lines = [
         "[network]",
         f"stack_fqdn = {_toml_string(answers.stack_fqdn)}",
+        f'listener_mode = "{answers.listener_mode}"',
         'bind_host = "0.0.0.0"',
         f"https_port = {answers.https_port}",
         f"mqtt_tls_port = {answers.mqtt_tls_port}",
+        f"listen_https_port = {answers.listen_https_port}",
+        f"listen_mqtt_port = {answers.listen_mqtt_port}",
         'region = "us"',
         "",
         "[broker]",
@@ -260,7 +286,7 @@ def render_config_toml(answers: ConfigureAnswers) -> str:
             f'mode = "{answers.tls_mode}"',
         ]
     )
-    if answers.tls_mode == "cloudflare_acme":
+    if answers.listener_mode == "local_tls" and answers.tls_mode == "cloudflare_acme":
         lines.extend(
             [
                 f"base_domain = {_toml_string(answers.base_domain)}",
@@ -311,7 +337,7 @@ def write_config_setup(
     token_path = config_path.parent / "secrets" / "cloudflare_token"
 
     protected_paths = [config_path]
-    if answers.tls_mode == "cloudflare_acme":
+    if answers.listener_mode == "local_tls" and answers.tls_mode == "cloudflare_acme":
         protected_paths.append(token_path)
 
     if not force:
@@ -324,7 +350,7 @@ def write_config_setup(
     config_path.write_text(render_config_toml(answers), encoding="utf-8")
 
     written_token_path: Path | None = None
-    if answers.tls_mode == "cloudflare_acme":
+    if answers.listener_mode == "local_tls" and answers.tls_mode == "cloudflare_acme":
         token_path.parent.mkdir(parents=True, exist_ok=True)
         token_path.write_text(answers.cloudflare_token, encoding="utf-8")
         if os.name != "nt":

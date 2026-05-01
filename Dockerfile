@@ -23,4 +23,4 @@ RUN pip install --no-cache-dir /app
 
 EXPOSE 443 8883
 
-CMD ["roborock-local-server", "serve", "--config", "/app/config.toml"]
+CMD ["python", "-m", "roborock_local_server.container_entrypoint"]

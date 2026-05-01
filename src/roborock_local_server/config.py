@@ -10,9 +10,12 @@ import tomllib
 @dataclass(frozen=True)
 class NetworkConfig:
     stack_fqdn: str
+    listener_mode: str
     bind_host: str
     https_port: int
     mqtt_tls_port: int
+    listen_https_port: int
+    listen_mqtt_port: int
     region: str
     localkey: str
     duid: str
@@ -99,6 +102,14 @@ def _require_non_empty(value: object, field_name: str) -> str:
     return text
 
 
+def _require_stack_fqdn(value: object, field_name: str) -> str:
+    text = _require_non_empty(value, field_name)
+    hostname = text.split("/", 1)[0].split(":", 1)[0].strip().lower()
+    if not hostname.startswith("api-"):
+        raise ValueError(f"{field_name} must start with api-")
+    return text
+
+
 def _as_int(value: object, field_name: str, default: int) -> int:
     if value in (None, ""):
         return default
@@ -122,6 +133,15 @@ def _as_bool(value: object, default: bool) -> bool:
     return bool(value)
 
 
+def _listener_port(
+    section: dict[str, object],
+    *,
+    field_name: str,
+    default: int,
+) -> int:
+    return _as_int(section.get(field_name), f"network.{field_name}", default)
+
+
 def load_config(path: str | Path) -> AppConfig:
     config_path = Path(path).resolve()
     parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
@@ -138,6 +158,9 @@ def load_config(path: str | Path) -> AppConfig:
     tls_mode = str(tls.get("mode", "cloudflare_acme")).strip().lower()
     if tls_mode not in {"cloudflare_acme", "provided"}:
         raise ValueError("tls.mode must be 'cloudflare_acme' or 'provided'")
+    listener_mode = str(network.get("listener_mode", "local_tls")).strip().lower() or "local_tls"
+    if listener_mode not in {"local_tls", "external_tls"}:
+        raise ValueError("network.listener_mode must be 'local_tls' or 'external_tls'")
 
     raw_broker_host = broker.get("host")
     broker_host = str(raw_broker_host).strip() if raw_broker_host is not None else "127.0.0.1"
@@ -147,10 +170,21 @@ def load_config(path: str | Path) -> AppConfig:
 
     config = AppConfig(
         network=NetworkConfig(
-            stack_fqdn=_require_non_empty(network.get("stack_fqdn"), "network.stack_fqdn"),
+            stack_fqdn=_require_stack_fqdn(network.get("stack_fqdn"), "network.stack_fqdn"),
+            listener_mode=listener_mode,
             bind_host=str(network.get("bind_host", "0.0.0.0")).strip() or "0.0.0.0",
             https_port=_as_int(network.get("https_port"), "network.https_port", 555),
             mqtt_tls_port=_as_int(network.get("mqtt_tls_port"), "network.mqtt_tls_port", 8881),
+            listen_https_port=_listener_port(
+                network,
+                field_name="listen_https_port",
+                default=_as_int(network.get("https_port"), "network.https_port", 555),
+            ),
+            listen_mqtt_port=_listener_port(
+                network,
+                field_name="listen_mqtt_port",
+                default=_as_int(network.get("mqtt_tls_port"), "network.mqtt_tls_port", 8881),
+            ),
             region=str(network.get("region", "us")).strip().lower() or "us",
             localkey=str(network.get("localkey", "")).strip(),
             duid=str(network.get("duid", "")).strip(),
@@ -200,13 +234,14 @@ def load_config(path: str | Path) -> AppConfig:
     if config.broker.mode == "external":
         _require_non_empty(config.broker.host, "broker.host")
 
-    if config.tls.mode == "cloudflare_acme":
-        _require_non_empty(config.tls.base_domain, "tls.base_domain")
-        _require_non_empty(config.tls.email, "tls.email")
-        _require_non_empty(config.tls.cloudflare_token_file, "tls.cloudflare_token_file")
-    else:
-        _require_non_empty(config.tls.cert_file, "tls.cert_file")
-        _require_non_empty(config.tls.key_file, "tls.key_file")
+    if config.network.listener_mode == "local_tls":
+        if config.tls.mode == "cloudflare_acme":
+            _require_non_empty(config.tls.base_domain, "tls.base_domain")
+            _require_non_empty(config.tls.email, "tls.email")
+            _require_non_empty(config.tls.cloudflare_token_file, "tls.cloudflare_token_file")
+        else:
+            _require_non_empty(config.tls.cert_file, "tls.cert_file")
+            _require_non_empty(config.tls.key_file, "tls.key_file")
     return config
 
 

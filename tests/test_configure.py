@@ -8,15 +8,21 @@ from roborock_local_server.configure import ConfigureAnswers, _validate_protocol
 
 def _answers(
     *,
+    listener_mode: str = "local_tls",
     https_port: int = 555,
     mqtt_tls_port: int = 8881,
+    listen_https_port: int | None = None,
+    listen_mqtt_port: int | None = None,
     broker_mode: str = "embedded",
     tls_mode: str = "cloudflare_acme",
 ) -> ConfigureAnswers:
     return ConfigureAnswers(
-        stack_fqdn="roborock.example.com",
+        stack_fqdn="api-roborock.example.com",
+        listener_mode=listener_mode,
         https_port=https_port,
         mqtt_tls_port=mqtt_tls_port,
+        listen_https_port=https_port if listen_https_port is None else listen_https_port,
+        listen_mqtt_port=mqtt_tls_port if listen_mqtt_port is None else listen_mqtt_port,
         broker_mode=broker_mode,
         tls_mode=tls_mode,
         base_domain="example.com" if tls_mode == "cloudflare_acme" else "",
@@ -40,7 +46,8 @@ def test_write_config_setup_embedded_cloudflare(tmp_path: Path) -> None:
     assert not result.broker_template_needs_edit
 
     config = load_config(result.config_file)
-    assert config.network.stack_fqdn == "roborock.example.com"
+    assert config.network.stack_fqdn == "api-roborock.example.com"
+    assert config.network.listener_mode == "local_tls"
     assert config.network.https_port == 555
     assert config.network.mqtt_tls_port == 8881
     assert config.broker.mode == "embedded"
@@ -92,6 +99,30 @@ def test_write_config_setup_persists_custom_ports(tmp_path: Path) -> None:
     config = load_config(result.config_file)
     assert config.network.https_port == 8443
     assert config.network.mqtt_tls_port == 9443
+
+
+def test_write_config_setup_external_tls_writes_internal_listener_ports(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+
+    result = write_config_setup(
+        config_file=config_file,
+        answers=_answers(
+            listener_mode="external_tls",
+            https_port=443,
+            mqtt_tls_port=8883,
+            listen_https_port=8080,
+            listen_mqtt_port=18883,
+            tls_mode="provided",
+        ),
+    )
+
+    config = load_config(result.config_file)
+    rendered = config_file.read_text(encoding="utf-8")
+
+    assert config.network.listener_mode == "external_tls"
+    assert config.network.listen_https_port == 8080
+    assert config.network.listen_mqtt_port == 18883
+    assert 'listener_mode = "external_tls"' in rendered
 
 
 def test_validate_protocol_login_pin_requires_exactly_six_digits() -> None:
