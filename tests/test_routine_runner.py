@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from roborock.data import StatusV2
+from roborock.exceptions import RoborockException
 from roborock_local_server.bundled_backend.shared.context import ServerContext
 import roborock_local_server.bundled_backend.shared.routine_runner as routine_runner_module
 from roborock_local_server.bundled_backend.shared.routine_runner import RoutineRunner, parse_scene_steps
@@ -262,6 +263,118 @@ def test_run_scene_syncs_scene_tids_before_step_commands(tmp_path: Path, monkeyp
     asyncio.run(exercise())
 
 
+def test_run_scene_retries_step_start_when_device_is_action_locked(tmp_path: Path, monkeypatch) -> None:
+    async def exercise() -> None:
+        device_id = "6HL2zfniaoYYV01CkVuhkO"
+        scene = {
+            "id": 4491073,
+            "name": "Night clean",
+            "device_id": device_id,
+            "param": json.dumps(
+                {
+                    "action": {
+                        "items": [
+                            {
+                                "id": 1,
+                                "type": "CMD",
+                                "name": "Step 1",
+                                "finishDpIds": [130],
+                                "param": json.dumps(
+                                    {
+                                        "method": "do_scenes_segments",
+                                        "params": {
+                                            "data": [
+                                                {
+                                                    "tid": "1755507280460",
+                                                    "segs": [{"sid": 18}],
+                                                    "fan_power": 108,
+                                                    "repeat": 1,
+                                                }
+                                            ]
+                                        },
+                                    },
+                                    separators=(",", ":"),
+                                ),
+                            },
+                            {
+                                "id": 2,
+                                "type": "CMD",
+                                "name": "Step 2",
+                                "finishDpIds": [130],
+                                "param": json.dumps(
+                                    {
+                                        "method": "do_scenes_segments",
+                                        "params": {
+                                            "data": [
+                                                {
+                                                    "tid": "1755507296636",
+                                                    "segs": [{"sid": 19}],
+                                                    "fan_power": 103,
+                                                    "repeat": 1,
+                                                }
+                                            ]
+                                        },
+                                    },
+                                    separators=(",", ":"),
+                                ),
+                            },
+                        ]
+                    }
+                },
+                separators=(",", ":"),
+            ),
+        }
+
+        sent_commands: list[tuple[RoborockCommand, object]] = []
+        settle_calls: list[float] = []
+        segment_attempts = 0
+
+        class FakeRoutineClient:
+            def __init__(self, context, device, logger) -> None:
+                _ = context, device, logger
+
+            async def connect(self) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+            async def send_command(self, command, params=None):
+                nonlocal segment_attempts
+                sent_commands.append((command, params))
+                if command == RoborockCommand.APP_SEGMENT_CLEAN:
+                    segment_attempts += 1
+                    if segment_attempts == 2:
+                        raise RoborockException({"code": -10003, "message": "action locked"})
+                return ["ok"]
+
+            async def wait_for_step_complete(self) -> None:
+                return None
+
+            async def wait_for_dock_settle(self, *, initial_delay_seconds=15.0) -> None:
+                settle_calls.append(float(initial_delay_seconds))
+
+        monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+
+        runner = RoutineRunner(_test_context(tmp_path))
+        await runner._run_scene(scene=scene, steps=parse_scene_steps(scene))
+
+        assert sent_commands == [
+            (
+                RoborockCommand.REUNION_SCENES,
+                {"data": [{"tid": "1755507280460"}, {"tid": "1755507296636"}]},
+            ),
+            (RoborockCommand.SET_CUSTOM_MODE, [108]),
+            (RoborockCommand.APP_SEGMENT_CLEAN, [{"segments": [18], "repeat": 1}]),
+            (RoborockCommand.SET_CUSTOM_MODE, [103]),
+            (RoborockCommand.APP_SEGMENT_CLEAN, [{"segments": [19], "repeat": 1}]),
+            (RoborockCommand.APP_SEGMENT_CLEAN, [{"segments": [19], "repeat": 1}]),
+        ]
+        assert settle_calls == [15.0, 5.0]
+
+    asyncio.run(exercise())
+
+
 # ---------------------------------------------------------------------------
 # wait_for_step_complete tests
 # ---------------------------------------------------------------------------
@@ -290,10 +403,18 @@ class _ScriptedStatusClient:
 _ScriptedStatusClient.wait_for_step_complete = (
     routine_runner_module._RoutineMqttClient.wait_for_step_complete
 )
+_ScriptedStatusClient.wait_for_dock_settle = (
+    routine_runner_module._RoutineMqttClient.wait_for_dock_settle
+)
+
+
+def _set_fast_wait_constants(monkeypatch, *, confirm_seconds: float = 0.0) -> None:
+    monkeypatch.setattr(routine_runner_module, "_STEP_COMPLETE_CONFIRM_SECONDS", confirm_seconds)
 
 
 def test_wait_for_step_complete_dock_activity_does_not_end_step(monkeypatch) -> None:
     """Dock activity (emptying bin) followed by ready must not declare step complete."""
+    _set_fast_wait_constants(monkeypatch)
     monkeypatch.setattr(routine_runner_module, "_STEP_START_TIMEOUT_SECONDS", 0.1)
     monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
@@ -317,6 +438,7 @@ def test_wait_for_step_complete_dock_activity_does_not_end_step(monkeypatch) -> 
 
 def test_wait_for_step_complete_actual_cleaning_completes(monkeypatch) -> None:
     """Step completes when in_cleaning becomes non-zero then robot returns to ready."""
+    _set_fast_wait_constants(monkeypatch)
     monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
 
@@ -334,6 +456,7 @@ def test_wait_for_step_complete_actual_cleaning_completes(monkeypatch) -> None:
 
 def test_wait_for_step_complete_dock_then_cleaning_completes(monkeypatch) -> None:
     """Dock activity followed by actual cleaning should complete after cleaning finishes."""
+    _set_fast_wait_constants(monkeypatch)
     monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
 
@@ -354,6 +477,7 @@ def test_wait_for_step_complete_dock_then_cleaning_completes(monkeypatch) -> Non
 
 def test_wait_for_step_complete_start_timeout(monkeypatch) -> None:
     """Raises RoutineExecutionError when robot stays in ready state past start deadline."""
+    _set_fast_wait_constants(monkeypatch)
     monkeypatch.setattr(routine_runner_module, "_STEP_START_TIMEOUT_SECONDS", 0.1)
     monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
 
@@ -374,6 +498,7 @@ def test_wait_for_step_complete_start_timeout(monkeypatch) -> None:
 
 def test_wait_for_step_complete_resume_after_mid_clean_charge(monkeypatch) -> None:
     """Robot returns to dock mid-clean with low battery, charges, gets resumed, completes."""
+    _set_fast_wait_constants(monkeypatch)
     monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(routine_runner_module, "_RESUME_BATTERY_THRESHOLD", 80)
@@ -400,6 +525,7 @@ def test_wait_for_step_complete_resume_after_mid_clean_charge(monkeypatch) -> No
 
 def test_wait_for_step_complete_resume_zoned_clean(monkeypatch) -> None:
     """Resume uses correct command for zone cleaning."""
+    _set_fast_wait_constants(monkeypatch)
     monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(routine_runner_module, "_RESUME_BATTERY_THRESHOLD", 80)
@@ -420,6 +546,7 @@ def test_wait_for_step_complete_resume_zoned_clean(monkeypatch) -> None:
 
 def test_wait_for_step_complete_no_resume_when_battery_low(monkeypatch) -> None:
     """No resume sent while battery is below threshold."""
+    _set_fast_wait_constants(monkeypatch)
     monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(routine_runner_module, "_STEP_COMPLETE_TIMEOUT_SECONDS", 0.1)
@@ -441,6 +568,7 @@ def test_wait_for_step_complete_no_resume_when_battery_low(monkeypatch) -> None:
 
 def test_wait_for_step_complete_resume_only_sent_once(monkeypatch) -> None:
     """Resume command is only sent once even if robot returns to dock again."""
+    _set_fast_wait_constants(monkeypatch)
     monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(routine_runner_module, "_RESUME_BATTERY_THRESHOLD", 80)
@@ -456,5 +584,43 @@ def test_wait_for_step_complete_resume_only_sent_once(monkeypatch) -> None:
         ])
         await client.wait_for_step_complete()
         assert len(client.sent_commands) == 2
+
+    asyncio.run(exercise())
+
+
+def test_wait_for_step_complete_requires_stable_non_cleaning_state(monkeypatch) -> None:
+    """A brief non-cleaning status must not end the step if cleaning resumes."""
+    monkeypatch.setattr(routine_runner_module, "_STEP_COMPLETE_CONFIRM_SECONDS", 0.02)
+    monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.01)
+
+    async def exercise() -> None:
+        client = _ScriptedStatusClient([
+            {"state": 18, "in_cleaning": 3},
+            {"state": 8, "in_cleaning": 0},
+            {"state": 18, "in_cleaning": 3},
+            {"state": 18, "in_cleaning": 3},
+            {"state": 8, "in_cleaning": 0},
+            {"state": 8, "in_cleaning": 0},
+            {"state": 8, "in_cleaning": 0},
+        ])
+        await client.wait_for_step_complete()
+
+    asyncio.run(exercise())
+
+
+def test_wait_for_dock_settle_timeout_raises(monkeypatch) -> None:
+    _set_fast_wait_constants(monkeypatch)
+    monkeypatch.setattr(routine_runner_module, "_POST_STEP_SETTLE_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
+
+    async def exercise() -> None:
+        client = _ScriptedStatusClient([
+            {"state": 18, "in_cleaning": 3},
+            {"state": 18, "in_cleaning": 3},
+            {"state": 18, "in_cleaning": 3},
+        ])
+        with pytest.raises(routine_runner_module.RoutineExecutionError, match="dock activity"):
+            await client.wait_for_dock_settle(initial_delay_seconds=0.0)
 
     asyncio.run(exercise())

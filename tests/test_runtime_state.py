@@ -132,3 +132,72 @@ def test_runtime_state_onboarding_session_reports_identity_conflict(tmp_path: Pa
     assert linked["duid"] == "cloud-q7-b"
     assert "already linked to DUID cloud-q7-b" in snapshot["identity_conflict"]
     assert snapshot["status"] == "conflict"
+
+
+def test_runtime_state_onboarding_device_mqtt_candidate_requires_matching_ip_and_public_key(tmp_path: Path) -> None:
+    credentials_path = tmp_path / "runtime_credentials.json"
+    credentials_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "devices": [
+                    {
+                        "did": "",
+                        "duid": "cloud-q7-a",
+                        "name": "Q7 Upstairs",
+                        "model": "roborock.vacuum.sc05",
+                        "product_id": "product-q7-a",
+                        "localkey": "local-key-a",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    key_state_path = tmp_path / "device_key_state.json"
+    key_state_path.write_text(
+        json.dumps(
+            {
+                "devices": {
+                    "1103821560705": {
+                        "modulus_hex": "ab",
+                    }
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    credentials = RuntimeCredentialsStore(credentials_path)
+    state = RuntimeState(log_dir=tmp_path, key_state_file=key_state_path, runtime_credentials=credentials)
+    state.upsert_vacuum("cloud-q7-a", name="Q7 Upstairs", id_kind="duid")
+    state.start_onboarding_session(target_duid="cloud-q7-a", target_name="Q7 Upstairs")
+
+    event_time = datetime.now(timezone.utc).isoformat()
+    state.record_http_event(
+        event_time=event_time,
+        route_name="region",
+        clean_path="/region",
+        raw_path="/region",
+        method="GET",
+        host="api-roborock.example.com",
+        remote="192.168.8.10:54321",
+        did="1103821560705",
+    )
+    state.record_http_event(
+        event_time=event_time,
+        route_name="nc_prepare",
+        clean_path="/nc",
+        raw_path="/nc",
+        method="GET",
+        host="api-roborock.example.com",
+        remote="192.168.8.10:54321",
+        did="1103821560705",
+    )
+
+    candidate = state.onboarding_device_mqtt_candidate(client_ip="192.168.8.10")
+    assert candidate is not None
+    assert candidate["did"] == "1103821560705"
+    assert candidate["duid"] == "cloud-q7-a"
+    assert state.onboarding_device_mqtt_candidate(client_ip="192.168.8.11") is None

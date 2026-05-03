@@ -1031,6 +1031,7 @@ class ReleaseSupervisor:
                     query_params=query_params,
                     body_params=body_params,
                     headers=request.headers,
+                    raw_body=raw_body,
                 )
             if not authenticated:
                 route_name = f"{required_auth}_auth_failed"
