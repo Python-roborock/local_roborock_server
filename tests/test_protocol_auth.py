@@ -238,6 +238,24 @@ def test_protocol_code_login_routes_use_local_email_and_pin_without_cloud_manage
     assert login_payload["email"] == "user@example.com"
 
 
+def test_protocol_code_login_reuses_matching_snapshot_identity_for_reauth(tmp_path: Path) -> None:
+    supervisor, _paths = _build_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    login_response = client.post(
+        "/api/v5/auth/email/login/code",
+        json={"email": "user@example.com", "code": "123456", "baseUrl": supervisor.context.api_url()},
+    )
+    assert login_response.status_code == 200
+    login_payload = login_response.json()["data"]
+    assert login_payload["rruid"] == "local-rruid-123"
+    assert login_payload["token"] != "local-token-123"
+    assert login_payload["rriot"]["u"] != "hawk-user-123"
+    assert login_payload["rriot"]["r"]["a"] == supervisor.context.api_url()
+    assert login_payload["rriot"]["r"]["m"] == supervisor.context.mqtt_url()
+    assert login_payload["rriot"]["r"]["l"] == supervisor.context.wood_url()
+
+
 def test_protocol_code_login_rejects_wrong_email_and_wrong_pin(tmp_path: Path) -> None:
     supervisor, _paths = _build_supervisor(tmp_path, with_snapshot=False)
     client = TestClient(supervisor.app)

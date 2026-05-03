@@ -49,6 +49,8 @@ from shared.protocol_auth import ProtocolAuthStore
 from https_server.routes.auth.service import (
     build_login_data_response,
     cloud_login_data_required_response,
+    load_cloud_full_snapshot,
+    with_current_server_urls,
 )
 from .bundled_backend.shared.zone_ranges_store import ZoneRangesStore
 from .security import AdminSessionManager, verify_password
@@ -538,6 +540,25 @@ class ReleaseSupervisor:
             },
         }
 
+    def _protocol_login_identity(self) -> dict[str, Any]:
+        snapshot = load_cloud_full_snapshot(self.context)
+        if isinstance(snapshot, dict):
+            meta_value = snapshot.get("meta")
+            meta = meta_value if isinstance(meta_value, dict) else {}
+            user_data_value = snapshot.get("user_data")
+            candidate_user_data = user_data_value if isinstance(user_data_value, dict) else {}
+            candidate_accounts = (
+                meta.get("username"),
+                candidate_user_data.get("email"),
+                candidate_user_data.get("username"),
+                candidate_user_data.get("account"),
+            )
+            if any(self._protocol_login_email_matches(str(candidate or "")) for candidate in candidate_accounts):
+                patched_user_data = with_current_server_urls(self.context, candidate_user_data)
+                if str(patched_user_data.get("rruid") or "").strip():
+                    return patched_user_data
+        return self._local_protocol_identity()
+
     @staticmethod
     def _normalized_path(path: str) -> str:
         normalized = str(path or "").rstrip("/")
@@ -810,7 +831,7 @@ class ReleaseSupervisor:
                 return "protocol_login_submit_code", status_code, payload
             try:
                 issued_user_data = self.protocol_auth.issue_local_session(
-                    self._local_protocol_identity(),
+                    self._protocol_login_identity(),
                     source="protocol_code_login",
                 )
             except ValueError as exc:
@@ -1283,6 +1304,7 @@ class ReleaseSupervisor:
         ]
         return {
             "protocol_auth_enabled": self.protocol_auth_enabled(),
+            "admin_session_secret": self.config.admin.session_secret,
             "protocol_sessions": sessions,
             "protocol_session_count": len(sessions),
             "pending_device_mqtt_recovery": self._pending_device_mqtt_recovery_payload(),

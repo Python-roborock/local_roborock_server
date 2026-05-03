@@ -62,6 +62,14 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           <label><input id="protocolAuthEnabled" type="checkbox" /> Require token/Hawk auth on protocol API routes</label>
           <button id="saveAuth" style="margin-left:8px">Save</button>
           <div id="authMeta" style="margin-top:8px;color:#333">Loading auth state...</div>
+          <div style="margin-top:12px">
+            <div style="font-weight:600">Protocol Sync Secret</div>
+            <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <input id="adminSessionSecret" readonly style="flex:1;min-width:320px;padding:8px" />
+              <button id="copySessionSecret">Copy</button>
+            </div>
+            <div id="syncSecretMeta" style="margin-top:6px;color:#555">Use this with <code>mitm_redirect.py --sync-secret ...</code>.</div>
+          </div>
           <div id="pendingRecovery" style="margin-top:8px"></div>
           <div id="sessionList" style="display:grid;gap:8px;margin-top:12px">Loading sessions...</div>
         </section>
@@ -140,6 +148,11 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           document.getElementById("protocolAuthEnabled").checked = enabled;
           document.getElementById("authMeta").textContent =
             `Protocol auth: ${{enabled ? "Enabled" : "Disabled"}}. Persisted sessions: ${{Number(auth.protocol_session_count || 0)}}.`;
+          const sessionSecret = String(auth.admin_session_secret || "");
+          document.getElementById("adminSessionSecret").value = sessionSecret;
+          document.getElementById("syncSecretMeta").textContent = sessionSecret
+            ? "Use this with mitm_redirect.py --sync-secret ..."
+            : "No protocol sync secret is configured.";
 
           const pendingContainer = document.getElementById("pendingRecovery");
           const pendingItems = Array.isArray(auth.pending_device_mqtt_recovery) ? auth.pending_device_mqtt_recovery : [];
@@ -246,6 +259,25 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
             await refresh();
           }} catch (error) {{
             document.getElementById("authMeta").textContent = error.message;
+          }}
+        }});
+        document.getElementById("copySessionSecret").addEventListener("click", async () => {{
+          const input = document.getElementById("adminSessionSecret");
+          if (!input.value) {{
+            document.getElementById("syncSecretMeta").textContent = "No protocol sync secret is configured.";
+            return;
+          }}
+          try {{
+            if (navigator.clipboard && navigator.clipboard.writeText) {{
+              await navigator.clipboard.writeText(input.value);
+            }} else {{
+              input.focus();
+              input.select();
+              document.execCommand("copy");
+            }}
+            document.getElementById("syncSecretMeta").textContent = "Copied protocol sync secret.";
+          }} catch (error) {{
+            document.getElementById("syncSecretMeta").textContent = "Copy failed. Select the field and copy it manually.";
           }}
         }});
 

@@ -684,7 +684,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sync-secret",
         default=None,
-        help="Optional admin.session_secret for protocol auth sync. Defaults to config.toml when available.",
+        help="Optional admin.session_secret for protocol auth sync. Defaults to ./config.toml beside this script when available; pass explicitly when the server uses a different active config.",
     )
     parser.add_argument("--mode", default="wireguard", help="mitmweb proxy mode (default: wireguard)")
     parser.add_argument("--listen-port", default=None, help="mitmweb listen port")

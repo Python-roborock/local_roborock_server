@@ -35,6 +35,8 @@ Then open:
 
 - `https://<your-home-assistant-host>:555/admin` (or your configured HTTPS port)
 
+If you need the MITM protocol sync secret for the Roborock app flow, sign in to the admin page and open the **Protocol Auth** section. The dashboard now shows the active `admin.session_secret` with a copy button, so you do not need to inspect `/data/config.toml` manually.
+
 Important: installing the Home Assistant app does not automatically rewrite your Roborock integration entry. You still need to update `config/.storage/core.config_entries` endpoint values as shown below so Home Assistant points at your local stack.
 
 Notes:

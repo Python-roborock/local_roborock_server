@@ -2,7 +2,9 @@
 
 Use this after [Installation](installation.md) and [Onboarding](onboarding.md) if you want the official Roborock app to talk to your local stack.
 
-During the MITM login step, the script now needs to sync the captured protocol-auth session back to your server. Pass `admin.session_secret` from `config.toml` as `--sync-secret`. That sync callback always uses the `--local-api` host and port.
+During the MITM login step, the script now needs to sync the captured protocol-auth session back to your server. Pass `admin.session_secret` from the active server config as `--sync-secret`. That sync callback always uses the `--local-api` host and port.
+
+The launcher can auto-load a sync secret from `config.toml` beside `mitm_redirect.py`, but that is only correct when that file matches the config used by the running server. If you run the MITM step from a second machine, or your server is using a generated Home Assistant config or another config file, pass `--sync-secret` explicitly.
 
 The launcher now preflights that callback before starting `mitmweb`. If the `--local-api` host cannot be reached, if the TLS certificate does not validate for that host, or if the sync secret is rejected, the script exits immediately instead of letting you proceed into a broken login flow.
 
@@ -16,7 +18,9 @@ The launcher now preflights that callback before starting `mitmweb`. If the `--l
    uv run mitm_redirect.py --local-api api-roborock.example.com --sync-secret YOUR_ADMIN_SESSION_SECRET
    ```
 
-   Use the `admin.session_secret` value from `config.toml` for `YOUR_ADMIN_SESSION_SECRET`.
+   Use the `admin.session_secret` value from the config file your running server actually uses for `YOUR_ADMIN_SESSION_SECRET`.
+
+   If startup fails with `invalid_sync_secret`, the launcher either auto-loaded the wrong local `config.toml` or you copied a stale secret. Re-read `admin.session_secret` from the active server config and pass it explicitly with `--sync-secret`.
 
    If you use the default local stack ports, host-only values are fine here: the script assumes HTTPS `:555` and MQTT TLS `:8881`.
 
@@ -119,7 +123,9 @@ Make sure you have the following installed:
       uv run mitm_redirect.py --local-api api-roborock.example.com --sync-secret YOUR_ADMIN_SESSION_SECRET
    ```
 
-   Use the `admin.session_secret` value from `config.toml` for `YOUR_ADMIN_SESSION_SECRET`.
+   Use the `admin.session_secret` value from the config file your running server actually uses for `YOUR_ADMIN_SESSION_SECRET`.
+
+   If startup fails with `invalid_sync_secret`, the launcher either auto-loaded the wrong local `config.toml` or you copied a stale secret. Re-read `admin.session_secret` from the active server config and pass it explicitly with `--sync-secret`.
 
    If you use the default local stack ports, host-only values are fine here: the script assumes HTTPS `:555` and MQTT TLS `:8881`.
 

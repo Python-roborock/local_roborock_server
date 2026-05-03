@@ -243,6 +243,7 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
     assert dashboard_page.status_code == 200
     assert "Cloud Import" in dashboard_page.text
     assert "Protocol Auth" in dashboard_page.text
+    assert "Protocol Sync Secret" in dashboard_page.text
 
     assert "Num query samples" in dashboard_page.text
     assert "Public Key determined" in dashboard_page.text
@@ -282,6 +283,7 @@ def test_admin_auth_endpoints_toggle_protocol_auth_and_manage_sessions(tmp_path:
     assert auth_payload.status_code == 200
     auth_json = auth_payload.json()
     assert auth_json["protocol_auth_enabled"] is True
+    assert auth_json["admin_session_secret"] == config.admin.session_secret
     assert auth_json["protocol_session_count"] >= 1
     session = next(item for item in auth_json["protocol_sessions"] if item["hawk_id"] == issued["rriot"]["u"])
 
