@@ -2,23 +2,9 @@
 
 Use this after [Installation](installation.md) and [Onboarding](onboarding.md) if you want Home Assistant to talk to your local stack.
 
-## Testing unpublished changes on a real Home Assistant instance
-
-If you want Home Assistant to build your current local branch instead of pulling the published GHCR image:
-
-1. Export a self-contained local add-on repository:
-   - `uv run python scripts/export_home_assistant_dev_addon.py`
-2. Copy the generated folder `dist/home_assistant_dev_addon_repo/` to your Home Assistant host under:
-   - `/addons/local_roborock_server_dev_repo/`
-3. In Home Assistant, open **Settings -> Add-ons -> App Store** and refresh.
-4. Open the **Local add-ons** repository and install **Roborock Local Server Dev**.
-5. Fill the app options and start it.
-
-This path is for unpublished development work. It bundles your current `src/` tree into the add-on so Home Assistant can build it locally on the real device.
-
 ## Option 1: Home Assistant App (same GHCR image)
 
-This repository contains a Home Assistant app definition at `roborock_local_server_addon/` that uses:
+You can install the Home Assistant app from this repository. It uses:
 
 - `ghcr.io/python-roborock/local_roborock_server`
 

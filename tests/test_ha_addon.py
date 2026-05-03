@@ -304,3 +304,32 @@ def test_write_config_from_home_assistant_options_requires_api_prefix(tmp_path: 
             options_path=options_path,
             config_path=config_path,
         )
+
+
+def test_write_config_from_home_assistant_options_removes_stale_cloudflare_token_when_using_provided_tls(
+    tmp_path: Path,
+) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+    token_path = tmp_path / "run" / "secrets" / "cloudflare_token"
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text("stale-token", encoding="utf-8")
+
+    _write_options(
+        options_path,
+        {
+            "stack_fqdn": "api-roborock.example.com",
+            "tls_mode": "provided",
+            "admin_password": "secret",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "654321",
+        },
+    )
+
+    write_config_from_home_assistant_options(
+        options_path=options_path,
+        config_path=config_path,
+        cloudflare_token_path=token_path,
+    )
+
+    assert token_path.exists() is False

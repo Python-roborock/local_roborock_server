@@ -129,7 +129,12 @@ def _load_existing_admin_session_secret(config_path: Path) -> str:
     return secret if len(secret) >= 24 else ""
 
 
-def _render_config_toml(*, options: dict[str, Any], config_path: Path, cloudflare_token_path: Path) -> str:
+def _render_config_toml(
+    *,
+    options: dict[str, Any],
+    config_path: Path,
+    cloudflare_token_path: Path,
+) -> tuple[str, str]:
     merged = dict(DEFAULT_OPTIONS)
     merged.update(options)
 
@@ -269,6 +274,8 @@ def write_config_from_home_assistant_options(
         cloudflare_token_path.write_text(cloudflare_token, encoding="utf-8")
         if os.name != "nt":
             cloudflare_token_path.chmod(0o600)
+    elif cloudflare_token_path.exists():
+        cloudflare_token_path.unlink()
     return config_path
 
 

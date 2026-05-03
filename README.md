@@ -39,7 +39,6 @@ Additional docs:
 - [Docs index](docs/index.md)
 - [Tested vacuums](docs/tested_vacuums.md)
 - [Home Assistant](docs/home_assistant.md)
-- [Home Assistant app files](roborock_local_server_addon/config.yaml)
 - [Using the Roborock App](docs/roborock_app.md)
 - [Custom MQTT](docs/custom_mqtt.md)
 - [Custom certificate management](docs/custom_cert_management.md)
