@@ -1,6 +1,6 @@
 # Roborock Local Server
 
-This app runs the same `ghcr.io/python-roborock/local_roborock_server` image used for Docker installs.
+This add-on runs the same `ghcr.io/python-roborock/local_roborock_server` image used for Docker installs.
 
 It publishes two TLS ports directly:
 
@@ -14,16 +14,17 @@ It publishes two TLS ports directly:
 3. Choose TLS mode:
    - `provided`: set `cert_file` and `key_file` (defaults: `/ssl/fullchain.pem`, `/ssl/privkey.pem`)
    - `cloudflare_acme`: set `tls_base_domain`, `tls_email`, `cloudflare_token`
-4. Start the app.
+4. Start the add-on.
 
 The add-on always runs the embedded MQTT broker and keeps the topic bridge enabled.
 
-Then open `https://<home-assistant-host>:555/admin` (or your custom HTTPS port).
+Then open `https://api-roborock.example.com:555/admin` using your configured `stack_fqdn` and HTTPS port.
 
-This app package does not auto-edit Home Assistant's Roborock config entry. You still need to update `config/.storage/core.config_entries` endpoint values to your local stack URLs.
+This add-on does not auto-edit Home Assistant's Roborock config entry. You still need to update `.storage/core.config_entries` so Home Assistant points at your local stack.
 
 ## Notes
 
-- This app expects internal LAN-only usage. Do not expose directly to the internet.
+- This add-on expects internal LAN-only usage. Do not expose it directly to the internet.
 - If you change `https_port` or `mqtt_tls_port`, update your DNS/clients to use those ports.
-- If you already manage certificates in another Home Assistant app such as Nginx Proxy Manager, you can point `cert_file` and `key_file` at that app's certs through `/all_addon_configs/...`. Example: `/all_addon_configs/a0d7b954_nginxproxymanager/letsencrypt/live/npm-3/fullchain.pem`.
+- The current server advertises the same hostname for HTTPS and MQTT/TLS, so Home Assistant's Roborock entry should normally use `ssl://api-roborock.example.com:8881`, not a separate `mqtt-...` hostname.
+- If you already manage certificates in another Home Assistant add-on such as Nginx Proxy Manager, you can point `cert_file` and `key_file` at that add-on's certs through `/all_addon_configs/...`. Example: `/all_addon_configs/a0d7b954_nginxproxymanager/letsencrypt/live/npm-3/fullchain.pem`.

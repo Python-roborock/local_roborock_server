@@ -50,10 +50,10 @@ nav:
   - Support This Project: support.md
   - Getting Started:
     - Installation: installation.md
+    - Home Assistant: home_assistant.md
     - Cloudflare Setup: cloudflare_setup.md
     - Onboarding: onboarding.md
   - Integrations:
-    - Home Assistant: home_assistant.md
     - Using the Roborock App: roborock_app.md
   - Reference:
     - Tested Vacuums: tested_vacuums.md

@@ -1,66 +1,77 @@
 # Installation
 
-Start here for a first-time setup. After the stack is running, continue with [Onboarding](onboarding.md) to pair a vacuum.
+Start here for a first-time setup. The project supports two installation methods:
 
-## Requirements
+- Docker Compose on your own Linux host or VM
+- the Home Assistant add-on from this repository
 
-- Docker with `docker compose`
-- Python (I recommend installing [uv](https://docs.astral.sh/uv/getting-started/installation/))
-- Two machines - one to run the server and one to do the onboarding
+After the stack is running, continue with [Onboarding](onboarding.md) to pair a vacuum.
+
+## Shared Requirements
+
 - A domain name that you own
-- A machine that can host the stack's HTTPS and MQTT TLS ports internally on your network. The defaults are `555` and `8881`.
+- A place to run the stack on your LAN
+- A second machine for onboarding later
+- A network that can host the stack's HTTPS and MQTT TLS ports internally. The defaults are `555` and `8881`.
 - A Cloudflare API token with DNS edit access for the zone if you want Cloudflare DNS-01 auto-renew. See [Cloudflare setup](cloudflare_setup.md).
 
 ## Network Setup
 
-1. Pick a URL for this application. It needs to be a subdomain of a domain you own, and it **must** start with `api-`. It does NOT need to be accessible outside your network - in fact, I strongly recommend you keep it internal only for now.
+1. Pick a hostname for this application. It must be a subdomain of a domain you own, and it **must** start with `api-`.
 
-   For example, if you own `example.com`, I'd recommend `api-roborock.example.com`. Throughout the rest of the docs we'll refer to this as the **FQDN**. If you follow this format, you can just replace `example.com` with your real domain wherever you see it.
+   For example, if you own `example.com`, use `api-roborock.example.com`. Throughout the docs this is the **stack FQDN**.
 
 2. Your network **must** handle its own DNS for the network the vacuum connects to. If it uses an external DNS server like `8.8.8.8`, this will not work.
 
-3. Create DNS records pointing to your server's local IP address for both `api-roborock.example.com` and `mqtt-roborock.example.com`.
+3. Create a DNS record pointing your stack FQDN to the local IP of the machine running the stack.
 
-## Docker Setup
+   With the current server behavior, the same hostname is advertised for both HTTPS and MQTT/TLS, so you do not need a separate `mqtt-...` hostname unless you have built your own custom client routing around one.
+
+## Method 1: Docker Compose
+
+### Additional Requirements
+
+- Docker with `docker compose`
+- Python
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+
+### Steps
 
 1. Clone this repository:
 
-`git clone https://github.com/Python-roborock/local_roborock_server`
+   ```bash
+   git clone https://github.com/Python-roborock/local_roborock_server
+   cd local_roborock_server
+   ```
 
-2. Change into the project folder.
+2. Install the project dependencies:
 
-```bash
-cd local_roborock_server
-```
+   ```bash
+   uv sync
+   ```
 
-3. Install the project dependencies.
+3. Run the setup wizard:
 
-```bash
-uv sync
-```
+   ```bash
+   uv run roborock-local-server configure
+   ```
 
-4. Run the setup wizard.
+   The wizard asks for:
 
-```bash
-uv run roborock-local-server configure
-```
+   - `stack_fqdn` (must start with `api-`)
+   - HTTPS and MQTT TLS ports if you do not want the defaults `555` and `8881`
+   - embedded MQTT or your own broker
+   - whether to use Cloudflare DNS-01 auto-renew
+   - your admin password
+   - your Home Assistant/app login email and 6-digit PIN
 
-The wizard asks only for:
+   It then writes `config.toml`, generates `admin.password_hash` and `admin.session_secret`, and if you chose Cloudflare it also writes `secrets/cloudflare_token`.
 
-- your `stack_fqdn` (the URL for your server - must start with `api-`)
-- your HTTPS and MQTT TLS ports if you do not want the defaults `555` and `8881`
-- embedded MQTT or your own broker
-- whether to use Cloudflare DNS-01 auto-renew
-- your admin password
-- your Home Assistant/app login email and 6-digit PIN
+4. If you chose external MQTT, fill in `broker.host` in `config.toml` before starting the stack. See [Custom MQTT](custom_mqtt.md).
 
-It then writes `config.toml`, generates `admin.password_hash` and `admin.session_secret`, and if you chose Cloudflare it also writes `secrets/cloudflare_token`.
+5. If you skipped Cloudflare, put your certificate files in `data/certs/fullchain.pem` and `data/certs/privkey.pem`. See [Custom certificate management](custom_cert_management.md).
 
-5. If you chose external MQTT, fill in `broker.host` in `config.toml` before starting the stack. See [Custom MQTT](custom_mqtt.md).
-
-6. If you skipped Cloudflare, put your certificate files in `data/certs/fullchain.pem` and `data/certs/privkey.pem`. See [Custom certificate management](custom_cert_management.md).
-
-7. Start the container:
+6. Start the container:
 
    ```bash
    docker compose up -d --build
@@ -74,15 +85,21 @@ It then writes `config.toml`, generates `admin.password_hash` and `admin.session
    docker compose up -d --build
    ```
 
-8. Go to the admin dashboard: `https://api-roborock.example.com:555/admin` by default, or `https://api-roborock.example.com:YOUR_HTTPS_PORT/admin` if you chose a custom HTTPS port.
+## Method 2: Home Assistant Add-on
 
-9. Import your data from the cloud so things like routines and rooms will work. Enter your email in under cloud import, then hit send code. Once the code is returned enter the code and hit fetch data.
+Use [Home Assistant](home_assistant.md) as the installation guide if you want to run the stack as a Home Assistant add-on instead of Docker Compose.
 
-10. For any routines that use zones, you need to re-save them so the server stores the zone data correctly. In the Roborock app, open each routine that has zones, click on the zone, tap **Edit**, click on any **Zone Cleaning** entry, then tap **Save**. Repeat for each zone in the routine.
+## After The Stack Starts
+
+1. Open the admin dashboard at `https://api-roborock.example.com:555/admin` by default, or `https://api-roborock.example.com:YOUR_HTTPS_PORT/admin` if you chose a custom HTTPS port.
+
+2. Import your data from the cloud so things like routines and rooms will work. Enter your email under cloud import, select **Send code**, then enter the returned code and select **Fetch data**.
+
+3. For any routines that use zones, re-save them so the server stores the zone data correctly. In the Roborock app, open each routine that has zones, open the zone, tap **Edit**, open any **Zone Cleaning** entry, then tap **Save**. Repeat for each zone in the routine.
 
 ## Next Steps
 
-- [Onboarding](onboarding.md) for pairing a new vacuum.
-- [Home Assistant](home_assistant.md) if you want the local stack in Home Assistant.
-- [Using the Roborock App](roborock_app.md) if you want to point the official app at your local stack.
-- [Docs index](index.md) for the rest of the guides.
+- [Onboarding](onboarding.md) for pairing a new vacuum
+- [Home Assistant](home_assistant.md) if you want to repoint Home Assistant's Roborock integration to your local stack
+- [Using the Roborock App](roborock_app.md) if you want to point the official app at your local stack
+- [Docs index](index.md) for the rest of the guides

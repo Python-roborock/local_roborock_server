@@ -4,9 +4,12 @@ Use this page as the main docs hub for setup, onboarding, and follow-up guides.
 
 ## Start Here
 
-1. [Installation](installation.md) for requirements, network setup, configuration, and starting the stack.
-2. [Cloudflare setup](cloudflare_setup.md) if you want Cloudflare DNS-01 auto-renew for certificates.
-3. [Onboarding](onboarding.md) to pair a vacuum from a second machine after the server is running.
+1. Read [Installation](installation.md) for the shared requirements and network setup.
+2. Choose an install method:
+   - finish the Docker Compose steps in [Installation](installation.md)
+   - or use [Home Assistant](home_assistant.md) to install the stack as a Home Assistant add-on
+3. Use [Cloudflare setup](cloudflare_setup.md) if you want Cloudflare DNS-01 auto-renew for certificates.
+4. Run [Onboarding](onboarding.md) from a second machine after the server is running.
 
 ## Support This Project
 

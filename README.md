@@ -20,25 +20,26 @@ This project is in VERY EARLY BETA!!! Do not use this repository unless you are 
 
 ## Requirements
 
-- Docker with `docker compose`
-- `uv`
-- a Linux server or Linux VM on your LAN
 - a domain you control
+- a place to run the stack on your LAN
+- either Docker Compose or a Home Assistant installation that supports add-ons
+- a second machine for onboarding later
 - a Cloudflare API token with DNS edit access for the zone if you want automatic certificate renewal
 
 ## Getting Started
 
 Start here if this is your first time setting up the stack:
 
-1. [Installation](docs/installation.md) for requirements, network setup, configuration, and starting the stack.
-2. [Cloudflare setup](docs/cloudflare_setup.md) if you want Cloudflare DNS-01 auto-renew for certificates.
-3. [Onboarding](docs/onboarding.md) to pair a vacuum from a second machine after the server is running.
+1. [Installation](docs/installation.md) for the shared requirements, network setup, and Docker Compose install path.
+2. [Home Assistant](docs/home_assistant.md) if you want to install the stack as a Home Assistant add-on instead of Docker Compose.
+3. [Cloudflare setup](docs/cloudflare_setup.md) if you want Cloudflare DNS-01 auto-renew for certificates.
+4. [Onboarding](docs/onboarding.md) to pair a vacuum from a second machine after the server is running.
 
 Additional docs:
 
 - [Docs index](docs/index.md)
 - [Tested vacuums](docs/tested_vacuums.md)
-- [Home Assistant](docs/home_assistant.md)
+- [Home Assistant](docs/home_assistant.md) for the add-on install path and Home Assistant integration rewiring
 - [Using the Roborock App](docs/roborock_app.md)
 - [Custom MQTT](docs/custom_mqtt.md)
 - [Custom certificate management](docs/custom_cert_management.md)
