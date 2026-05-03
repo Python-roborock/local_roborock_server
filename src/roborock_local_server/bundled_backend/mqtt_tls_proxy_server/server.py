@@ -297,7 +297,8 @@ class MqttTlsProxy:
         if device is None:
             return None
         existing_username = str(device.get("device_mqtt_usr") or "").strip()
-        if existing_username:
+        existing_password = str(device.get("device_mqtt_pass") or "").strip()
+        if existing_username or existing_password:
             return None
         return {
             "did": str(device.get("did") or "").strip(),
