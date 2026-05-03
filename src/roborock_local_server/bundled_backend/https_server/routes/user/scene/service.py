@@ -695,4 +695,3 @@ def update_scene_param(ctx: ServerContext, scene_id: int, body_params: dict[str,
 
     updated_scene, home_id = _replace_inventory_scene(ctx, scene_id=scene_id, scene_updater=apply_update)
     return build_scene_payload(updated_scene, home_id=home_id, include_device_context=True)
-

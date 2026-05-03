@@ -884,7 +884,6 @@ def test_post_scene_create_accepts_hawk_json_body_signature(tmp_path: Path) -> N
     stored_inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
     assert any(scene["name"] == "Party prep" for scene in stored_inventory["scenes"])
 
-
 def test_shared_device_query_routes_return_rooms_and_received_devices(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
@@ -967,8 +966,6 @@ def test_shared_device_query_routes_return_rooms_and_received_devices(tmp_path: 
         {"id": 10283928, "name": "Kitchen"},
         {"id": 10283924, "name": "Living room"},
     ]
-
-
 def test_execute_scene_hydrates_missing_zone_ranges_from_mqtt(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
