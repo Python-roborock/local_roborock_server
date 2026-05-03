@@ -7,33 +7,29 @@ import os
 from pathlib import Path
 import re
 import secrets
+import tomllib
 from typing import Any
 from urllib.parse import urlsplit
 
 from .configure import hash_password
 
 
+DEFAULT_CERT_FILE = "/ssl/fullchain.pem"
+DEFAULT_KEY_FILE = "/ssl/privkey.pem"
+
+
 DEFAULT_OPTIONS: dict[str, Any] = {
     "stack_fqdn": "",
-    "listener_mode": "local_tls",
     "https_port": 555,
     "mqtt_tls_port": 8881,
-    "listen_https_port": 555,
-    "listen_mqtt_port": 8881,
     "region": "us",
-    "use_external_broker": False,
-    "broker_host": "127.0.0.1",
-    "broker_port": 18830,
-    "enable_topic_bridge": True,
     "tls_mode": "provided",
     "tls_base_domain": "",
     "tls_email": "",
     "cloudflare_token": "",
-    "cert_file": "/ssl/fullchain.pem",
-    "key_file": "/ssl/privkey.pem",
+    "cert_file": DEFAULT_CERT_FILE,
+    "key_file": DEFAULT_KEY_FILE,
     "admin_password": "",
-    "admin_session_secret": "",
-    "protocol_auth_enabled": True,
     "protocol_login_email": "",
     "protocol_login_pin": "",
 }
@@ -75,20 +71,6 @@ def _normalize_hostname(raw_value: str, *, field_name: str, require_api_prefix: 
     if require_api_prefix and not normalized.startswith("api-"):
         raise ValueError(f"{field_name} must start with api-")
     return normalized
-
-
-def _as_bool(value: object, *, default: bool) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-    return bool(value)
 
 
 def _as_int(value: object, *, field_name: str, default: int) -> int:
@@ -133,7 +115,21 @@ def _load_options(path: Path) -> dict[str, Any]:
     return parsed
 
 
-def _render_config_toml(*, options: dict[str, Any], cloudflare_token_path: Path) -> str:
+def _load_existing_admin_session_secret(config_path: Path) -> str:
+    if not config_path.exists():
+        return ""
+    try:
+        parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return ""
+    admin = parsed.get("admin")
+    if not isinstance(admin, dict):
+        return ""
+    secret = str(admin.get("session_secret", "") or "").strip()
+    return secret if len(secret) >= 24 else ""
+
+
+def _render_config_toml(*, options: dict[str, Any], config_path: Path, cloudflare_token_path: Path) -> str:
     merged = dict(DEFAULT_OPTIONS)
     merged.update(options)
 
@@ -144,23 +140,16 @@ def _render_config_toml(*, options: dict[str, Any], cloudflare_token_path: Path)
     )
     region = str(merged.get("region", "us") or "us").strip().lower() or "us"
     listener_mode = str(merged.get("listener_mode", "local_tls") or "local_tls").strip().lower() or "local_tls"
-    if listener_mode not in {"local_tls", "external_tls"}:
-        raise ValueError("listener_mode must be 'local_tls' or 'external_tls'")
+    if listener_mode != "local_tls":
+        raise ValueError("listener_mode='external_tls' is no longer supported")
     https_port = _as_int(merged.get("https_port"), field_name="https_port", default=555)
     mqtt_tls_port = _as_int(merged.get("mqtt_tls_port"), field_name="mqtt_tls_port", default=8881)
-    listen_https_port = _as_int(merged.get("listen_https_port"), field_name="listen_https_port", default=https_port)
-    listen_mqtt_port = _as_int(merged.get("listen_mqtt_port"), field_name="listen_mqtt_port", default=mqtt_tls_port)
 
-    use_external_broker = _as_bool(merged.get("use_external_broker"), default=False)
-    broker_mode = "external" if use_external_broker else "embedded"
-    broker_host = str(merged.get("broker_host", "127.0.0.1") or "").strip()
-    if not broker_host:
-        broker_host = "127.0.0.1" if not use_external_broker else ""
-    if use_external_broker and not broker_host:
-        raise ValueError("broker_host is required when use_external_broker is true")
-    broker_port_default = 1883 if use_external_broker else 18830
-    broker_port = _as_int(merged.get("broker_port"), field_name="broker_port", default=broker_port_default)
-    enable_topic_bridge = _as_bool(merged.get("enable_topic_bridge"), default=True)
+    # Legacy HA options for broker selection are ignored now that the add-on
+    # always runs the embedded broker with the topic bridge enabled.
+    broker_mode = "embedded"
+    broker_host = "127.0.0.1"
+    broker_port = 18830
 
     tls_mode = str(merged.get("tls_mode", "provided") or "provided").strip().lower()
     if tls_mode not in {"provided", "cloudflare_acme"}:
@@ -168,22 +157,31 @@ def _render_config_toml(*, options: dict[str, Any], cloudflare_token_path: Path)
     tls_base_domain = str(merged.get("tls_base_domain", "") or "").strip()
     tls_email = str(merged.get("tls_email", "") or "").strip()
     cloudflare_token = str(merged.get("cloudflare_token", "") or "").strip()
-    cert_file = str(merged.get("cert_file", "/ssl/fullchain.pem") or "").strip()
-    key_file = str(merged.get("key_file", "/ssl/privkey.pem") or "").strip()
+    cert_file = str(merged.get("cert_file", DEFAULT_CERT_FILE) or "").strip()
+    key_file = str(merged.get("key_file", DEFAULT_KEY_FILE) or "").strip()
+    effective_tls_mode = "cloudflare_acme" if cloudflare_token else tls_mode
 
-    if listener_mode == "local_tls" and tls_mode == "cloudflare_acme":
+    if effective_tls_mode == "cloudflare_acme":
         _normalize_hostname(tls_base_domain, field_name="tls_base_domain")
         _require_email(tls_email, field_name="tls_email")
         _require_non_empty(cloudflare_token, field_name="cloudflare_token")
-    elif listener_mode == "local_tls":
+    else:
+        cert_file = cert_file or DEFAULT_CERT_FILE
+        key_file = key_file or DEFAULT_KEY_FILE
         _require_non_empty(cert_file, field_name="cert_file")
         _require_non_empty(key_file, field_name="key_file")
 
     admin_password = _require_non_empty(merged.get("admin_password"), field_name="admin_password")
-    admin_session_secret = str(merged.get("admin_session_secret", "") or "").strip() or secrets.token_urlsafe(32)
+    admin_session_secret = (
+        str(merged.get("admin_session_secret", "") or "").strip()
+        or _load_existing_admin_session_secret(config_path)
+        or secrets.token_urlsafe(32)
+    )
     if len(admin_session_secret) < 24:
         raise ValueError("admin_session_secret must be at least 24 characters when set")
-    protocol_auth_enabled = _as_bool(merged.get("protocol_auth_enabled"), default=True)
+    # The Home Assistant add-on no longer exposes this toggle.
+    # Keep protocol auth enabled even if a stale stored option is present.
+    protocol_auth_enabled = True
     protocol_login_email = _require_email(merged.get("protocol_login_email"), field_name="protocol_login_email")
     protocol_login_pin = _require_pin(merged.get("protocol_login_pin"), field_name="protocol_login_pin")
 
@@ -194,12 +192,9 @@ def _render_config_toml(*, options: dict[str, Any], cloudflare_token_path: Path)
     lines = [
         "[network]",
         f"stack_fqdn = {_toml_string(stack_fqdn)}",
-        f"listener_mode = {_toml_string(listener_mode)}",
         'bind_host = "0.0.0.0"',
         f"https_port = {https_port}",
         f"mqtt_tls_port = {mqtt_tls_port}",
-        f"listen_https_port = {listen_https_port}",
-        f"listen_mqtt_port = {listen_mqtt_port}",
         f"region = {_toml_string(region)}",
         "",
         "[broker]",
@@ -207,15 +202,15 @@ def _render_config_toml(*, options: dict[str, Any], cloudflare_token_path: Path)
         f"host = {_toml_string(broker_host)}",
         f"port = {broker_port}",
         'mosquitto_binary = "mosquitto"',
-        f"enable_topic_bridge = {_toml_bool(enable_topic_bridge)}",
+        "enable_topic_bridge = true",
         "",
         "[storage]",
         'data_dir = "/data"',
         "",
         "[tls]",
-        f"mode = {_toml_string(tls_mode)}",
+        f"mode = {_toml_string(effective_tls_mode)}",
     ]
-    if listener_mode == "local_tls" and tls_mode == "cloudflare_acme":
+    if effective_tls_mode == "cloudflare_acme":
         lines.extend(
             [
                 f"base_domain = {_toml_string(tls_base_domain)}",
@@ -252,7 +247,7 @@ def _render_config_toml(*, options: dict[str, Any], cloudflare_token_path: Path)
             "",
         ]
     )
-    return "\n".join(lines), cloudflare_token if listener_mode == "local_tls" and tls_mode == "cloudflare_acme" else ""
+    return "\n".join(lines), cloudflare_token if effective_tls_mode == "cloudflare_acme" else ""
 
 
 def write_config_from_home_assistant_options(
@@ -262,7 +257,11 @@ def write_config_from_home_assistant_options(
     cloudflare_token_path: Path = DEFAULT_CLOUDFLARE_TOKEN_PATH,
 ) -> Path:
     options = _load_options(options_path)
-    config_text, cloudflare_token = _render_config_toml(options=options, cloudflare_token_path=cloudflare_token_path)
+    config_text, cloudflare_token = _render_config_toml(
+        options=options,
+        config_path=config_path,
+        cloudflare_token_path=cloudflare_token_path,
+    )
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(config_text, encoding="utf-8")
     if cloudflare_token:

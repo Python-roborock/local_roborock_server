@@ -28,7 +28,7 @@ To install it as a custom repository:
 2. Add this repository URL:
    - `https://github.com/Python-roborock/local_roborock_server`
 3. Install **Roborock Local Server**.
-4. Fill the app options (`stack_fqdn`, `listener_mode`, `admin_password`, `protocol_login_email`, `protocol_login_pin`, TLS settings).
+4. Fill the app options (`stack_fqdn`, `admin_password`, `protocol_login_email`, `protocol_login_pin`, TLS settings).
 5. Start the app.
 
 Then open:
@@ -39,8 +39,7 @@ Important: installing the Home Assistant app does not automatically rewrite your
 
 Notes:
 
-- `listener_mode = local_tls` means this app terminates TLS for both HTTPS and MQTT.
-- `listener_mode = external_tls` means your external proxy must terminate TLS for both HTTPS and MQTT and forward plaintext to the app's internal `listen_https_port` and `listen_mqtt_port`.
+- The add-on terminates TLS itself and publishes two ports: HTTPS on `https_port` and MQTT/TLS on `mqtt_tls_port`.
 - If you use Home Assistant's Nginx Proxy Manager add-on for certificate issuance, this add-on can read those PEM files directly through `/all_addon_configs/a0d7b954_nginxproxymanager/letsencrypt/live/...`.
 
 ## Option 2: Existing Docker deployment

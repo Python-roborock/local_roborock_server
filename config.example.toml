@@ -1,15 +1,10 @@
 [network]
 # The one hostname the stack will serve. Keep this as the hostname only.
 stack_fqdn = "api-roborock.example.com"
-listener_mode = "local_tls"
 bind_host = "0.0.0.0"
-# Change these if you need the stack to advertise custom public ports.
+# Change these if you need custom published ports.
 https_port = 555
 mqtt_tls_port = 8881
-# Internal listener ports. In local_tls mode these are the TLS ports this process binds.
-# In external_tls mode these are the plaintext internal ports your proxy forwards to.
-listen_https_port = 555
-listen_mqtt_port = 8881
 region = "us"
 
 [broker]

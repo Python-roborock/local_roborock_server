@@ -25,6 +25,7 @@ def test_export_repository_writes_local_dev_addon(tmp_path: Path) -> None:
     assert f'version: "{__version__}"' in config_text
     assert "slug: roborock_local_server_dev" in config_text
     assert 'image: "ghcr.io/python-roborock/local_roborock_server"' not in config_text
+    assert "protocol_auth_enabled:" not in config_text
 
     init_text = exported_init.read_text(encoding="utf-8")
     assert f'__version__ = "{__version__}"' in init_text

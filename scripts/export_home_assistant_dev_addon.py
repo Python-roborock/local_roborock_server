@@ -9,18 +9,18 @@ from roborock_local_server import __version__
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "dist" / "home_assistant_dev_addon_repo"
-ADDON_SLUG = "roborock_local_server_dev"
-ADDON_DIRNAME = ADDON_SLUG
-ADDON_NAME = "Roborock Local Server Dev"
+DEFAULT_ADDON_SLUG = "roborock_local_server_dev"
+DEFAULT_ADDON_NAME = "Roborock Local Server Dev"
 
 REPOSITORY_YAML = """name: Roborock Local Server Dev Apps
 url: "https://github.com/Python-roborock/local_roborock_server"
 maintainer: Luke Lashley
 """
 
-ADDON_CONFIG_YAML = f"""name: {ADDON_NAME}
+def _addon_config_yaml(*, addon_name: str, addon_slug: str) -> str:
+    return f"""name: {addon_name}
 version: "{__version__}"
-slug: {ADDON_SLUG}
+slug: {addon_slug}
 description: Local-build development app for testing unpublished Roborock Local Server changes in Home Assistant.
 url: "https://github.com/Python-roborock/local_roborock_server"
 startup: services
@@ -42,16 +42,9 @@ map:
 webui: "https://[HOST]:[PORT:555]/admin"
 options:
   stack_fqdn: "api-roborock.example.com"
-  listener_mode: "local_tls"
   https_port: 555
   mqtt_tls_port: 8881
-  listen_https_port: 555
-  listen_mqtt_port: 8881
   region: "us"
-  use_external_broker: false
-  broker_host: "127.0.0.1"
-  broker_port: 18830
-  enable_topic_bridge: true
   tls_mode: "provided"
   tls_base_domain: ""
   tls_email: ""
@@ -59,22 +52,13 @@ options:
   cert_file: "/ssl/fullchain.pem"
   key_file: "/ssl/privkey.pem"
   admin_password: ""
-  admin_session_secret: ""
-  protocol_auth_enabled: true
   protocol_login_email: ""
   protocol_login_pin: ""
 schema:
   stack_fqdn: str
-  listener_mode: list(local_tls|external_tls)
   https_port: port
   mqtt_tls_port: port
-  listen_https_port: port
-  listen_mqtt_port: port
   region: list(us|eu|cn|ru)
-  use_external_broker: bool
-  broker_host: str
-  broker_port: port
-  enable_topic_bridge: bool
   tls_mode: list(provided|cloudflare_acme)
   tls_base_domain: str
   tls_email: str
@@ -82,23 +66,24 @@ schema:
   cert_file: str
   key_file: str
   admin_password: password
-  admin_session_secret: str
-  protocol_auth_enabled: bool
   protocol_login_email: email
   protocol_login_pin: password
 """
 
-ADDON_DOCS_MD = f"""# {ADDON_NAME}
+def _addon_docs_md(*, addon_name: str) -> str:
+    return f"""# {addon_name}
 
 This local-build Home Assistant app is exported from your current working tree so you can test unpublished changes on a real Home Assistant instance.
+
+It publishes two TLS ports directly: `555/tcp` for the Roborock HTTPS API and `8881/tcp` for the Roborock MQTT TLS proxy.
 
 ## Install
 
 1. Run `uv run python scripts/export_home_assistant_dev_addon.py`.
 2. Copy the generated repository folder to your Home Assistant host under `/addons/local_roborock_server_dev_repo/`.
 3. In Home Assistant, open **Settings -> Add-ons -> App Store** and refresh.
-4. Open the **Local add-ons** repository and install **{ADDON_NAME}**.
-5. Set `stack_fqdn`, `listener_mode`, `admin_password`, `protocol_login_email`, `protocol_login_pin`, and your TLS settings.
+4. Open the **Local add-ons** repository and install **{addon_name}**.
+5. Set `stack_fqdn`, `admin_password`, `protocol_login_email`, `protocol_login_pin`, and your TLS settings.
 6. Start the app and open `https://<your-ha-host>:555/admin`.
 
 This app does not auto-edit Home Assistant's Roborock config entry. Update `config/.storage/core.config_entries` so Home Assistant points to your local stack URLs.
@@ -151,18 +136,18 @@ def _write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def export_repository(output_dir: Path) -> Path:
+def export_repository(output_dir: Path, *, addon_slug: str = DEFAULT_ADDON_SLUG, addon_name: str = DEFAULT_ADDON_NAME) -> Path:
     if output_dir.exists():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    addon_dir = output_dir / ADDON_DIRNAME
+    addon_dir = output_dir / addon_slug
     app_dir = addon_dir / "app"
     app_dir.mkdir(parents=True, exist_ok=True)
 
     _write_text(output_dir / "repository.yaml", REPOSITORY_YAML)
-    _write_text(addon_dir / "config.yaml", ADDON_CONFIG_YAML)
-    _write_text(addon_dir / "DOCS.md", ADDON_DOCS_MD)
+    _write_text(addon_dir / "config.yaml", _addon_config_yaml(addon_name=addon_name, addon_slug=addon_slug))
+    _write_text(addon_dir / "DOCS.md", _addon_docs_md(addon_name=addon_name))
     _write_text(addon_dir / "CHANGELOG.md", ADDON_CHANGELOG_MD)
     _write_text(addon_dir / "Dockerfile", ADDON_DOCKERFILE)
     _write_text(addon_dir / ".dockerignore", ADDON_DOCKERIGNORE)
@@ -184,9 +169,19 @@ def main() -> int:
         default=DEFAULT_OUTPUT_DIR,
         help=f"Output directory for the generated local add-on repository. Default: {DEFAULT_OUTPUT_DIR}",
     )
+    parser.add_argument(
+        "--addon-slug",
+        default=DEFAULT_ADDON_SLUG,
+        help=f"Addon slug/folder name to export. Default: {DEFAULT_ADDON_SLUG}",
+    )
+    parser.add_argument(
+        "--addon-name",
+        default=DEFAULT_ADDON_NAME,
+        help=f"Addon display name to export. Default: {DEFAULT_ADDON_NAME}",
+    )
     args = parser.parse_args()
     output_dir = args.output_dir.resolve()
-    export_repository(output_dir)
+    export_repository(output_dir, addon_slug=args.addon_slug, addon_name=args.addon_name)
     print(output_dir)
     return 0
 

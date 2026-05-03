@@ -18,11 +18,8 @@ def write_release_config(
     tmp_path: Path,
     *,
     stack_fqdn: str = "api-roborock.example.com",
-    listener_mode: str = "local_tls",
     https_port: int = 443,
     mqtt_tls_port: int = 8883,
-    listen_https_port: int | None = None,
-    listen_mqtt_port: int | None = None,
     broker_mode: str = "external",
     enable_topic_bridge: bool = False,
     protocol_auth_enabled: bool = True,
@@ -35,17 +32,12 @@ def write_release_config(
     (cert_dir / "privkey.pem").write_text("test-key\n", encoding="utf-8")
 
     config_file = tmp_path / "config.toml"
-    resolved_listen_https_port = https_port if listen_https_port is None else listen_https_port
-    resolved_listen_mqtt_port = mqtt_tls_port if listen_mqtt_port is None else listen_mqtt_port
     config_file.write_text(
         f"""
 [network]
 stack_fqdn = "{stack_fqdn}"
-listener_mode = "{listener_mode}"
 https_port = {https_port}
 mqtt_tls_port = {mqtt_tls_port}
-listen_https_port = {resolved_listen_https_port}
-listen_mqtt_port = {resolved_listen_mqtt_port}
 
 [broker]
 mode = "{broker_mode}"

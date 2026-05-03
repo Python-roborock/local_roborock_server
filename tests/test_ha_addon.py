@@ -22,22 +22,13 @@ def test_write_config_from_home_assistant_options_provided_tls(tmp_path: Path) -
         options_path,
         {
             "stack_fqdn": "https://api-roborock.example.com",
-            "listener_mode": "local_tls",
             "https_port": 8443,
             "mqtt_tls_port": 9443,
-            "listen_https_port": 8080,
-            "listen_mqtt_port": 18883,
             "region": "us",
-            "use_external_broker": True,
-            "broker_host": "mqtt.internal",
-            "broker_port": 1883,
-            "enable_topic_bridge": False,
             "tls_mode": "provided",
             "cert_file": "/ssl/fullchain.pem",
             "key_file": "/ssl/privkey.pem",
             "admin_password": "super-secret-password",
-            "admin_session_secret": "a" * 32,
-            "protocol_auth_enabled": True,
             "protocol_login_email": "user@example.com",
             "protocol_login_pin": "123456",
         },
@@ -51,21 +42,133 @@ def test_write_config_from_home_assistant_options_provided_tls(tmp_path: Path) -
 
     parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert parsed["network"]["stack_fqdn"] == "api-roborock.example.com"
-    assert parsed["network"]["listener_mode"] == "local_tls"
     assert parsed["network"]["https_port"] == 8443
     assert parsed["network"]["mqtt_tls_port"] == 9443
-    assert parsed["network"]["listen_https_port"] == 8080
-    assert parsed["network"]["listen_mqtt_port"] == 18883
-    assert parsed["broker"]["mode"] == "external"
-    assert parsed["broker"]["host"] == "mqtt.internal"
-    assert parsed["broker"]["enable_topic_bridge"] is False
+    assert parsed["broker"]["mode"] == "embedded"
+    assert parsed["broker"]["host"] == "127.0.0.1"
+    assert parsed["broker"]["port"] == 18830
+    assert parsed["broker"]["enable_topic_bridge"] is True
     assert parsed["tls"]["mode"] == "provided"
     assert parsed["tls"]["cert_file"] == "/ssl/fullchain.pem"
     assert parsed["tls"]["key_file"] == "/ssl/privkey.pem"
+    assert parsed["admin"]["protocol_auth_enabled"] is True
     assert parsed["admin"]["protocol_login_email"] == "user@example.com"
+    assert len(str(parsed["admin"]["session_secret"])) >= 24
     assert str(parsed["admin"]["password_hash"]).startswith("pbkdf2_sha256$")
     assert str(parsed["admin"]["protocol_login_pin_hash"]).startswith("pbkdf2_sha256$")
     assert token_path.exists() is False
+
+
+def test_write_config_from_home_assistant_options_provided_tls_uses_default_paths_when_blank(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+
+    _write_options(
+        options_path,
+        {
+            "stack_fqdn": "api-roborock.example.com",
+            "tls_mode": "provided",
+            "cert_file": "",
+            "key_file": "",
+            "admin_password": "super-secret-password",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "123456",
+        },
+    )
+
+    write_config_from_home_assistant_options(
+        options_path=options_path,
+        config_path=config_path,
+    )
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["tls"]["mode"] == "provided"
+    assert parsed["tls"]["cert_file"] == "/ssl/fullchain.pem"
+    assert parsed["tls"]["key_file"] == "/ssl/privkey.pem"
+
+
+def test_write_config_from_home_assistant_options_ignores_legacy_protocol_auth_toggle(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+
+    _write_options(
+        options_path,
+        {
+            "stack_fqdn": "api-roborock.example.com",
+            "admin_password": "secret",
+            "protocol_auth_enabled": False,
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "654321",
+        },
+    )
+
+    write_config_from_home_assistant_options(
+        options_path=options_path,
+        config_path=config_path,
+    )
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["admin"]["protocol_auth_enabled"] is True
+
+
+def test_write_config_from_home_assistant_options_reuses_existing_session_secret(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+
+    _write_options(
+        options_path,
+        {
+            "stack_fqdn": "api-roborock.example.com",
+            "admin_password": "secret",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "654321",
+        },
+    )
+
+    write_config_from_home_assistant_options(
+        options_path=options_path,
+        config_path=config_path,
+    )
+    first_secret = tomllib.loads(config_path.read_text(encoding="utf-8"))["admin"]["session_secret"]
+
+    write_config_from_home_assistant_options(
+        options_path=options_path,
+        config_path=config_path,
+    )
+    second_secret = tomllib.loads(config_path.read_text(encoding="utf-8"))["admin"]["session_secret"]
+
+    assert len(str(first_secret)) >= 24
+    assert second_secret == first_secret
+
+
+def test_write_config_from_home_assistant_options_ignores_legacy_broker_flags(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+
+    _write_options(
+        options_path,
+        {
+            "stack_fqdn": "api-roborock.example.com",
+            "use_external_broker": True,
+            "broker_host": "mqtt.internal",
+            "broker_port": 1883,
+            "enable_topic_bridge": False,
+            "admin_password": "secret",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "654321",
+        },
+    )
+
+    write_config_from_home_assistant_options(
+        options_path=options_path,
+        config_path=config_path,
+    )
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["broker"]["mode"] == "embedded"
+    assert parsed["broker"]["host"] == "127.0.0.1"
+    assert parsed["broker"]["port"] == 18830
+    assert parsed["broker"]["enable_topic_bridge"] is True
 
 
 def test_write_config_from_home_assistant_options_cloudflare(tmp_path: Path) -> None:
@@ -101,7 +204,44 @@ def test_write_config_from_home_assistant_options_cloudflare(tmp_path: Path) -> 
     assert token_path.read_text(encoding="utf-8") == "cloudflare-token-123"
 
 
-def test_write_config_from_home_assistant_options_external_tls_does_not_require_certs(tmp_path: Path) -> None:
+def test_write_config_from_home_assistant_options_infers_cloudflare_acme_from_token(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+    token_path = tmp_path / "run" / "secrets" / "cloudflare_token"
+
+    _write_options(
+        options_path,
+        {
+            "stack_fqdn": "api-roborock.example.com",
+            "tls_mode": "provided",
+            "tls_base_domain": "example.com",
+            "tls_email": "acme@example.com",
+            "cloudflare_token": "cloudflare-token-123",
+            "cert_file": "",
+            "key_file": "",
+            "admin_password": "secret",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "654321",
+        },
+    )
+
+    write_config_from_home_assistant_options(
+        options_path=options_path,
+        config_path=config_path,
+        cloudflare_token_path=token_path,
+    )
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["tls"]["mode"] == "cloudflare_acme"
+    assert parsed["tls"]["base_domain"] == "example.com"
+    assert parsed["tls"]["email"] == "acme@example.com"
+    assert parsed["tls"]["cloudflare_token_file"] == str(token_path)
+    assert "cert_file" not in parsed["tls"]
+    assert "key_file" not in parsed["tls"]
+    assert token_path.read_text(encoding="utf-8") == "cloudflare-token-123"
+
+
+def test_write_config_from_home_assistant_options_rejects_external_tls(tmp_path: Path) -> None:
     options_path = tmp_path / "options.json"
     config_path = tmp_path / "config.toml"
 
@@ -112,23 +252,17 @@ def test_write_config_from_home_assistant_options_external_tls_does_not_require_
             "listener_mode": "external_tls",
             "https_port": 443,
             "mqtt_tls_port": 8883,
-            "listen_https_port": 8080,
-            "listen_mqtt_port": 18883,
             "admin_password": "secret",
             "protocol_login_email": "user@example.com",
             "protocol_login_pin": "654321",
         },
     )
 
-    write_config_from_home_assistant_options(
-        options_path=options_path,
-        config_path=config_path,
-    )
-
-    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
-    assert parsed["network"]["listener_mode"] == "external_tls"
-    assert parsed["network"]["listen_https_port"] == 8080
-    assert parsed["network"]["listen_mqtt_port"] == 18883
+    with pytest.raises(ValueError, match="external_tls"):
+        write_config_from_home_assistant_options(
+            options_path=options_path,
+            config_path=config_path,
+        )
 
 
 def test_write_config_from_home_assistant_options_requires_admin_password(tmp_path: Path) -> None:

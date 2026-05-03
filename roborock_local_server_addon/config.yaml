@@ -1,5 +1,5 @@
 name: Roborock Local Server
-version: "0.0.2-rc1"
+version: "0.0.2-rc6"
 slug: roborock_local_server
 description: Private Roborock HTTPS and MQTT stack for Home Assistant environments.
 url: "https://github.com/Python-roborock/local_roborock_server"
@@ -23,16 +23,9 @@ map:
 webui: "https://[HOST]:[PORT:555]/admin"
 options:
   stack_fqdn: "api-roborock.example.com"
-  listener_mode: "local_tls"
   https_port: 555
   mqtt_tls_port: 8881
-  listen_https_port: 555
-  listen_mqtt_port: 8881
   region: "us"
-  use_external_broker: false
-  broker_host: "127.0.0.1"
-  broker_port: 18830
-  enable_topic_bridge: true
   tls_mode: "provided"
   tls_base_domain: ""
   tls_email: ""
@@ -40,22 +33,13 @@ options:
   cert_file: "/ssl/fullchain.pem"
   key_file: "/ssl/privkey.pem"
   admin_password: ""
-  admin_session_secret: ""
-  protocol_auth_enabled: true
   protocol_login_email: ""
   protocol_login_pin: ""
 schema:
   stack_fqdn: str
-  listener_mode: list(local_tls|external_tls)
   https_port: port
   mqtt_tls_port: port
-  listen_https_port: port
-  listen_mqtt_port: port
   region: list(us|eu|cn|ru)
-  use_external_broker: bool
-  broker_host: str
-  broker_port: port
-  enable_topic_bridge: bool
   tls_mode: list(provided|cloudflare_acme)
   tls_base_domain: str
   tls_email: str
@@ -63,7 +47,5 @@ schema:
   cert_file: str
   key_file: str
   admin_password: password
-  admin_session_secret: str
-  protocol_auth_enabled: bool
   protocol_login_email: email
   protocol_login_pin: password

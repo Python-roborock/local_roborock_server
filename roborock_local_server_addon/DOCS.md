@@ -2,17 +2,21 @@
 
 This app runs the same `ghcr.io/python-roborock/local_roborock_server` image used for Docker installs.
 
+It publishes two TLS ports directly:
+
+- `555/tcp` for the Roborock HTTPS API
+- `8881/tcp` for the Roborock MQTT TLS proxy
+
 ## Setup
 
 1. Set `stack_fqdn` to your `api-...` hostname.
-2. Choose `listener_mode`:
-   - `local_tls`: this app terminates TLS for both HTTPS and MQTT
-   - `external_tls`: your external proxy must terminate TLS for both HTTPS and MQTT and forward plaintext to this app's `listen_https_port` and `listen_mqtt_port`
-3. Set `admin_password`, `protocol_login_email`, and `protocol_login_pin` (6 digits).
-4. If you use `local_tls`, choose TLS mode:
+2. Set `admin_password`, `protocol_login_email`, and `protocol_login_pin` (6 digits).
+3. Choose TLS mode:
    - `provided`: set `cert_file` and `key_file` (defaults: `/ssl/fullchain.pem`, `/ssl/privkey.pem`)
    - `cloudflare_acme`: set `tls_base_domain`, `tls_email`, `cloudflare_token`
-5. Start the app.
+4. Start the app.
+
+The add-on always runs the embedded MQTT broker and keeps the topic bridge enabled.
 
 Then open `https://<home-assistant-host>:555/admin` (or your custom HTTPS port).
 
