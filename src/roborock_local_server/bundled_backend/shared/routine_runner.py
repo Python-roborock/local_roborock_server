@@ -50,16 +50,25 @@ _STEP_START_TIMEOUT_SECONDS = 20.0
 _STEP_COMPLETE_TIMEOUT_SECONDS = 4 * 60 * 60
 _STEP_START_POLL_INTERVAL_SECONDS = 0.5
 _STATUS_POLL_INTERVAL_SECONDS = 5.0
+_STEP_COMPLETE_CONFIRM_SECONDS = 30.0
 _ROUTINE_READY_STATES = {3, 8, 100}
 _RESUME_BATTERY_THRESHOLD = 80
 _POST_STEP_SETTLE_SECONDS = 15.0
 _POST_STEP_SETTLE_TIMEOUT_SECONDS = 10 * 60
+_ACTION_LOCK_RETRY_DELAY_SECONDS = 5.0
+_ACTION_LOCK_RETRY_ATTEMPTS = 6
 from .inventory_io import WEB_API_INVENTORY_FILE
 _SUPPORTED_METHODS = {
     "do_scenes_app_start",
     "do_scenes_segments",
     "do_scenes_zones",
 }
+_STEP_START_COMMANDS = {
+    RoborockCommand.APP_START,
+    RoborockCommand.APP_SEGMENT_CLEAN,
+    RoborockCommand.APP_ZONED_CLEAN,
+}
+_ACTION_LOCK_ERROR_CODES = {-10003, -10007}
 _RESUME_COMMAND_BY_IN_CLEANING: dict[int, RoborockCommand] = {
     RoborockInCleaning.global_clean_not_complete.value: RoborockCommand.APP_START,
     RoborockInCleaning.zone_clean_not_complete.value: RoborockCommand.RESUME_ZONED_CLEAN,
@@ -368,6 +377,37 @@ def _is_optional_unsupported_command(command: RoborockCommand, exc: Exception) -
     return command == RoborockCommand.SET_MOP_TEMPLATE_ID and isinstance(exc, RoborockUnsupportedFeature)
 
 
+def _exception_error_payload(exc: Exception) -> dict[str, Any] | None:
+    args = getattr(exc, "args", ())
+    if not args:
+        return None
+    payload = args[0]
+    return payload if isinstance(payload, dict) else None
+
+
+def _exception_error_code(exc: Exception) -> int | None:
+    payload = _exception_error_payload(exc)
+    code = payload.get("code") if payload is not None else getattr(exc, "code", None)
+    return code if isinstance(code, int) else None
+
+
+def _exception_error_message(exc: Exception) -> str:
+    payload = _exception_error_payload(exc)
+    if payload is not None:
+        message = payload.get("message")
+        if isinstance(message, str):
+            return message
+    return str(exc)
+
+
+def _is_retryable_action_locked_error(exc: Exception) -> bool:
+    code = _exception_error_code(exc)
+    if code in _ACTION_LOCK_ERROR_CODES:
+        return True
+    message = _exception_error_message(exc).strip().lower()
+    return "action locked" in message or "invalid status" in message
+
+
 def _response_dps(message: RoborockMessage) -> dict[str, Any] | None:
     if message.payload is None:
         return None
@@ -532,6 +572,7 @@ class _RoutineMqttClient:
         saw_activity = False
         saw_cleaning = False
         sent_resume = False
+        completion_candidate_since: float | None = None
 
         try:
             while True:
@@ -555,8 +596,9 @@ class _RoutineMqttClient:
                 if in_cleaning != RoborockInCleaning.complete.value:
                     saw_cleaning = True
 
+                is_non_cleaning = in_cleaning == RoborockInCleaning.complete.value
                 is_ready = (
-                    in_cleaning == RoborockInCleaning.complete.value
+                    is_non_cleaning
                     and state in _ROUTINE_READY_STATES
                 )
 
@@ -588,8 +630,17 @@ class _RoutineMqttClient:
                     saw_activity = True
                     if sent_resume and state not in (8, 23, 26):
                         sent_resume = False
-                elif saw_cleaning:
-                    return
+                if saw_cleaning:
+                    if is_non_cleaning:
+                        if completion_candidate_since is None:
+                            completion_candidate_since = loop.time()
+                        elif (
+                            loop.time() - completion_candidate_since
+                            >= _STEP_COMPLETE_CONFIRM_SECONDS
+                        ):
+                            return
+                    else:
+                        completion_candidate_since = None
                 elif saw_activity:
                     self._logger.info(
                         "Routine wait: dock activity cycle ended (no cleaning observed), resetting"
@@ -611,7 +662,7 @@ class _RoutineMqttClient:
             ) from exc
 
 
-    async def wait_for_dock_settle(self) -> None:
+    async def wait_for_dock_settle(self, *, initial_delay_seconds: float = _POST_STEP_SETTLE_SECONDS) -> None:
         """Wait for automatic dock activities (e.g. bin emptying) to finish
         before sending the next step.
 
@@ -626,21 +677,21 @@ class _RoutineMqttClient:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _POST_STEP_SETTLE_TIMEOUT_SECONDS
 
-        self._logger.info(
-            "Post-step settle: waiting %.0fs before checking dock activity",
-            _POST_STEP_SETTLE_SECONDS,
-        )
-        await asyncio.sleep(_POST_STEP_SETTLE_SECONDS)
+        if initial_delay_seconds > 0:
+            self._logger.info(
+                "Post-step settle: waiting %.0fs before checking dock activity",
+                initial_delay_seconds,
+            )
+            await asyncio.sleep(initial_delay_seconds)
 
         last_observed = None
         while True:
             remaining = deadline - loop.time()
             if remaining <= 0:
-                self._logger.warning(
-                    "Post-step settle: timed out after %.0fs waiting for dock activity to finish",
-                    _POST_STEP_SETTLE_TIMEOUT_SECONDS,
+                raise RoutineExecutionError(
+                    "Timed out waiting for dock activity to finish "
+                    f"after {_POST_STEP_SETTLE_TIMEOUT_SECONDS}s"
                 )
-                break
 
             status = await asyncio.wait_for(self.get_status(), timeout=remaining)
             state = _enum_or_int_value(status.state)
@@ -862,6 +913,53 @@ class RoutineRunner:
         finally:
             await client.close()
 
+    async def _send_step_command(
+        self,
+        *,
+        client: _RoutineMqttClient,
+        logger: logging.LoggerAdapter,
+        step: RoutineStep,
+        routine_command: RoutineCommand,
+    ) -> None:
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                await client.send_command(routine_command.command, routine_command.params)
+                return
+            except RoborockUnsupportedFeature as exc:
+                if not _is_optional_unsupported_command(routine_command.command, exc):
+                    raise
+                logger.warning(
+                    "Skipping unsupported routine command step=%s method=%s command=%s: %s",
+                    step.step_id,
+                    step.method,
+                    routine_command.command.value,
+                    exc,
+                )
+                return
+            except Exception as exc:  # noqa: BLE001
+                if (
+                    routine_command.command in _STEP_START_COMMANDS
+                    and attempts < _ACTION_LOCK_RETRY_ATTEMPTS
+                    and _is_retryable_action_locked_error(exc)
+                ):
+                    logger.warning(
+                        "Routine step=%s method=%s command=%s rejected as action locked; "
+                        "waiting %.0fs and retrying (%s/%s)",
+                        step.step_id,
+                        step.method,
+                        routine_command.command.value,
+                        _ACTION_LOCK_RETRY_DELAY_SECONDS,
+                        attempts,
+                        _ACTION_LOCK_RETRY_ATTEMPTS,
+                    )
+                    await client.wait_for_dock_settle(
+                        initial_delay_seconds=_ACTION_LOCK_RETRY_DELAY_SECONDS,
+                    )
+                    continue
+                raise
+
     async def _run_scene(self, *, scene: dict[str, Any], steps: list[RoutineStep]) -> None:
         device_id = scene_device_id(scene)
         device = self._device_record(device_id)
@@ -896,18 +994,12 @@ class RoutineRunner:
                         routine_command.command.value,
                         routine_command.params,
                     )
-                    try:
-                        await client.send_command(routine_command.command, routine_command.params)
-                    except RoborockUnsupportedFeature as exc:
-                        if not _is_optional_unsupported_command(routine_command.command, exc):
-                            raise
-                        logger.warning(
-                            "Skipping unsupported routine command step=%s method=%s command=%s: %s",
-                            step.step_id,
-                            step.method,
-                            routine_command.command.value,
-                            exc,
-                        )
+                    await self._send_step_command(
+                        client=client,
+                        logger=logger,
+                        step=step,
+                        routine_command=routine_command,
+                    )
                 if waits_for_step_complete:
                     logger.info("Waiting for ready state step=%s scene=%s", step.step_id, _scene_name(scene))
                     await client.wait_for_step_complete()

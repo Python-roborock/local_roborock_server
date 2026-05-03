@@ -3,11 +3,14 @@ import logging
 import socket
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from roborock_local_server.backend import MqttTlsProxy
+from roborock_local_server.bundled_backend.shared.runtime_credentials import RuntimeCredentialsStore
+from roborock_local_server.bundled_backend.shared.runtime_state import RuntimeState
 
 
 class _FakeSourceSocket:
@@ -110,6 +113,19 @@ def _seed_protocol_sessions(path: Path) -> None:
     )
 
 
+def _seed_key_state(path: Path, *, did: str) -> None:
+    _write_json(
+        path,
+        {
+            "devices": {
+                did: {
+                    "modulus_hex": "ab",
+                }
+            }
+        },
+    )
+
+
 def _build_connect_packet(*, client_id: str, username: str, password: str, protocol_level: int = 4) -> bytes:
     protocol_name = b"MQTT"
     variable_header = (
@@ -130,6 +146,12 @@ def _build_connect_packet(*, client_id: str, username: str, password: str, proto
     )
     remaining = variable_header + payload
     return bytes([0x10, len(remaining)]) + remaining
+
+
+def _build_publish_packet(*, topic: str, payload: bytes = b"{}") -> bytes:
+    topic_bytes = topic.encode()
+    remaining = len(topic_bytes).to_bytes(2, "big") + topic_bytes + payload
+    return bytes([0x30, len(remaining)]) + remaining
 
 
 def test_relay_forwards_chunk_before_slow_packet_tracing_finishes(tmp_path, monkeypatch) -> None:
@@ -410,6 +432,225 @@ def test_authorize_connect_recovers_missing_known_device_mqtt_password(tmp_path)
     )
     assert rejected is False
     assert reject_reason == "invalid_mqtt_credentials"
+
+
+def test_authorize_connect_accepts_unknown_device_credentials_only_for_matching_onboarding_session(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    key_state_path = tmp_path / "device_key_state.json"
+    _seed_key_state(key_state_path, did="1103821560705")
+    runtime_credentials_path = tmp_path / "runtime_credentials.json"
+    _write_json(
+        runtime_credentials_path,
+        {
+            "schema_version": 2,
+            "mqtt_usr": "bootstrap-user",
+            "mqtt_passwd": "bootstrap-pass",
+            "mqtt_clientid": "bootstrap-client",
+            "devices": [
+                {
+                    "did": "1103821560705",
+                    "duid": "6HL2zfniaoYYV01CkVuhkO",
+                    "name": "Roborock Qrevo MaxV 2",
+                    "model": "roborock.vacuum.a87",
+                    "product_id": "5gUei3OIJIXVD3eD85Balg",
+                    "localkey": "xPd5Dr8CGGqtdDlH",
+                    "local_key_source": "inventory",
+                    "device_mqtt_usr": "",
+                    "device_mqtt_pass": "",
+                    "updated_at": "2026-04-17T17:00:00+00:00",
+                    "last_nc_at": "",
+                    "last_mqtt_seen_at": "",
+                }
+            ],
+        },
+    )
+    runtime_credentials = RuntimeCredentialsStore(runtime_credentials_path)
+    runtime_state = RuntimeState(log_dir=tmp_path, key_state_file=key_state_path, runtime_credentials=runtime_credentials)
+    runtime_state.upsert_vacuum("6HL2zfniaoYYV01CkVuhkO", name="Roborock Qrevo MaxV 2", id_kind="duid")
+    runtime_state.start_onboarding_session(target_duid="6HL2zfniaoYYV01CkVuhkO", target_name="Roborock Qrevo MaxV 2")
+    event_time = datetime.now(timezone.utc).isoformat()
+    for route_name, path_name in (("region", "/region"), ("nc_prepare", "/nc")):
+        runtime_state.record_http_event(
+            event_time=event_time,
+            route_name=route_name,
+            clean_path=path_name,
+            raw_path=path_name,
+            method="GET",
+            host="api-roborock.example.com",
+            remote="192.168.8.10:54321",
+            did="1103821560705",
+        )
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        runtime_state=runtime_state,
+        runtime_credentials=runtime_credentials,
+    )
+
+    packet = _build_connect_packet(
+        client_id="a012391cb5f8bc97",
+        username="c25b14ceac358d2a",
+        password="ff8922d24a9a9af81f18f35dcee9a5a5",
+    )
+    authorized, reason, info, candidate = proxy._authorize_connect_packet_for_client(
+        packet,
+        client_ip="192.168.8.10",
+    )
+
+    assert authorized is True
+    assert reason == "device_mqtt_onboarding_pending"
+    assert info is not None
+    assert candidate is not None
+    assert candidate["did"] == "1103821560705"
+    persisted = runtime_credentials.resolve_device(did="1103821560705")
+    assert persisted is not None
+    assert persisted["device_mqtt_usr"] == ""
+    assert persisted["device_mqtt_pass"] == ""
+
+    rejected, reject_reason, _info, rejected_candidate = proxy._authorize_connect_packet_for_client(
+        packet,
+        client_ip="192.168.8.11",
+    )
+    assert rejected is False
+    assert reject_reason == "invalid_mqtt_credentials"
+    assert rejected_candidate is None
+
+
+def test_trace_packet_persists_confirmed_onboarding_device_mqtt_credentials(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    runtime_credentials_path = tmp_path / "runtime_credentials.json"
+    _write_json(
+        runtime_credentials_path,
+        {
+            "schema_version": 2,
+            "devices": [
+                {
+                    "did": "1103821560705",
+                    "duid": "6HL2zfniaoYYV01CkVuhkO",
+                    "name": "Roborock Qrevo MaxV 2",
+                    "model": "roborock.vacuum.a87",
+                    "product_id": "5gUei3OIJIXVD3eD85Balg",
+                    "localkey": "xPd5Dr8CGGqtdDlH",
+                    "local_key_source": "inventory",
+                    "device_mqtt_usr": "",
+                    "device_mqtt_pass": "",
+                    "updated_at": "2026-04-17T17:00:00+00:00",
+                    "last_nc_at": "",
+                    "last_mqtt_seen_at": "",
+                }
+            ],
+        },
+    )
+    runtime_credentials = RuntimeCredentialsStore(runtime_credentials_path)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        runtime_credentials=runtime_credentials,
+    )
+    proxy._set_pending_onboarding_auth(
+        "1",
+        {
+            "did": "1103821560705",
+            "duid": "6HL2zfniaoYYV01CkVuhkO",
+            "name": "Roborock Qrevo MaxV 2",
+            "username": "c25b14ceac358d2a",
+            "password": "ff8922d24a9a9af81f18f35dcee9a5a5",
+            "client_ip": "192.168.8.10",
+        },
+    )
+    proxy._register_conn_endpoints("1", _FakeSourceSocket(), _FakeBackendSocket())
+
+    proxy._trace_packet("1", "c2b", _build_publish_packet(topic="rr/d/i/1103821560705/c25b14ceac358d2a"))
+
+    persisted = runtime_credentials.resolve_device(did="1103821560705")
+    assert persisted is not None
+    assert persisted["device_mqtt_usr"] == "c25b14ceac358d2a"
+    assert persisted["device_mqtt_pass"] == "ff8922d24a9a9af81f18f35dcee9a5a5"
+    assert proxy._get_pending_onboarding_auth("1") is None
+
+
+def test_trace_packet_closes_provisional_onboarding_session_when_first_publish_topic_mismatches(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    runtime_credentials_path = tmp_path / "runtime_credentials.json"
+    _write_json(
+        runtime_credentials_path,
+        {
+            "schema_version": 2,
+            "devices": [
+                {
+                    "did": "1103821560705",
+                    "duid": "6HL2zfniaoYYV01CkVuhkO",
+                    "name": "Roborock Qrevo MaxV 2",
+                    "model": "roborock.vacuum.a87",
+                    "product_id": "5gUei3OIJIXVD3eD85Balg",
+                    "localkey": "xPd5Dr8CGGqtdDlH",
+                    "local_key_source": "inventory",
+                    "device_mqtt_usr": "",
+                    "device_mqtt_pass": "",
+                    "updated_at": "2026-04-17T17:00:00+00:00",
+                    "last_nc_at": "",
+                    "last_mqtt_seen_at": "",
+                }
+            ],
+        },
+    )
+    runtime_credentials = RuntimeCredentialsStore(runtime_credentials_path)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        runtime_credentials=runtime_credentials,
+    )
+    client_sock = _FakeSourceSocket()
+    backend_sock = _FakeBackendSocket()
+    proxy._set_pending_onboarding_auth(
+        "1",
+        {
+            "did": "1103821560705",
+            "duid": "6HL2zfniaoYYV01CkVuhkO",
+            "name": "Roborock Qrevo MaxV 2",
+            "username": "c25b14ceac358d2a",
+            "password": "ff8922d24a9a9af81f18f35dcee9a5a5",
+            "client_ip": "192.168.8.10",
+        },
+    )
+    proxy._register_conn_endpoints("1", client_sock, backend_sock)
+
+    proxy._trace_packet("1", "c2b", _build_publish_packet(topic="rr/d/i/9999999999999/c25b14ceac358d2a"))
+
+    persisted = runtime_credentials.resolve_device(did="1103821560705")
+    assert persisted is not None
+    assert persisted["device_mqtt_usr"] == ""
+    assert persisted["device_mqtt_pass"] == ""
+    assert client_sock.closed is True
+    assert backend_sock.closed is True
+    assert proxy._get_pending_onboarding_auth("1") is None
 
 
 def test_authorize_connect_accepts_persisted_synced_user_hash_credentials(tmp_path) -> None:
