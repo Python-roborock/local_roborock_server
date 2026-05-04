@@ -11,23 +11,26 @@ import queue
 import socket
 import ssl
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from shared.constants import MQTT_TYPES
 from shared.decoder import build_decoder
 from shared.io_utils import append_jsonl, payload_preview
-from shared.runtime_credentials import RuntimeCredentialsStore
+from shared.protocol_auth import ProtocolAuthStore
+from shared.runtime_credentials import RuntimeCredentialsStore, parse_mqtt_connect_packet
 from shared.runtime_state import RuntimeState
 from shared.zone_ranges_store import ZoneRangesStore
 
 from .command_handlers import RpcCommandRegistry
 
 class MqttTlsProxy:
+    _MAX_FIRST_PACKET_BYTES = 1024 * 1024
+
     def __init__(
         self,
         *,
-        cert_file: Path,
-        key_file: Path,
+        cert_file: Path | None,
+        key_file: Path | None,
         listen_host: str,
         listen_port: int,
         backend_host: str,
@@ -35,12 +38,17 @@ class MqttTlsProxy:
         localkey: str,
         logger: logging.Logger,
         decoded_jsonl: Path,
+        cloud_snapshot_path: Path | None = None,
+        protocol_auth_sessions_path: Path | None = None,
+        protocol_auth_enabled: Callable[[], bool] | None = None,
         runtime_state: RuntimeState | None = None,
         runtime_credentials: RuntimeCredentialsStore | None = None,
         zone_ranges_store: ZoneRangesStore | None = None,
+        tls_enabled: bool = True,
     ) -> None:
         self.cert_file = cert_file
         self.key_file = key_file
+        self.tls_enabled = tls_enabled
         self.listen_host = listen_host
         self.listen_port = listen_port
         self.backend_host = backend_host
@@ -48,6 +56,8 @@ class MqttTlsProxy:
         self.localkey = localkey
         self.logger = logger
         self.decoded_jsonl = decoded_jsonl
+        self.cloud_snapshot_path = cloud_snapshot_path
+        self._protocol_auth_enabled = protocol_auth_enabled or (lambda: True)
         self.runtime_state = runtime_state
         self.runtime_credentials = runtime_credentials
         self.zone_ranges_store = zone_ranges_store
@@ -56,8 +66,18 @@ class MqttTlsProxy:
         self._counter = 0
         self._lock = threading.Lock()
         self._conn_protocol_levels: dict[str, int] = {}
+        self._conn_endpoints: dict[str, tuple[socket.socket, socket.socket]] = {}
+        self._pending_onboarding_auth: dict[str, dict[str, str]] = {}
         self._trace_queue: queue.Queue[tuple[str, str, bytes] | None] = queue.Queue()
         self._trace_thread: threading.Thread | None = None
+        self._protocol_auth = (
+            ProtocolAuthStore(
+                cloud_snapshot_path,
+                session_store_path=protocol_auth_sessions_path,
+            )
+            if cloud_snapshot_path is not None
+            else None
+        )
         default_decoder, self._protocol_names = build_decoder(localkey)
         self._decoder_cache: dict[str, Any] = {localkey: default_decoder}
         self._command_registry = RpcCommandRegistry()
@@ -66,6 +86,38 @@ class MqttTlsProxy:
         with self._lock:
             self._counter += 1
             return str(self._counter)
+
+    def _register_conn_endpoints(self, conn_id: str, client_conn: socket.socket, backend_conn: socket.socket) -> None:
+        with self._lock:
+            self._conn_endpoints[conn_id] = (client_conn, backend_conn)
+
+    def _pop_conn_endpoints(self, conn_id: str) -> tuple[socket.socket, socket.socket] | None:
+        with self._lock:
+            return self._conn_endpoints.pop(conn_id, None)
+
+    def _close_conn_endpoints(self, conn_id: str) -> None:
+        endpoints = self._pop_conn_endpoints(conn_id)
+        if endpoints is None:
+            return
+        for endpoint in endpoints:
+            try:
+                endpoint.close()
+            except OSError:
+                pass
+
+    def _set_pending_onboarding_auth(self, conn_id: str, candidate: dict[str, str]) -> None:
+        with self._lock:
+            self._pending_onboarding_auth[conn_id] = dict(candidate)
+
+    def _get_pending_onboarding_auth(self, conn_id: str) -> dict[str, str] | None:
+        with self._lock:
+            candidate = self._pending_onboarding_auth.get(conn_id)
+            return dict(candidate) if candidate is not None else None
+
+    def _pop_pending_onboarding_auth(self, conn_id: str) -> dict[str, str] | None:
+        with self._lock:
+            candidate = self._pending_onboarding_auth.pop(conn_id, None)
+            return dict(candidate) if candidate is not None else None
 
     @staticmethod
     def _decode_remaining_length(data: bytes, start: int) -> tuple[int | None, int]:
@@ -84,6 +136,12 @@ class MqttTlsProxy:
             if consumed >= 4:
                 break
         return None, 0
+
+    @staticmethod
+    def _remaining_length_invalid(data: bytes, start: int) -> bool:
+        if start + 3 >= len(data):
+            return False
+        return (data[start + 3] & 0x80) != 0
 
     def _extract_packets(self, frame_buf: bytearray) -> list[bytes]:
         packets: list[bytes] = []
@@ -119,6 +177,181 @@ class MqttTlsProxy:
         if protocol_level_idx >= len(packet):
             return None
         return packet[protocol_level_idx]
+
+    @staticmethod
+    def _build_connect_reject_packet(protocol_level: int | None) -> bytes | None:
+        if protocol_level == 5:
+            # MQTT 5 CONNACK with reason code 0x87 "Not authorized".
+            return b"\x20\x03\x00\x87\x00"
+        if protocol_level in (None, 3, 4):
+            # MQTT 3.1/3.1.1 CONNACK with return code 0x05 "Not authorized".
+            return b"\x20\x02\x00\x05"
+        return None
+
+    @classmethod
+    def _read_first_packet(cls, conn: socket.socket) -> tuple[bytes, bytes] | None:
+        buffer = bytearray()
+        while True:
+            chunk = conn.recv(4096)
+            if not chunk:
+                return None
+            buffer.extend(chunk)
+            if len(buffer) > cls._MAX_FIRST_PACKET_BYTES:
+                raise ValueError("MQTT CONNECT exceeds maximum supported size")
+            if len(buffer) < 2:
+                continue
+            if cls._remaining_length_invalid(buffer, 1):
+                raise ValueError("Invalid MQTT remaining length in CONNECT packet")
+            remaining_len, remaining_len_bytes = cls._decode_remaining_length(buffer, 1)
+            if remaining_len is None or remaining_len_bytes == 0:
+                continue
+            total_len = 1 + remaining_len_bytes + remaining_len
+            if total_len > cls._MAX_FIRST_PACKET_BYTES:
+                raise ValueError("MQTT CONNECT exceeds maximum supported size")
+            if len(buffer) < total_len:
+                continue
+            return bytes(buffer[:total_len]), bytes(buffer[total_len:])
+
+    def _expected_bootstrap_credentials(self) -> tuple[str, str, str] | None:
+        if self.runtime_credentials is None:
+            return None
+        username = str(self.runtime_credentials.bootstrap_value("mqtt_usr", "") or "").strip()
+        password = str(self.runtime_credentials.bootstrap_value("mqtt_passwd", "") or "").strip()
+        client_id = str(self.runtime_credentials.bootstrap_value("mqtt_clientid", "") or "").strip()
+        if not username or not password:
+            return None
+        return username, password, client_id
+
+    def _authorize_connect_packet(self, packet: bytes) -> tuple[bool, str, dict[str, Any] | None]:
+        authorized, reason, info, _candidate = self._authorize_connect_packet_for_client(packet, client_ip="")
+        return authorized, reason, info
+
+    def _authorize_connect_packet_for_client(
+        self,
+        packet: bytes,
+        *,
+        client_ip: str,
+    ) -> tuple[bool, str, dict[str, Any] | None, dict[str, str] | None]:
+        info = parse_mqtt_connect_packet(packet)
+        if info is None:
+            return False, "invalid_connect_packet", None, None
+
+        username = str(info.get("username") or "").strip()
+        password = str(info.get("password") or "").strip()
+        client_id = str(info.get("client_id") or "").strip()
+        if not username or not password:
+            return False, "missing_mqtt_credentials", info, None
+
+        if self._protocol_auth is not None and self._protocol_auth_enabled():
+            authorized, auth_reason, _matched_user = self._protocol_auth.verify_user_mqtt_credentials(username, password)
+            if authorized:
+                return True, auth_reason, info, None
+
+        bootstrap_credentials = self._expected_bootstrap_credentials()
+        if bootstrap_credentials is not None:
+            expected_username, expected_password, expected_client_id = bootstrap_credentials
+            if username == expected_username and password == expected_password:
+                if expected_client_id and client_id and client_id != expected_client_id:
+                    return False, "invalid_bootstrap_client_id", info, None
+                return True, "bootstrap", info, None
+
+        if self.runtime_credentials is not None:
+            authorized, auth_reason, _matched_device = self.runtime_credentials.verify_device_mqtt_credentials(
+                username=username,
+                password=password,
+            )
+            if authorized:
+                return True, auth_reason, info, None
+            if auth_reason == "device_mqtt_password_missing":
+                recovered_device = self.runtime_credentials.recover_device_mqtt_password(
+                    username=username,
+                    password=password,
+                )
+                if recovered_device is not None:
+                    return True, "device_mqtt_recovered", info, None
+            if auth_reason == "unknown_device_mqtt_username":
+                candidate = self._resolve_onboarding_device_mqtt_candidate(
+                    client_ip=client_ip,
+                    username=username,
+                    password=password,
+                )
+                if candidate is not None:
+                    return True, "device_mqtt_onboarding_pending", info, candidate
+
+        return False, "invalid_mqtt_credentials", info, None
+
+    def _resolve_onboarding_device_mqtt_candidate(
+        self,
+        *,
+        client_ip: str,
+        username: str,
+        password: str,
+    ) -> dict[str, str] | None:
+        if self.runtime_state is None or self.runtime_credentials is None:
+            return None
+        candidate = self.runtime_state.onboarding_device_mqtt_candidate(client_ip=client_ip)
+        if candidate is None:
+            return None
+        device = self.runtime_credentials.resolve_device(
+            did=str(candidate.get("did") or ""),
+            duid=str(candidate.get("duid") or ""),
+        )
+        if device is None:
+            return None
+        existing_username = str(device.get("device_mqtt_usr") or "").strip()
+        existing_password = str(device.get("device_mqtt_pass") or "").strip()
+        if existing_username or existing_password:
+            return None
+        return {
+            "did": str(device.get("did") or "").strip(),
+            "duid": str(device.get("duid") or "").strip(),
+            "name": str(device.get("name") or candidate.get("name") or "").strip(),
+            "username": username.strip(),
+            "password": password.strip(),
+            "client_ip": client_ip.strip(),
+        }
+
+    def _confirm_pending_onboarding_auth(self, conn_id: str, *, direction: str, topic: str) -> bool:
+        if direction != "c2b" or self.runtime_credentials is None:
+            return True
+        candidate = self._get_pending_onboarding_auth(conn_id)
+        if candidate is None:
+            return True
+        expected_topic = f"rr/d/i/{candidate['did']}/{candidate['username']}"
+        if topic != expected_topic:
+            self.logger.warning(
+                "[conn %s] rejected provisional onboarding MQTT session expected_topic=%s got=%s",
+                conn_id,
+                expected_topic,
+                topic,
+            )
+            self._pop_pending_onboarding_auth(conn_id)
+            self._close_conn_endpoints(conn_id)
+            return False
+        learned = self.runtime_credentials.confirm_device_mqtt_credentials(
+            did=candidate.get("did", ""),
+            duid=candidate.get("duid", ""),
+            username=candidate["username"],
+            password=candidate["password"],
+        )
+        self._pop_pending_onboarding_auth(conn_id)
+        if learned is None:
+            self.logger.warning(
+                "[conn %s] failed to persist confirmed onboarding MQTT credentials did=%s duid=%s",
+                conn_id,
+                candidate.get("did", ""),
+                candidate.get("duid", ""),
+            )
+            self._close_conn_endpoints(conn_id)
+            return False
+        self.logger.info(
+            "[conn %s] learned onboarding MQTT credentials did=%s duid=%s username=%s",
+            conn_id,
+            learned.get("did", ""),
+            learned.get("duid", ""),
+            candidate["username"],
+        )
+        return True
 
     @classmethod
     def _extract_publish(cls, packet: bytes, protocol_level: int | None = None) -> tuple[str | None, bytes | None]:
@@ -301,6 +534,8 @@ class MqttTlsProxy:
         topic, payload = self._extract_publish(packet, self._get_conn_protocol_level(conn_id))
         if topic is None or payload is None:
             return
+        if not self._confirm_pending_onboarding_auth(conn_id, direction=direction, topic=topic):
+            return
         if self.runtime_state is not None:
             self.runtime_state.record_mqtt_message(
                 conn_id=conn_id,
@@ -482,8 +717,10 @@ class MqttTlsProxy:
                 except OSError:
                     pass
 
-    def _handle_client(self, tls_conn: ssl.SSLSocket, addr: tuple[str, int]) -> None:
+    def _handle_client(self, tls_conn: socket.socket | ssl.SSLSocket, addr: tuple[str, int]) -> None:
         conn_id = self._next_conn()
+        backend: socket.socket | None = None
+        relay_started = False
         self.logger.info(
             "[conn %s] backend connect %s:%d from %s:%d",
             conn_id,
@@ -495,10 +732,56 @@ class MqttTlsProxy:
         if self.runtime_state is not None:
             self.runtime_state.record_mqtt_connection(conn_id=conn_id, client_ip=addr[0], client_port=addr[1])
         try:
+            first_packet = self._read_first_packet(tls_conn)
+            if first_packet is None:
+                self.logger.warning("[conn %s] client closed before MQTT CONNECT", conn_id)
+                return
+            connect_packet, initial_remainder = first_packet
+            authorized, auth_reason, connect_info, onboarding_candidate = self._authorize_connect_packet_for_client(
+                connect_packet,
+                client_ip=addr[0],
+            )
+            if connect_info is not None:
+                protocol_level = connect_info.get("protocol_level")
+                if isinstance(protocol_level, int):
+                    self._set_conn_protocol_level(conn_id, protocol_level)
+            self._queue_trace_packet(conn_id, "c2b", connect_packet)
+            if not authorized:
+                self.logger.warning(
+                    "[conn %s] rejected MQTT CONNECT reason=%s client_id=%s username=%s",
+                    conn_id,
+                    auth_reason,
+                    str((connect_info or {}).get("client_id") or ""),
+                    str((connect_info or {}).get("username") or ""),
+                )
+                reject_packet = self._build_connect_reject_packet(
+                    connect_info.get("protocol_level") if isinstance(connect_info, dict) else None
+                )
+                if reject_packet is not None:
+                    try:
+                        tls_conn.sendall(reject_packet)
+                    except (OSError, ConnectionResetError, BrokenPipeError):
+                        pass
+                    else:
+                        self._queue_trace_packet(conn_id, "b2c", reject_packet)
+                return
+
             backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             backend.connect((self.backend_host, self.backend_port))
-            c2b = threading.Thread(target=self._relay, args=(tls_conn, backend, conn_id, "c2b", bytearray()), daemon=True)
+            self._register_conn_endpoints(conn_id, tls_conn, backend)
+            if onboarding_candidate is not None:
+                self._set_pending_onboarding_auth(conn_id, onboarding_candidate)
+            c2b_frame_buf = bytearray(initial_remainder)
+            for packet in self._extract_packets(c2b_frame_buf):
+                self._queue_trace_packet(conn_id, "c2b", packet)
+            backend.sendall(connect_packet + initial_remainder)
+            c2b = threading.Thread(
+                target=self._relay,
+                args=(tls_conn, backend, conn_id, "c2b", c2b_frame_buf),
+                daemon=True,
+            )
             b2c = threading.Thread(target=self._relay, args=(backend, tls_conn, conn_id, "b2c", bytearray()), daemon=True)
+            relay_started = True
             c2b.start()
             b2c.start()
             c2b.join()
@@ -506,6 +789,16 @@ class MqttTlsProxy:
         except Exception as exc:
             self.logger.error("[conn %s] connection error: %s", conn_id, exc)
         finally:
+            self._pop_pending_onboarding_auth(conn_id)
+            self._pop_conn_endpoints(conn_id)
+            if not relay_started:
+                for endpoint in (tls_conn, backend):
+                    if endpoint is None:
+                        continue
+                    try:
+                        endpoint.close()
+                    except OSError:
+                        pass
             if self.runtime_state is not None:
                 self.runtime_state.record_mqtt_disconnect(conn_id=conn_id)
             with self._lock:
@@ -518,7 +811,9 @@ class MqttTlsProxy:
         thread.start()
         return thread
 
-    def _run(self) -> None:
+    def _build_tls_context(self) -> ssl.SSLContext:
+        if self.cert_file is None or self.key_file is None:
+            raise RuntimeError("TLS-enabled MQTT proxy requires cert_file and key_file")
         tls_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls_ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
         # Older Roborock firmware MQTT clients negotiate TLSv1.0/1.1.
@@ -534,6 +829,31 @@ class MqttTlsProxy:
         tls_ctx.load_cert_chain(str(self.cert_file), str(self.key_file))
         tls_ctx.check_hostname = False
         tls_ctx.verify_mode = ssl.CERT_NONE
+        return tls_ctx
+
+    def _accept_client_connection(
+        self,
+        *,
+        raw_conn: socket.socket,
+        addr: tuple[str, int],
+        tls_ctx: ssl.SSLContext | None,
+    ) -> socket.socket | ssl.SSLSocket | None:
+        if not self.tls_enabled:
+            self.logger.info("Plain MQTT accept from %s:%d", addr[0], addr[1])
+            return raw_conn
+        if tls_ctx is None:
+            raise RuntimeError("TLS MQTT accept requires an SSL context")
+        try:
+            tls_conn = tls_ctx.wrap_socket(raw_conn, server_side=True)
+            self.logger.info("TLS handshake ok from %s:%d (%s)", addr[0], addr[1], tls_conn.version())
+            return tls_conn
+        except (ssl.SSLError, ConnectionResetError, OSError) as exc:
+            self.logger.warning("TLS handshake failed from %s:%d: %s", addr[0], addr[1], exc)
+            raw_conn.close()
+            return None
+
+    def _run(self) -> None:
+        tls_ctx = self._build_tls_context() if self.tls_enabled else None
 
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -541,7 +861,8 @@ class MqttTlsProxy:
         self._server_socket.listen(10)
         self._running = True
         self.logger.info(
-            "TLS MQTT proxy listening on %s:%d -> %s:%d",
+            "%s MQTT proxy listening on %s:%d -> %s:%d",
+            "TLS" if self.tls_enabled else "Plain",
             self.listen_host,
             self.listen_port,
             self.backend_host,
@@ -551,14 +872,10 @@ class MqttTlsProxy:
         while self._running:
             try:
                 raw_conn, addr = self._server_socket.accept()
-                try:
-                    tls_conn = tls_ctx.wrap_socket(raw_conn, server_side=True)
-                    self.logger.info("TLS handshake ok from %s:%d (%s)", addr[0], addr[1], tls_conn.version())
-                except (ssl.SSLError, ConnectionResetError, OSError) as exc:
-                    self.logger.warning("TLS handshake failed from %s:%d: %s", addr[0], addr[1], exc)
-                    raw_conn.close()
+                client_conn = self._accept_client_connection(raw_conn=raw_conn, addr=addr, tls_ctx=tls_ctx)
+                if client_conn is None:
                     continue
-                threading.Thread(target=self._handle_client, args=(tls_conn, addr), daemon=True).start()
+                threading.Thread(target=self._handle_client, args=(client_conn, addr), daemon=True).start()
             except OSError as exc:
                 if not self._running:
                     break

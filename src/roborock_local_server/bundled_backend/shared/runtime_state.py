@@ -399,6 +399,36 @@ class RuntimeState:
     def pairing_snapshot(self) -> dict[str, Any]:
         return self.onboarding_session_snapshot()
 
+    def onboarding_device_mqtt_candidate(self, *, client_ip: str) -> dict[str, str] | None:
+        normalized_ip = client_ip.strip()
+        if not normalized_ip:
+            return None
+        with self._lock:
+            session = self._pairing_session
+            if session is None or not session.get("active"):
+                return None
+            self._refresh_pairing_session_locked(session)
+            if str(session.get("identity_conflict") or "").strip():
+                return None
+            if not str(session.get("region_at") or "").strip() or not str(session.get("nc_at") or "").strip():
+                return None
+            target_ip = str(session.get("target_ip") or "").strip()
+            if not target_ip or target_ip != normalized_ip:
+                return None
+            target_did = str(session.get("target_did") or "").strip()
+            target_duid = str(session.get("target_duid") or "").strip()
+            if not target_did:
+                return None
+            key_state = self._session_key_state_locked(target_did, target_duid)
+            if not bool(key_state.get("has_modulus")):
+                return None
+            return {
+                "did": target_did,
+                "duid": target_duid,
+                "name": str(session.get("selected_name") or "").strip(),
+                "target_ip": target_ip,
+            }
+
     def recent_events(self, *, limit: int = 200) -> list[dict[str, Any]]:
         with self._lock:
             if limit <= 0:

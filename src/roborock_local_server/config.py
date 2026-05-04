@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import tomllib
+from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,9 @@ class AdminConfig:
     password_hash: str
     session_secret: str
     session_ttl_seconds: int
+    protocol_auth_enabled: bool
+    protocol_login_email: str
+    protocol_login_pin_hash: str
 
 
 @dataclass(frozen=True)
@@ -74,6 +79,7 @@ class AppPaths:
     acme_dir: Path
     inventory_path: Path
     cloud_snapshot_path: Path
+    protocol_auth_sessions_path: Path
     runtime_credentials_path: Path
     device_key_state_path: Path
     http_jsonl_path: Path
@@ -95,6 +101,36 @@ def _require_non_empty(value: object, field_name: str) -> str:
     return text
 
 
+_HOST_RE = re.compile(r"^[a-z0-9.-]+$")
+
+
+def _normalize_hostname(value: object, field_name: str, *, require_api_prefix: bool = False) -> str:
+    text = _require_non_empty(value, field_name)
+    if "://" in text:
+        parsed = urlsplit(text)
+        candidate = parsed.hostname or ""
+    else:
+        candidate = text.split("/", 1)[0].strip()
+        if ":" in candidate:
+            candidate = candidate.split(":", 1)[0].strip()
+    normalized = candidate.strip().strip(".").lower()
+    if normalized.startswith("*."):
+        normalized = normalized[2:].strip()
+    if not normalized:
+        raise ValueError(f"{field_name} is required")
+    if " " in normalized or not _HOST_RE.fullmatch(normalized):
+        raise ValueError(f"{field_name} must be a hostname without a scheme or path")
+    if "." not in normalized:
+        raise ValueError(f"{field_name} must be a fully qualified domain name")
+    if require_api_prefix and not normalized.startswith("api-"):
+        raise ValueError(f"{field_name} must start with api-")
+    return normalized
+
+
+def _require_stack_fqdn(value: object, field_name: str) -> str:
+    return _normalize_hostname(value, field_name, require_api_prefix=True)
+
+
 def _as_int(value: object, field_name: str, default: int) -> int:
     if value in (None, ""):
         return default
@@ -102,6 +138,13 @@ def _as_int(value: object, field_name: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be an integer") from exc
+
+
+def _as_port(value: object, field_name: str, default: int) -> int:
+    candidate = _as_int(value, field_name, default)
+    if not (1 <= candidate <= 65535):
+        raise ValueError(f"{field_name} must be between 1 and 65535")
+    return candidate
 
 
 def _as_bool(value: object, default: bool) -> bool:
@@ -134,6 +177,9 @@ def load_config(path: str | Path) -> AppConfig:
     tls_mode = str(tls.get("mode", "cloudflare_acme")).strip().lower()
     if tls_mode not in {"cloudflare_acme", "provided"}:
         raise ValueError("tls.mode must be 'cloudflare_acme' or 'provided'")
+    listener_mode = str(network.get("listener_mode", "local_tls")).strip().lower() or "local_tls"
+    if listener_mode != "local_tls":
+        raise ValueError("network.listener_mode='external_tls' is no longer supported")
 
     raw_broker_host = broker.get("host")
     broker_host = str(raw_broker_host).strip() if raw_broker_host is not None else "127.0.0.1"
@@ -143,10 +189,10 @@ def load_config(path: str | Path) -> AppConfig:
 
     config = AppConfig(
         network=NetworkConfig(
-            stack_fqdn=_require_non_empty(network.get("stack_fqdn"), "network.stack_fqdn"),
+            stack_fqdn=_require_stack_fqdn(network.get("stack_fqdn"), "network.stack_fqdn"),
             bind_host=str(network.get("bind_host", "0.0.0.0")).strip() or "0.0.0.0",
-            https_port=_as_int(network.get("https_port"), "network.https_port", 443),
-            mqtt_tls_port=_as_int(network.get("mqtt_tls_port"), "network.mqtt_tls_port", 8883),
+            https_port=_as_port(network.get("https_port"), "network.https_port", 555),
+            mqtt_tls_port=_as_port(network.get("mqtt_tls_port"), "network.mqtt_tls_port", 8881),
             region=str(network.get("region", "us")).strip().lower() or "us",
             localkey=str(network.get("localkey", "")).strip(),
             duid=str(network.get("duid", "")).strip(),
@@ -157,7 +203,7 @@ def load_config(path: str | Path) -> AppConfig:
         broker=BrokerConfig(
             mode=broker_mode,
             host=broker_host,
-            port=_as_int(broker.get("port"), "broker.port", broker_port_default),
+            port=_as_port(broker.get("port"), "broker.port", broker_port_default),
             mosquitto_binary=str(broker.get("mosquitto_binary", "mosquitto")).strip() or "mosquitto",
             enable_topic_bridge=_as_bool(broker.get("enable_topic_bridge"), True),
         ),
@@ -166,7 +212,11 @@ def load_config(path: str | Path) -> AppConfig:
         ),
         tls=TlsConfig(
             mode=tls_mode,
-            base_domain=str(tls.get("base_domain", "")).strip(),
+            base_domain=(
+                _normalize_hostname(tls.get("base_domain"), "tls.base_domain")
+                if str(tls.get("base_domain", "")).strip()
+                else ""
+            ),
             email=str(tls.get("email", "")).strip(),
             cloudflare_token_file=str(tls.get("cloudflare_token_file", "")).strip(),
             renew_days_before=_as_int(tls.get("renew_days_before"), "tls.renew_days_before", 30),
@@ -179,17 +229,25 @@ def load_config(path: str | Path) -> AppConfig:
             password_hash=_require_non_empty(admin.get("password_hash"), "admin.password_hash"),
             session_secret=_require_non_empty(admin.get("session_secret"), "admin.session_secret"),
             session_ttl_seconds=_as_int(admin.get("session_ttl_seconds"), "admin.session_ttl_seconds", 86400),
+            protocol_auth_enabled=_as_bool(admin.get("protocol_auth_enabled"), True),
+            protocol_login_email=_require_non_empty(admin.get("protocol_login_email"), "admin.protocol_login_email"),
+            protocol_login_pin_hash=_require_non_empty(
+                admin.get("protocol_login_pin_hash"),
+                "admin.protocol_login_pin_hash",
+            ),
         ),
     )
 
     if len(config.admin.session_secret) < 24:
         raise ValueError("admin.session_secret must be at least 24 characters")
+    if "@" not in config.admin.protocol_login_email:
+        raise ValueError("admin.protocol_login_email must be an email address")
 
     if config.broker.mode == "external":
         _require_non_empty(config.broker.host, "broker.host")
 
     if config.tls.mode == "cloudflare_acme":
-        _require_non_empty(config.tls.base_domain, "tls.base_domain")
+        _normalize_hostname(config.tls.base_domain, "tls.base_domain")
         _require_non_empty(config.tls.email, "tls.email")
         _require_non_empty(config.tls.cloudflare_token_file, "tls.cloudflare_token_file")
     else:
@@ -230,6 +288,7 @@ def resolve_paths(config_file: str | Path, config: AppConfig) -> AppPaths:
         acme_dir=acme_dir,
         inventory_path=runtime_dir / "web_api_inventory.json",
         cloud_snapshot_path=runtime_dir / "web_api_inventory_full_snapshot.json",
+        protocol_auth_sessions_path=state_dir / "protocol_auth_sessions.json",
         runtime_credentials_path=runtime_dir / "runtime_credentials.json",
         device_key_state_path=state_dir / "device_key_state.json",
         http_jsonl_path=runtime_dir / "decompiled_http.jsonl",

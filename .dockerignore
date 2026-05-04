@@ -1,8 +1,9 @@
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.pytest_cache/
-data/
-secrets/
-tests/
+*
+!README.md
+!pyproject.toml
+!src/
+!src/**
+src/**/__pycache__/
+src/**/*.pyc
+src/**/*.pyo
+src/**/*.pyd

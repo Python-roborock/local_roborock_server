@@ -47,7 +47,7 @@ def build_get_url_by_email(
     region_upper = ctx.region.upper()
     return ok(
         {
-            "url": f"https://{ctx.api_host}",
+            "url": ctx.api_url(),
             "countrycode": _default_country_code_for_region(region_upper),
             "country": region_upper,
         }
@@ -65,10 +65,13 @@ def build_user_info(
     meta_value = snapshot.get("meta")
     meta = meta_value if isinstance(meta_value, dict) else {}
     username = str(meta.get("username") or "").strip()
+    configured_email = str(getattr(ctx, "protocol_login_email", "") or "").strip()
 
     email = str(get_value(cloud_user_data, "email", default="") or "").strip()
     mobile = str(get_value(cloud_user_data, "mobile", default="") or "").strip()
-    if not email and "@" in username:
+    if configured_email:
+        email = configured_email
+    elif not email and "@" in username:
         email = username
     if not mobile and username.isdigit():
         mobile = username

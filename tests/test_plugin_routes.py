@@ -30,7 +30,7 @@ def test_api_v1_plugins_returns_proxied_category_urls(tmp_path: Path) -> None:
 
     for item in records:
         url = str(item["url"])
-        assert url.startswith("https://roborock.example.com/plugin/proxy/")
+        assert url.startswith("https://api-roborock.example.com/plugin/proxy/")
         parsed = urllib.parse.urlsplit(url)
         source = urllib.parse.parse_qs(parsed.query).get("src", [""])[0]
         assert source.startswith("https://")
@@ -45,14 +45,14 @@ def test_app_plugin_endpoints_return_proxied_urls(tmp_path: Path) -> None:
     app_plugin_payload = app_plugin_response.json()
     assert app_plugin_payload["code"] == 200
     for item in app_plugin_payload["data"]:
-        assert str(item["url"]).startswith("https://roborock.example.com/plugin/proxy/")
+        assert str(item["url"]).startswith("https://api-roborock.example.com/plugin/proxy/")
 
     feature_response = client.get("/api/v1/appfeatureplugin")
     assert feature_response.status_code == 200
     feature_payload = feature_response.json()
     assert feature_payload["code"] == 200
     for item in feature_payload["data"]["plugins"]:
-        assert str(item["url"]).startswith("https://roborock.example.com/plugin/proxy/")
+        assert str(item["url"]).startswith("https://api-roborock.example.com/plugin/proxy/")
 
 
 def test_plugin_category_zip_uses_expected_source_and_cache(tmp_path: Path, monkeypatch) -> None:

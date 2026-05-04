@@ -1,0 +1,51 @@
+name: Roborock Local Server
+version: "0.0.2-rc6"
+slug: roborock_local_server
+description: Private Roborock HTTPS and MQTT stack for Home Assistant environments.
+url: "https://github.com/Python-roborock/local_roborock_server"
+image: "ghcr.io/python-roborock/local_roborock_server"
+startup: services
+boot: auto
+init: false
+arch:
+  - amd64
+  - aarch64
+ports:
+  555/tcp: 555
+  8881/tcp: 8881
+ports_description:
+  555/tcp: Roborock HTTPS API
+  8881/tcp: Roborock MQTT TLS proxy
+map:
+  - ssl:ro
+  - addon_config:rw
+  - all_addon_configs:ro
+webui: "https://[HOST]:[PORT:555]/admin"
+options:
+  stack_fqdn: "api-roborock.example.com"
+  https_port: 555
+  mqtt_tls_port: 8881
+  region: "us"
+  tls_mode: "provided"
+  tls_base_domain: ""
+  tls_email: ""
+  cloudflare_token: ""
+  cert_file: ""
+  key_file: ""
+  admin_password: ""
+  protocol_login_email: ""
+  protocol_login_pin: ""
+schema:
+  stack_fqdn: str
+  https_port: port
+  mqtt_tls_port: port
+  region: list(us|eu|cn|ru)
+  tls_mode: list(provided|cloudflare_acme)
+  tls_base_domain: str
+  tls_email: str
+  cloudflare_token: str
+  cert_file: str
+  key_file: str
+  admin_password: password
+  protocol_login_email: email
+  protocol_login_pin: password

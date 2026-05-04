@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
 from roborock_local_server.server import ReleaseSupervisor, resolve_route
+from shared.protocol_auth import ProtocolAuthStore, build_hawk_authorization
 
 
 def _scene_zone_step(
@@ -146,6 +147,58 @@ def _write_scene_zone_trace(mqtt_jsonl_path: Path) -> None:
     )
 
 
+def _seed_protocol_snapshot(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "user_data": {
+                    "uid": 1001,
+                    "token": "local-token-123",
+                    "rruid": "local-rruid-123",
+                    "rriot": {
+                        "u": "hawk-user-123",
+                        "s": "hawk-session-123",
+                        "h": "hawk-secret-123",
+                        "k": "hawk-mqtt-key-123",
+                        "r": {
+                            "r": "US",
+                            "a": "https://api-us.roborock.com",
+                            "m": "ssl://mqtt-us.roborock.com:8883",
+                            "l": "https://wood-us.roborock.com",
+                        },
+                    },
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _hawk_headers(
+    snapshot_path: Path,
+    path: str,
+    *,
+    form_values: dict[str, object] | None = None,
+    json_values: dict[str, object] | None = None,
+    json_body: str | None = None,
+) -> dict[str, str]:
+    user = ProtocolAuthStore(snapshot_path).availability().user
+    assert user is not None
+    if json_body is None and json_values is not None:
+        json_body = json.dumps(json_values, separators=(",", ":"))
+    return {
+        "Authorization": build_hawk_authorization(
+            user=user,
+            path=path,
+            form_values=form_values,
+            json_body=json_body,
+            nonce=f"nonce-{path.replace('/', '-')}",
+        )
+    }
+
+
 def test_admin_login_and_status_flow(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
@@ -177,7 +230,7 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
         "https://paypal.me/LLashley304",
         "https://us.roborock.com/discount/RRSAP202602071713342D18X?redirect=%2Fpages%2Froborock-store%3Fuuid%3DEQe6p1jdZczHEN4Q0nbsG9sZRm0RK1gW5eSM%252FCzcW4Q%253D",
         "https://roborock.pxf.io/B0VYV9",
-        "https://amzn.to/4bGfG6B",
+        "https://amzn.to/4cx8zg3",
     ]
     assert payload["health"]["services"]
     assert payload["pairing"]["active"] is False
@@ -189,6 +242,8 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
     dashboard_page = client.get("/admin")
     assert dashboard_page.status_code == 200
     assert "Cloud Import" in dashboard_page.text
+    assert "Protocol Auth" in dashboard_page.text
+    assert "Protocol Sync Secret" in dashboard_page.text
 
     assert "Num query samples" in dashboard_page.text
     assert "Public Key determined" in dashboard_page.text
@@ -204,6 +259,99 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
 
     status_after_logout = client.get("/admin/api/status")
     assert status_after_logout.status_code == 401
+
+
+def test_admin_auth_endpoints_toggle_protocol_auth_and_manage_sessions(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    issued = supervisor.protocol_auth.issue_local_session(
+        json.loads(paths.cloud_snapshot_path.read_text(encoding="utf-8"))["user_data"],
+        source="admin_test_session",
+    )
+
+    client = TestClient(supervisor.app)
+
+    assert client.get("/admin/api/auth").status_code == 401
+
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
+
+    auth_payload = client.get("/admin/api/auth")
+    assert auth_payload.status_code == 200
+    auth_json = auth_payload.json()
+    assert auth_json["protocol_auth_enabled"] is True
+    assert auth_json["admin_session_secret"] == config.admin.session_secret
+    assert auth_json["protocol_session_count"] >= 1
+    session = next(item for item in auth_json["protocol_sessions"] if item["hawk_id"] == issued["rriot"]["u"])
+
+    toggled = client.post("/admin/api/auth", json={"protocol_auth_enabled": False})
+    assert toggled.status_code == 200
+    assert toggled.json()["protocol_auth_enabled"] is False
+    assert 'protocol_auth_enabled = false' in paths.config_file.read_text(encoding="utf-8")
+
+    unauthed_home = client.get("/api/v1/getHomeDetail")
+    assert unauthed_home.status_code == 200
+
+    deleted = client.delete(f"/admin/api/auth/sessions/{session['hawk_id']}/{session['hawk_session']}")
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+    assert deleted.json()["auth"]["protocol_session_count"] == 0
+
+    missing = client.delete(f"/admin/api/auth/sessions/{session['hawk_id']}/{session['hawk_session']}")
+    assert missing.status_code == 404
+
+
+def test_admin_auth_update_rejects_invalid_payload_types(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+
+    client = TestClient(supervisor.app)
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
+
+    invalid_string = client.post("/admin/api/auth", json={"protocol_auth_enabled": "false"})
+    assert invalid_string.status_code == 400
+    assert invalid_string.json()["error"] == "protocol_auth_enabled must be a boolean"
+
+    invalid_container = client.post("/admin/api/auth", json=["not-an-object"])
+    assert invalid_container.status_code == 400
+    assert invalid_container.json()["error"] == "JSON body must be an object"
+
+    invalid_json = client.post(
+        "/admin/api/auth",
+        content="{",
+        headers={"Content-Type": "application/json"},
+    )
+    assert invalid_json.status_code == 400
+    assert invalid_json.json()["error"] == "Invalid JSON body"
+
+
+def test_set_protocol_auth_enabled_rewrites_only_exact_admin_key(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    original = config_file.read_text(encoding="utf-8")
+    modified = original.replace(
+        "protocol_auth_enabled = true",
+        "# protocol_auth_enabled = true\nprotocol_auth_enabled_backup = true",
+    )
+    config_file.write_text(modified, encoding="utf-8")
+
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+
+    payload = supervisor.set_protocol_auth_enabled(False)
+
+    rendered = config_file.read_text(encoding="utf-8")
+    assert payload["protocol_auth_enabled"] is False
+    assert "# protocol_auth_enabled = true" in rendered
+    assert "protocol_auth_enabled_backup = true" in rendered
+    assert "protocol_auth_enabled = false" in rendered
+    assert rendered.count("protocol_auth_enabled = false") == 1
 
 
 def test_admin_onboarding_endpoints_require_auth_and_manage_session(tmp_path: Path) -> None:
@@ -321,13 +469,13 @@ def test_core_only_mode_disables_standalone_admin_routes(tmp_path: Path) -> None
     assert admin_page.status_code == 404
 
     ui_health = client.get("/ui/api/health")
-    assert ui_health.status_code == 200
+    assert ui_health.status_code == 404
 
     region_response = client.get("/region")
     assert region_response.status_code == 200
 
 
-def test_ui_api_health_and_vacuums_return_runtime_payload_without_auth(tmp_path: Path) -> None:
+def test_ui_api_health_and_vacuums_require_admin_auth(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
     paths = resolve_paths(config_file, config)
@@ -361,6 +509,12 @@ def test_ui_api_health_and_vacuums_return_runtime_payload_without_auth(tmp_path:
     )
 
     client = TestClient(supervisor.app)
+
+    assert client.get("/ui/api/health").status_code == 401
+    assert client.get("/ui/api/vacuums").status_code == 401
+
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
 
     health = client.get("/ui/api/health")
     assert health.status_code == 200
@@ -576,16 +730,38 @@ def test_scene_update_routes_persist_name_and_zone_ranges(tmp_path: Path) -> Non
         + "\n",
         encoding="utf-8",
     )
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
     _write_scene_zone_trace(paths.mqtt_jsonl_path)
 
     supervisor = ReleaseSupervisor(config=config, paths=paths)
     client = TestClient(supervisor.app)
 
-    rename_response = client.put("/user/scene/4491073/name", data={"name": "After dinner"})
+    rename_response = client.put(
+        "/user/scene/4491073/name",
+        data={"name": "After dinner"},
+        headers=_hawk_headers(
+            paths.cloud_snapshot_path,
+            "/user/scene/4491073/name",
+            form_values={"name": "After dinner"},
+        ),
+    )
     assert rename_response.status_code == 200
     assert rename_response.json()["data"]["name"] == "After dinner"
 
-    update_response = client.put("/user/scene/4491073/param", json=_after_dinner_param_payload(device_id, include_ranges=False))
+    update_payload = _after_dinner_param_payload(device_id, include_ranges=False)
+    update_body = json.dumps(update_payload, separators=(",", ":"))
+    update_response = client.put(
+        "/user/scene/4491073/param",
+        content=update_body,
+        headers={
+            "content-type": "application/json",
+            **_hawk_headers(
+            paths.cloud_snapshot_path,
+            "/user/scene/4491073/param",
+            json_body=update_body,
+        ),
+        },
+    )
     assert update_response.status_code == 200
 
     stored_inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
@@ -601,6 +777,197 @@ def test_scene_update_routes_persist_name_and_zone_ranges(tmp_path: Path) -> Non
     assert second_step["params"]["data"][0]["zones"][0]["range"] == [32550, 22650, 34550, 25200]
 
 
+def test_get_scenes_for_device_includes_edit_context(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    device_id = "6HL2zfniaoYYV01CkVuhkO"
+
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps(
+            {
+                "home": {"id": 1233716, "name": "My Home"},
+                "devices": [
+                    {
+                        "duid": device_id,
+                        "name": "Qrevo MaxV",
+                        "model": "roborock.vacuum.a87",
+                    }
+                ],
+                "scenes": [
+                    {
+                        "id": 4491073,
+                        "name": "After dinner",
+                        "device_id": device_id,
+                        "device_name": "Qrevo MaxV",
+                        "enabled": True,
+                        "type": "WORKFLOW",
+                        "param": json.dumps(_after_dinner_param_payload(device_id, include_ranges=True), separators=(",", ":")),
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    response = client.get(
+        f"/user/scene/device/{device_id}",
+        headers=_hawk_headers(paths.cloud_snapshot_path, f"/user/scene/device/{device_id}"),
+    )
+    assert response.status_code == 200
+
+    scenes = response.json()["data"]
+    assert len(scenes) == 1
+    assert scenes[0]["homeId"] == 1233716
+    assert scenes[0]["deviceId"] == device_id
+    assert scenes[0]["deviceName"] == "Qrevo MaxV"
+
+
+def test_post_scene_create_accepts_hawk_json_body_signature(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    device_id = "6HL2zfniaoYYV01CkVuhkO"
+
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps(
+            {
+                "home": {"id": 1233716, "name": "My Home"},
+                "devices": [
+                    {
+                        "duid": device_id,
+                        "name": "Qrevo MaxV",
+                        "model": "roborock.vacuum.a87",
+                    }
+                ],
+                "scenes": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+    _write_scene_zone_trace(paths.mqtt_jsonl_path)
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    create_payload = {
+        "name": "Party prep",
+        "homeId": "1233716",
+        "param": {
+            **_after_dinner_param_payload(device_id, include_ranges=False),
+            "tagId": 1002,
+        },
+    }
+    create_body = json.dumps(create_payload, separators=(",", ":"))
+    response = client.post(
+        "/v2/user/scene",
+        content=create_body,
+        headers={
+            "content-type": "application/json",
+            **_hawk_headers(
+                paths.cloud_snapshot_path,
+                "/v2/user/scene",
+                json_body=create_body,
+            ),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["name"] == "Party prep"
+
+    stored_inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    assert any(scene["name"] == "Party prep" for scene in stored_inventory["scenes"])
+
+def test_shared_device_query_routes_return_rooms_and_received_devices(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    device_id = "6HL2zfniaoYYV01CkVuhkO"
+
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps(
+            {
+                "home": {
+                    "id": 1316433,
+                    "name": "My Home",
+                    "rooms": [
+                        {"id": 10283928, "name": "Kitchen"},
+                        {"id": 10283924, "name": "Living room"},
+                    ],
+                },
+                "received_devices": [
+                    {
+                        "duid": device_id,
+                        "name": "Roborock Qrevo MaxV 2",
+                        "model": "roborock.vacuum.a87",
+                        "product_id": "5gUei3OIJIXVD3eD85Balg",
+                        "local_key": "xPd5Dr8CGGqtdDlH",
+                        "online": True,
+                        "pv": "1.0",
+                        "share": True,
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+    cloud_snapshot = json.loads(paths.cloud_snapshot_path.read_text(encoding="utf-8"))
+    cloud_snapshot.update(
+        {
+            "id": 1316433,
+            "name": "My Home",
+            "receivedDevices": [
+                {
+                    "duid": device_id,
+                    "name": "Roborock Qrevo MaxV 2",
+                    "productId": "5gUei3OIJIXVD3eD85Balg",
+                    "share": True,
+                }
+            ],
+            "products": [
+                {
+                    "id": "5gUei3OIJIXVD3eD85Balg",
+                    "name": "Roborock Qrevo MaxV",
+                    "model": "roborock.vacuum.a87",
+                    "category": "robot.vacuum.cleaner",
+                }
+            ],
+        }
+    )
+    paths.cloud_snapshot_path.write_text(json.dumps(cloud_snapshot) + "\n", encoding="utf-8")
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    received_devices_response = client.get(
+        "/user/deviceshare/query/receiveddevices",
+        headers=_hawk_headers(paths.cloud_snapshot_path, "/user/deviceshare/query/receiveddevices"),
+    )
+    assert received_devices_response.status_code == 200
+    received_devices = received_devices_response.json()["data"]
+    assert len(received_devices) == 1
+    assert received_devices[0]["duid"] == device_id
+
+    rooms_response = client.get(
+        f"/user/deviceshare/query/{device_id}/rooms",
+        headers=_hawk_headers(paths.cloud_snapshot_path, f"/user/deviceshare/query/{device_id}/rooms"),
+    )
+    assert rooms_response.status_code == 200
+    assert rooms_response.json()["data"] == [
+        {"id": 10283928, "name": "Kitchen"},
+        {"id": 10283924, "name": "Living room"},
+    ]
 def test_execute_scene_hydrates_missing_zone_ranges_from_mqtt(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)

@@ -100,7 +100,10 @@ def _filter_home_data_to_runtime_devices(ctx: ServerContext, home_data: dict[str
 
     for collection_key in ("devices", "receivedDevices", "received_devices"):
         devices_value = home_data.get(collection_key)
-        devices = devices_value if isinstance(devices_value, list) else []
+        if not isinstance(devices_value, list):
+            filtered_home.pop(collection_key, None)
+            continue
+        devices = devices_value
         filtered_devices: list[dict[str, Any]] = []
         for device in devices:
             if not isinstance(device, dict):

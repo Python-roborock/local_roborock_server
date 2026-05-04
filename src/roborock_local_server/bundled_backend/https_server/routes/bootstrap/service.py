@@ -17,7 +17,7 @@ def request_host_override(query_params: dict[str, list[str]]) -> str:
     for value in values:
         candidate = str(value or "").strip()
         if candidate:
-            return candidate.split(":", 1)[0].strip()
+            return candidate
     return ""
 
 
@@ -30,4 +30,3 @@ def extract_explicit_did(query_params: dict[str, list[str]], body_params: dict[s
         + (body_params.get("d") or [])
         + (body_params.get("duid") or [])
     )
-

@@ -12,6 +12,8 @@ Run onboarding from a second machine, not from the machine hosting the local ser
 uv run start_onboarding.py --server api-roborock.example.com
 ```
 
+If you omit the port, the CLI assumes the default local stack HTTPS port `555`. If your stack uses a custom HTTPS port, include it in `--server`, for example `api-roborock.example.com:8443`.
+
 This is a standalone script — you can copy `start_onboarding.py` to any machine and run it with just `uv`.
 
 If you omit the port, the CLI assumes the default local stack HTTPS port `555`. If your stack uses a custom HTTPS port, include it in `--server`, for example `api-roborock.example.com:8443`.

@@ -3,8 +3,11 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+dist/
+dev/
 data/
 site/
 secrets/
 config.toml
 mitm_logs
+.tmp*

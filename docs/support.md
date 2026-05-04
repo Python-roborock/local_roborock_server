@@ -13,7 +13,7 @@ Use these links next time you buy a Roborock — it doesn't cost you anything ex
 
 - [Roborock Store (5% Off)](https://us.roborock.com/discount/RRSAP202602071713342D18X?redirect=%2Fpages%2Froborock-store%3Fuuid%3DEQe6p1jdZczHEN4Q0nbsG9sZRm0RK1gW5eSM%252FCzcW4Q%253D)
 - [Roborock Affiliate Link](https://roborock.pxf.io/B0VYV9)
-- [Amazon Affiliate Link](https://amzn.to/4bGfG6B)
+- [Amazon Affiliate Link](https://amzn.to/4cx8zg3)
 
 ## Star the Repo
 
