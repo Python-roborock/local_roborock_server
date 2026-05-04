@@ -48,6 +48,7 @@ CFGWIFI_PRE_KEY = "6433df70f5a3a42e"
 CFGWIFI_UID = "1234567890"
 DEFAULT_COUNTRY_DOMAIN = "us"
 DEFAULT_TIMEZONE = "America/New_York"
+DEFAULT_STACK_HTTPS_PORT = 555
 POLL_INTERVAL_SECONDS = 5.0
 POLL_TIMEOUT_SECONDS = 300.0
 
@@ -176,32 +177,49 @@ def recv_with_timeout(sock: socket.socket, timeout: float) -> bytes | None:
 
 
 def sanitize_stack_server(url: str) -> str:
-    value = str(url or "").strip()
-    for prefix in ("https://", "http://"):
-        if value.lower().startswith(prefix):
-            value = value[len(prefix) :]
-    value = value.strip().strip("/")
-    if value.lower().startswith("api-"):
-        value = value[4:]
-    if not value:
+    host, port = _parse_server_target(url, default_port=DEFAULT_STACK_HTTPS_PORT)
+    if host.lower().startswith("api-"):
+        host = host[4:]
+    authority = _format_authority(host, port=port, default_port=443)
+    if not authority:
         raise ValueError("A server host is required.")
-    return f"{value}/"
+    return f"{authority}/"
 
 
 def normalize_api_base_url(url: str) -> str:
+    host, port = _parse_server_target(url, default_port=DEFAULT_STACK_HTTPS_PORT)
+    if not host.lower().startswith("api-"):
+        host = f"api-{host}"
+    authority = _format_authority(host, port=port, default_port=443)
+    return f"https://{authority}"
+
+
+def _parse_server_target(url: str, *, default_port: int | None = None) -> tuple[str, int | None]:
     value = str(url or "").strip()
     if not value:
         raise ValueError("A server host is required.")
-    for prefix in ("https://", "http://"):
-        if value.lower().startswith(prefix):
-            value = value[len(prefix) :]
-            break
-    value = value.strip().strip("/")
-    if not value:
+    parsed = parse.urlsplit(value if "://" in value else f"//{value}")
+    host = str(parsed.hostname or "").strip().strip("/")
+    if not host:
         raise ValueError("A server host is required.")
-    if not value.lower().startswith("api-"):
-        value = f"api-{value}"
-    return f"https://{value}"
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Server port must be numeric.") from exc
+    if port is None:
+        port = default_port
+    return host, port
+
+
+def _format_authority(host: str, *, port: int | None = None, default_port: int | None = None) -> str:
+    normalized_host = str(host or "").strip().strip("/")
+    if not normalized_host:
+        return ""
+    if port is None:
+        return normalized_host
+    if default_port is not None and port == default_port:
+        return normalized_host
+    return f"{normalized_host}:{port}"
 
 
 def _format_bool_label(value: bool, true_label: str, false_label: str) -> str:
@@ -391,9 +409,9 @@ def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout) ->
         }
         wifi_pkt = build_wifi_packet(session_key, body)
         sock.sendto(wifi_pkt, target)
-        output.write(f"TOKEN_S=<redacted>\n")
+        output.write(f"TOKEN_S={token_s}\n")
         output.write(f"TOKEN_T=<redacted>\n")
-        redacted_body = {**body, "passwd": "<redacted>", "token": {**body["token"], "s": "<redacted>", "t": "<redacted>"}}
+        redacted_body = {**body, "passwd": "<redacted>", "token": {**body["token"], "t": "<redacted>"}}
         output.write(f"WIFI_BODY_SENT={json.dumps(redacted_body, separators=(',', ':'))}\n")
 
         wifi_resp = recv_with_timeout(sock, CFGWIFI_TIMEOUT_SECONDS)

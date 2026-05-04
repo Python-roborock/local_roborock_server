@@ -14,6 +14,8 @@ uv run start_onboarding.py --server api-roborock.example.com
 
 This is a standalone script — you can copy `start_onboarding.py` to any machine and run it with just `uv`.
 
+If you omit the port, the CLI assumes the default local stack HTTPS port `555`. If your stack uses a custom HTTPS port, include it in `--server`, for example `api-roborock.example.com:8443`.
+
 The guided CLI will:
 
 1. Log into the main server with your admin password.
@@ -44,7 +46,7 @@ You can still pass them explicitly if you prefer:
 uv run start_onboarding.py --server api-roborock.example.com --ssid "My Wifi" --password "Password123" --timezone "America/New_York" --cst EST5EDT,M3.2.0,M11.1.0 --country-domain us
 ```
 
-`server` should be your real stack hostname, usually the same `api-...` hostname you use for `/admin`.
+`server` should be your real stack hostname, usually the same `api-...` hostname you use for `/admin`. If you omit the port, the CLI assumes `:555`. Explicit ports are supported, so if your admin page is at `https://api-roborock.example.com:8443/admin`, use `--server api-roborock.example.com:8443`.
 
 ## CST Examples
 
@@ -80,13 +82,15 @@ Congrats! Once the script reports that the vacuum is connected to the local serv
 
 ## Web UI (start_onboarding_gui.py)
 
-If you would rather not use the terminal, there is a web UI version of the same flow. It is a standalone script that runs a small local server on your machine and opens your browser automatically:
+If you would rather not use the terminal, there is a web UI version of the same flow. It runs a small local server on your machine and opens your browser automatically:
 
 ```bash
 uv run start_onboarding_gui.py
 ```
 
 No CLI flags. All configuration happens in the browser form on first load.
+
+Enter the same server host you use for `/admin`. If your stack runs on a custom HTTPS port, include it in the form, for example `api-roborock.example.com:8443`.
 
 The main reason to use the GUI version is that this flow makes you switch your machine between your normal Wi-Fi and the vacuum's Wi-Fi hotspot several times. A browser talking to `127.0.0.1` keeps working through those switches. The CLI version can get into a bad state if a blocking network call hits while you are still on the vacuum hotspot.
 
@@ -112,6 +116,8 @@ The UI shows a stepper across the top and walks you through five phases:
 A live log pane below the stepper shows every packet, status check, and state transition. This is the same information the CLI prints to the terminal.
 
 Your inputs live only in memory for the duration of the run and are discarded when you click Quit or shut down the server.
+
+Unlike `start_onboarding.py`, the GUI flow is a two-file standalone bundle: keep `start_onboarding_gui.py` and `ui.html` together.
 
 ### Same caveats as the CLI
 

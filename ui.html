@@ -140,6 +140,16 @@
           margin-top: 5px;
         }
 
+        .toggle-row {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          margin-top: 6px;
+          color: var(--muted);
+          font-size: 12px;
+          cursor: pointer;
+        }
+
         .row {
           display: grid;
           grid-template-columns: 1fr 1fr;
@@ -408,6 +418,10 @@
                     <div class="field">
                         <label for="cfg-admin">Admin password</label>
                         <input id="cfg-admin" type="password" autocomplete="off" />
+                        <label class="toggle-row">
+                            <input type="checkbox" id="cfg-admin-show" />
+                            Show admin password
+                        </label>
                     </div>
 
                     <div class="row">
@@ -418,6 +432,10 @@
                         <div class="field">
                             <label for="cfg-wifi">Home Wi-Fi password</label>
                             <input id="cfg-wifi" type="password" autocomplete="off" />
+                            <label class="toggle-row">
+                                <input type="checkbox" id="cfg-wifi-show" />
+                                Show Wi-Fi password
+                            </label>
                         </div>
                     </div>
 
@@ -519,6 +537,17 @@
         '"': "&quot;",
         "'": "&#39;"
       }[c]));
+    }
+
+    function bindVisibilityToggle(toggleId, inputId) {
+      const toggle = $(toggleId);
+      const input = $(inputId);
+      if (!toggle || !input) return;
+      const sync = () => {
+        input.type = toggle.checked ? "text" : "password";
+      };
+      toggle.addEventListener("change", sync);
+      sync();
     }
 
     function setStepper(phase) {
@@ -787,6 +816,8 @@
     }
 
     $("cfg-submit").addEventListener("click", submitConfig);
+    bindVisibilityToggle("cfg-admin-show", "cfg-admin");
+    bindVisibilityToggle("cfg-wifi-show", "cfg-wifi");
     $("devices-refresh").addEventListener("click", () => api("POST", "/api/refresh-devices").catch((e) => alert(e.message)));
     $("devices-quit").addEventListener("click", quit);
     $("quit-link").addEventListener("click", (e) => { e.preventDefault(); quit(); });
