@@ -280,6 +280,41 @@ protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
     assert config.tls.acme_eab_hmac_key == "hmac-456"
 
 
+def test_load_config_normalizes_mixed_case_actalis(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[network]
+stack_fqdn = "api-roborock.example.com"
+
+[broker]
+mode = "embedded"
+
+[storage]
+data_dir = "data"
+
+[tls]
+mode = "cloudflare_acme"
+base_domain = "example.com"
+email = "acme@example.com"
+cloudflare_token_file = "secrets/cloudflare_token"
+acme_server = "Actalis"
+acme_eab_kid = "kid-123"
+acme_eab_hmac_key = "hmac-456"
+
+[admin]
+password_hash = "pbkdf2_sha256$600000$abc$def"
+session_secret = "abcdefghijklmnopqrstuvwxyz123456"
+protocol_login_email = "user@example.com"
+protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_file)
+    assert config.tls.acme_server == "actalis"
+
+
 def test_load_config_rejects_invalid_ports(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(

@@ -62,6 +62,8 @@ After the stack is running, continue with [Onboarding](onboarding.md) to pair a 
    - HTTPS and MQTT TLS ports if you do not want the defaults `555` and `8881`
    - embedded MQTT or your own broker
    - whether to use Cloudflare DNS-01 auto-renew
+   - if you chose Cloudflare, the ACME account email and whether to use ZeroSSL or Actalis
+   - if you chose Actalis, the Actalis EAB KID and EAB HMAC key
    - your admin password
    - your Home Assistant/app login email and 6-digit PIN
 

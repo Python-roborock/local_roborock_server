@@ -82,6 +82,20 @@ class CertificateManager:
             )
         return kid, hmac_key
 
+    @staticmethod
+    def _redact_command(command: list[str]) -> str:
+        redacted: list[str] = []
+        redact_next = False
+        for part in command:
+            if redact_next:
+                redacted.append("<redacted>")
+                redact_next = False
+                continue
+            redacted.append(part)
+            if part in {"--eab-kid", "--eab-hmac-key"}:
+                redact_next = True
+        return " ".join(redacted)
+
     def _run_acme(self, args: Iterable[str]) -> None:
         self.paths.acme_dir.mkdir(parents=True, exist_ok=True)
         if not ACME_SH_PATH.exists():
@@ -96,7 +110,8 @@ class CertificateManager:
             "--server",
             self.config.tls.acme_server,
         ]
-        LOG.info("Running ACME command: %s", " ".join(command))
+        display_command = self._redact_command(command)
+        LOG.info("Running ACME command: %s", display_command)
         result = subprocess.run(
             command,
             env=env,
@@ -108,7 +123,7 @@ class CertificateManager:
         if result.stdout.strip():
             LOG.info("ACME output:\n%s", result.stdout.strip())
         if result.returncode != 0:
-            raise RuntimeError(f"ACME command failed ({result.returncode}): {' '.join(command)}")
+            raise RuntimeError(f"ACME command failed ({result.returncode}): {display_command}")
 
     def _provision_or_renew(self) -> None:
         self.paths.certs_dir.mkdir(parents=True, exist_ok=True)

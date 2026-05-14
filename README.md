@@ -24,7 +24,7 @@ If you would like to contribute there are a few ways that would be great!
 
 1. Code is always welcome that you have fully tested.
 2. Video walkthroughs of how to actually set this up would be great.
-3. Documentation. I hate documentation and its something I find myself often pushing off to AI so that I can focus more on the harder problems. But I find that human written documentation always 'feels' better.
+3. Documentation. I hate documentation and it's something I find myself often pushing off to AI so that I can focus more on the harder problems. But I find that human written documentation always 'feels' better.
 
 ## Requirements
 

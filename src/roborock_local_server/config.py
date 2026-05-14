@@ -133,6 +133,13 @@ def _normalize_hostname(value: object, field_name: str, *, require_api_prefix: b
     return normalized
 
 
+def _normalize_acme_server(value: object, field_name: str) -> str:
+    normalized = str(value or "").strip().lower() or "zerossl"
+    if normalized not in {"zerossl", "actalis"}:
+        raise ValueError(f"{field_name} must be 'zerossl' or 'actalis'")
+    return normalized
+
+
 def _require_stack_fqdn(value: object, field_name: str) -> str:
     return _normalize_hostname(value, field_name, require_api_prefix=True)
 
@@ -227,7 +234,7 @@ def load_config(path: str | Path) -> AppConfig:
             cloudflare_token_file=str(tls.get("cloudflare_token_file", "")).strip(),
             renew_days_before=_as_int(tls.get("renew_days_before"), "tls.renew_days_before", 30),
             renew_check_seconds=_as_int(tls.get("renew_check_seconds"), "tls.renew_check_seconds", 43200),
-            acme_server=str(tls.get("acme_server", "zerossl")).strip() or "zerossl",
+            acme_server=_normalize_acme_server(tls.get("acme_server", "zerossl"), "tls.acme_server"),
             acme_eab_kid=str(tls.get("acme_eab_kid", "")).strip(),
             acme_eab_hmac_key=str(tls.get("acme_eab_hmac_key", "")).strip(),
             acme_eab_kid_file=str(tls.get("acme_eab_kid_file", "")).strip(),

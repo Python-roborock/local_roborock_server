@@ -2,8 +2,9 @@ from pathlib import Path
 
 import pytest
 
+import roborock_local_server.configure as configure_module
 from roborock_local_server.config import load_config
-from roborock_local_server.configure import ConfigureAnswers, _validate_protocol_login_pin, write_config_setup
+from roborock_local_server.configure import ConfigureAnswers, _validate_protocol_login_pin, collect_configure_answers, write_config_setup
 
 
 def _answers(
@@ -131,3 +132,58 @@ def test_write_config_setup_embedded_actalis(tmp_path: Path) -> None:
     assert result.actalis_eab_hmac_key_file == (tmp_path / "secrets" / "acme_eab_hmac_key").resolve()
     assert result.actalis_eab_kid_file.read_text(encoding="utf-8") == "kid-123"
     assert result.actalis_eab_hmac_key_file.read_text(encoding="utf-8") == "hmac-456"
+
+
+def test_write_config_setup_rejects_blank_actalis_credentials(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+
+    with pytest.raises(ValueError, match="Actalis requires both"):
+        write_config_setup(
+            config_file=config_file,
+            answers=_answers(acme_server="actalis"),
+        )
+
+
+def test_collect_configure_answers_hides_actalis_hmac_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    prompts: list[str] = []
+    input_values = iter(
+        [
+            "api-roborock.example.com",
+            "",
+            "",
+            "",
+            "",
+            "example.com",
+            "acme@example.com",
+            "y",
+            "kid-123",
+            "user@example.com",
+        ]
+    )
+    secret_values = iter(
+        [
+            "hmac-456",
+            "cloudflare-token",
+            "admin-password",
+            "123456",
+            "123456",
+        ]
+    )
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(input_values)
+
+    def fake_getpass(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(secret_values)
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(configure_module, "getpass", fake_getpass)
+
+    answers = collect_configure_answers()
+
+    assert answers.acme_server == "actalis"
+    assert answers.acme_eab_kid == "kid-123"
+    assert answers.acme_eab_hmac_key == "hmac-456"
+    assert "Actalis EAB HMAC key (input hidden): " in prompts

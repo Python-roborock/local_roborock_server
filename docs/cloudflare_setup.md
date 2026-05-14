@@ -2,7 +2,7 @@
 
 Use this optional guide if you want Cloudflare DNS-01 certificate issuance and automatic renewal during [Installation](installation.md). If you would rather provide your own certificate files, see [Custom certificate management](custom_cert_management.md).
 
-Cloudflare is used for DNS-01 validation against your zone so that the stack can request and renew certificates automatically. The ACME CA is configurable. The default is ZeroSSL, and Home Assistant users can also switch to `actalis` if an older vacuum trusts that chain more reliably.
+Cloudflare is used for DNS-01 validation against your zone so that the stack can request and renew certificates automatically. The ACME CA is configurable. The default is ZeroSSL, and any deployment can switch to `actalis` if an older vacuum trusts that chain more reliably.
 
 If you choose `acme_server = actalis`, you must also provide `acme_eab_kid` and `acme_eab_hmac_key` from your Actalis ACME account. Generated configs store those in separate secret files instead of embedding them directly in `config.toml`.
 
