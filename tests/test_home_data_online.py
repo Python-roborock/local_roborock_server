@@ -229,10 +229,14 @@ def test_home_data_response_does_not_emit_empty_snake_case_received_devices(tmp_
     payload = response.json()
     assert "received_devices" not in payload["data"]
     assert "received_devices" not in payload["result"]
+    assert payload["data"]["receivedDevices"] == []
+    assert [device["duid"] for device in payload["data"]["devices"]] == ["6HL2zfniaoYYV01CkVuhkO"]
 
     parsed_home = HomeData.from_dict(payload["result"])
     assert parsed_home is not None
-    assert len(parsed_home.received_devices) == 1
+    assert len(parsed_home.devices) == 1
+    assert parsed_home.devices[0].duid == "6HL2zfniaoYYV01CkVuhkO"
+    assert parsed_home.received_devices == []
     assert len(parsed_home.device_products) == 1
     assert "6HL2zfniaoYYV01CkVuhkO" in parsed_home.device_products
 

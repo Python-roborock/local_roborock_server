@@ -131,6 +131,32 @@ def _filter_home_data_to_runtime_devices(ctx: ServerContext, home_data: dict[str
     return filtered_home
 
 
+def _promote_shared_devices_to_main_devices(home_data: dict[str, Any]) -> dict[str, Any]:
+    promoted_home = dict(home_data)
+
+    merged_devices: list[dict[str, Any]] = []
+    seen_duids: set[str] = set()
+    for collection_key in ("devices", "receivedDevices", "received_devices"):
+        devices_value = promoted_home.get(collection_key)
+        if not isinstance(devices_value, list):
+            continue
+        for device in devices_value:
+            if not isinstance(device, dict):
+                continue
+            normalized_device = dict(device)
+            duid = str(get_value(normalized_device, "duid", "did", default="")).strip()
+            if duid and duid in seen_duids:
+                continue
+            if duid:
+                seen_duids.add(duid)
+            merged_devices.append(normalized_device)
+
+    promoted_home["devices"] = merged_devices
+    promoted_home["receivedDevices"] = []
+    promoted_home.pop("received_devices", None)
+    return promoted_home
+
+
 def _home_data(ctx: ServerContext) -> dict[str, Any]:
     inventory = load_inventory(ctx)
     home_value = inventory.get("home")
@@ -150,6 +176,7 @@ def _home_data(ctx: ServerContext) -> dict[str, Any]:
 
     home_data = enrich_home_data_with_cloud_snapshot(ctx, home_data)
     home_data = _filter_home_data_to_runtime_devices(ctx, home_data)
+    home_data = _promote_shared_devices_to_main_devices(home_data)
     home_data["id"] = resolve_home_id(home_data, home, default=default_home_id(ctx))
     home_data["name"] = str(get_value(home_data, "name", "home_name", default=DEFAULT_HOME_NAME))
     return home_data
