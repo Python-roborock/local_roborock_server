@@ -18,6 +18,8 @@ This is a standalone script — you can copy `start_onboarding.py` to any machin
 
 If you omit the port, the CLI assumes the default local stack HTTPS port `555`. If your stack uses a custom HTTPS port, include it in `--server`, for example `api-roborock.example.com:8443`.
 
+Onboarding has a hard `token.r` limit of 32 characters after normalization to the final `host[:port]/` value sent to the vacuum. 
+
 The guided CLI will:
 
 1. Log into the main server with your admin password.
@@ -93,6 +95,8 @@ uv run start_onboarding_gui.py
 No CLI flags. All configuration happens in the browser form on first load.
 
 Enter the same server host you use for `/admin`. If your stack runs on a custom HTTPS port, include it in the form, for example `api-roborock.example.com:8443`.
+
+The same onboarding `token.r` limit applies in the GUI: the final `host[:port]/` value must be 32 characters or less.
 
 The main reason to use the GUI version is that this flow makes you switch your machine between your normal Wi-Fi and the vacuum's Wi-Fi hotspot several times. A browser talking to `127.0.0.1` keeps working through those switches. The CLI version can get into a bad state if a blocking network call hits while you are still on the vacuum hotspot.
 

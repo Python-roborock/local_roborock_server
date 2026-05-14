@@ -11,7 +11,7 @@ services:
     volumes:
       - ./config.toml:/app/config.toml:ro
       - ./data:/data
-      - ./secrets/cloudflare_token:/run/secrets/cloudflare_token:ro
+      - ./secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD", "curl", "-skf", "https://127.0.0.1:${ROBOROCK_SERVER_HTTPS_PORT:-555}/admin"]
       interval: 30s

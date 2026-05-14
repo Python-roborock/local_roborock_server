@@ -21,6 +21,9 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "tls_mode": "provided",
     "tls_base_domain": "",
     "tls_email": "",
+    "acme_server": "zerossl",
+    "acme_eab_kid": "",
+    "acme_eab_hmac_key": "",
     "cloudflare_token": "",
     "cert_file": "",
     "key_file": "",
@@ -33,6 +36,8 @@ _HOST_RE = re.compile(r"^[a-z0-9.-]+$")
 DEFAULT_OPTIONS_PATH = Path("/data/options.json")
 DEFAULT_CONFIG_PATH = Path("/data/config.toml")
 DEFAULT_CLOUDFLARE_TOKEN_PATH = Path("/run/secrets/cloudflare_token")
+DEFAULT_ACME_EAB_KID_PATH = Path("/run/secrets/acme_eab_kid")
+DEFAULT_ACME_EAB_HMAC_KEY_PATH = Path("/run/secrets/acme_eab_hmac_key")
 
 
 def _toml_string(value: str) -> str:
@@ -129,7 +134,9 @@ def _render_config_toml(
     options: dict[str, Any],
     config_path: Path,
     cloudflare_token_path: Path,
-) -> tuple[str, str]:
+    acme_eab_kid_path: Path,
+    acme_eab_hmac_key_path: Path,
+) -> tuple[str, dict[Path, str]]:
     merged = dict(DEFAULT_OPTIONS)
     merged.update(options)
 
@@ -156,6 +163,9 @@ def _render_config_toml(
         raise ValueError("tls_mode must be 'provided' or 'cloudflare_acme'")
     tls_base_domain = str(merged.get("tls_base_domain", "") or "").strip()
     tls_email = str(merged.get("tls_email", "") or "").strip()
+    acme_server = str(merged.get("acme_server", "zerossl") or "zerossl").strip().lower() or "zerossl"
+    acme_eab_kid = str(merged.get("acme_eab_kid", "") or "").strip()
+    acme_eab_hmac_key = str(merged.get("acme_eab_hmac_key", "") or "").strip()
     cloudflare_token = str(merged.get("cloudflare_token", "") or "").strip()
     cert_file = str(merged.get("cert_file", "") or "").strip()
     key_file = str(merged.get("key_file", "") or "").strip()
@@ -165,6 +175,11 @@ def _render_config_toml(
         _normalize_hostname(tls_base_domain, field_name="tls_base_domain")
         _require_email(tls_email, field_name="tls_email")
         _require_non_empty(cloudflare_token, field_name="cloudflare_token")
+        if (acme_eab_kid and not acme_eab_hmac_key) or (acme_eab_hmac_key and not acme_eab_kid):
+            raise ValueError("acme_eab_kid and acme_eab_hmac_key must be set together")
+        if acme_server == "actalis":
+            _require_non_empty(acme_eab_kid, field_name="acme_eab_kid")
+            _require_non_empty(acme_eab_hmac_key, field_name="acme_eab_hmac_key")
     else:
         _require_non_empty(cert_file, field_name="cert_file")
         _require_non_empty(key_file, field_name="key_file")
@@ -186,6 +201,8 @@ def _render_config_toml(
     password_hash = hash_password(admin_password)
     protocol_login_pin_hash = hash_password(protocol_login_pin)
     cloudflare_token_file = str(cloudflare_token_path)
+    acme_eab_kid_file = str(acme_eab_kid_path) if acme_server == "actalis" else ""
+    acme_eab_hmac_key_file = str(acme_eab_hmac_key_path) if acme_server == "actalis" else ""
 
     lines = [
         "[network]",
@@ -216,7 +233,11 @@ def _render_config_toml(
                 f"cloudflare_token_file = {_toml_string(cloudflare_token_file)}",
                 "renew_days_before = 30",
                 "renew_check_seconds = 43200",
-                'acme_server = "zerossl"',
+                f"acme_server = {_toml_string(acme_server)}",
+                'acme_eab_kid = ""',
+                'acme_eab_hmac_key = ""',
+                f"acme_eab_kid_file = {_toml_string(acme_eab_kid_file)}",
+                f"acme_eab_hmac_key_file = {_toml_string(acme_eab_hmac_key_file)}",
             ]
         )
     else:
@@ -227,7 +248,11 @@ def _render_config_toml(
                 'cloudflare_token_file = ""',
                 "renew_days_before = 30",
                 "renew_check_seconds = 43200",
-                'acme_server = "zerossl"',
+                f"acme_server = {_toml_string(acme_server)}",
+                'acme_eab_kid = ""',
+                'acme_eab_hmac_key = ""',
+                'acme_eab_kid_file = ""',
+                'acme_eab_hmac_key_file = ""',
                 f"cert_file = {_toml_string(cert_file)}",
                 f"key_file = {_toml_string(key_file)}",
             ]
@@ -245,7 +270,13 @@ def _render_config_toml(
             "",
         ]
     )
-    return "\n".join(lines), cloudflare_token if effective_tls_mode == "cloudflare_acme" else ""
+    secrets_to_write: dict[Path, str] = {}
+    if effective_tls_mode == "cloudflare_acme":
+        secrets_to_write[cloudflare_token_path] = cloudflare_token
+        if acme_server == "actalis":
+            secrets_to_write[acme_eab_kid_path] = acme_eab_kid
+            secrets_to_write[acme_eab_hmac_key_path] = acme_eab_hmac_key
+    return "\n".join(lines), secrets_to_write
 
 
 def write_config_from_home_assistant_options(
@@ -253,22 +284,28 @@ def write_config_from_home_assistant_options(
     options_path: Path = DEFAULT_OPTIONS_PATH,
     config_path: Path = DEFAULT_CONFIG_PATH,
     cloudflare_token_path: Path = DEFAULT_CLOUDFLARE_TOKEN_PATH,
+    acme_eab_kid_path: Path = DEFAULT_ACME_EAB_KID_PATH,
+    acme_eab_hmac_key_path: Path = DEFAULT_ACME_EAB_HMAC_KEY_PATH,
 ) -> Path:
     options = _load_options(options_path)
-    config_text, cloudflare_token = _render_config_toml(
+    config_text, secrets_to_write = _render_config_toml(
         options=options,
         config_path=config_path,
         cloudflare_token_path=cloudflare_token_path,
+        acme_eab_kid_path=acme_eab_kid_path,
+        acme_eab_hmac_key_path=acme_eab_hmac_key_path,
     )
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(config_text, encoding="utf-8")
-    if cloudflare_token:
-        cloudflare_token_path.parent.mkdir(parents=True, exist_ok=True)
-        cloudflare_token_path.write_text(cloudflare_token, encoding="utf-8")
+    managed_secret_paths = (cloudflare_token_path, acme_eab_kid_path, acme_eab_hmac_key_path)
+    for path, contents in secrets_to_write.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents, encoding="utf-8")
         if os.name != "nt":
-            cloudflare_token_path.chmod(0o600)
-    elif cloudflare_token_path.exists():
-        cloudflare_token_path.unlink()
+            path.chmod(0o600)
+    for path in managed_secret_paths:
+        if path not in secrets_to_write and path.exists():
+            path.unlink()
     return config_path
 
 

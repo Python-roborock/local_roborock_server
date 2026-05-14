@@ -18,6 +18,14 @@ This service is meant to stay private. Point your own DNS at your server's LAN I
 
 This project is in VERY EARLY BETA!!! Do not use this repository unless you are sure you know what you are doing and are rather technical.
 
+## Contributing
+
+If you would like to contribute there are a few ways that would be great!
+
+1. Code is always welcome that you have fully tested.
+2. Video walkthroughs of how to actually set this up would be great.
+3. Documentation. I hate documentation and its something I find myself often pushing off to AI so that I can focus more on the harder problems. But I find that human written documentation always 'feels' better.
+
 ## Requirements
 
 - a domain you control

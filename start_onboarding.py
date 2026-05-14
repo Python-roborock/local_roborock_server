@@ -41,6 +41,7 @@ CFGWIFI_UID = "1234567890"
 DEFAULT_COUNTRY_DOMAIN = "us"
 DEFAULT_TIMEZONE = "America/New_York"
 DEFAULT_STACK_HTTPS_PORT = 555
+MAX_STACK_SERVER_LENGTH = 32
 POLL_INTERVAL_SECONDS = 5.0
 POLL_TIMEOUT_SECONDS = 300.0
 
@@ -175,7 +176,13 @@ def sanitize_stack_server(url: str) -> str:
     authority = _format_authority(host, port=port, default_port=443)
     if not authority:
         raise ValueError("A server host is required.")
-    return f"{authority}/"
+    stack_server = f"{authority}/"
+    if len(stack_server) > MAX_STACK_SERVER_LENGTH:
+        raise ValueError(
+            f"Server host is too long for onboarding: token.r must be at most "
+            f"{MAX_STACK_SERVER_LENGTH} characters, got {len(stack_server)} ({stack_server})."
+        )
+    return stack_server
 
 
 def normalize_api_base_url(url: str) -> str:

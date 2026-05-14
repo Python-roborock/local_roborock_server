@@ -29,6 +29,9 @@ options:
   tls_mode: "provided"
   tls_base_domain: ""
   tls_email: ""
+  acme_server: "zerossl"
+  acme_eab_kid: ""
+  acme_eab_hmac_key: ""
   cloudflare_token: ""
   cert_file: ""
   key_file: ""
@@ -43,6 +46,9 @@ schema:
   tls_mode: list(provided|cloudflare_acme)
   tls_base_domain: str
   tls_email: str
+  acme_server: list(zerossl|actalis)
+  acme_eab_kid: str
+  acme_eab_hmac_key: password
   cloudflare_token: str
   cert_file: str
   key_file: str

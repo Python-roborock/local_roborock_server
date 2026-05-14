@@ -1758,7 +1758,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     configure.add_argument(
         "--force",
         action="store_true",
-        help="Overwrite an existing config.toml and Cloudflare token file.",
+        help="Overwrite an existing config.toml and any generated ACME secret files.",
     )
 
     repair_identities = subparsers.add_parser(

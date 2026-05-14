@@ -12,6 +12,9 @@ def _answers(
     mqtt_tls_port: int = 8881,
     broker_mode: str = "embedded",
     tls_mode: str = "cloudflare_acme",
+    acme_server: str = "zerossl",
+    acme_eab_kid: str = "",
+    acme_eab_hmac_key: str = "",
 ) -> ConfigureAnswers:
     return ConfigureAnswers(
         stack_fqdn="api-roborock.example.com",
@@ -21,6 +24,9 @@ def _answers(
         tls_mode=tls_mode,
         base_domain="example.com" if tls_mode == "cloudflare_acme" else "",
         email="you@example.com" if tls_mode == "cloudflare_acme" else "",
+        acme_server=acme_server,
+        acme_eab_kid=acme_eab_kid,
+        acme_eab_hmac_key=acme_eab_hmac_key,
         cloudflare_token="cloudflare-token" if tls_mode == "cloudflare_acme" else "",
         password_hash="pbkdf2_sha256$600000$abc$def",
         session_secret="abcdefghijklmnopqrstuvwxyz123456",
@@ -37,6 +43,8 @@ def test_write_config_setup_embedded_cloudflare(tmp_path: Path) -> None:
     assert result.config_file == config_file.resolve()
     assert result.cloudflare_token_file == (tmp_path / "secrets" / "cloudflare_token").resolve()
     assert result.cloudflare_token_file.read_text(encoding="utf-8") == "cloudflare-token"
+    assert result.actalis_eab_kid_file is None
+    assert result.actalis_eab_hmac_key_file is None
     assert not result.broker_template_needs_edit
 
     config = load_config(result.config_file)
@@ -48,6 +56,7 @@ def test_write_config_setup_embedded_cloudflare(tmp_path: Path) -> None:
     assert config.broker.port == 18830
     assert config.tls.mode == "cloudflare_acme"
     assert config.tls.cloudflare_token_file == "/run/secrets/cloudflare_token"
+    assert config.tls.acme_server == "zerossl"
     assert config.admin.protocol_auth_enabled is True
     assert config.admin.protocol_login_email == "user@example.com"
 
@@ -102,3 +111,23 @@ def test_validate_protocol_login_pin_requires_exactly_six_digits() -> None:
 
     with pytest.raises(ValueError, match="exactly 6 digits"):
         _validate_protocol_login_pin("12345a")
+
+
+def test_write_config_setup_embedded_actalis(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+
+    result = write_config_setup(
+        config_file=config_file,
+        answers=_answers(acme_server="actalis", acme_eab_kid="kid-123", acme_eab_hmac_key="hmac-456"),
+    )
+
+    config = load_config(result.config_file)
+    assert config.tls.acme_server == "actalis"
+    assert config.tls.acme_eab_kid == ""
+    assert config.tls.acme_eab_hmac_key == ""
+    assert config.tls.acme_eab_kid_file == "/run/secrets/acme_eab_kid"
+    assert config.tls.acme_eab_hmac_key_file == "/run/secrets/acme_eab_hmac_key"
+    assert result.actalis_eab_kid_file == (tmp_path / "secrets" / "acme_eab_kid").resolve()
+    assert result.actalis_eab_hmac_key_file == (tmp_path / "secrets" / "acme_eab_hmac_key").resolve()
+    assert result.actalis_eab_kid_file.read_text(encoding="utf-8") == "kid-123"
+    assert result.actalis_eab_hmac_key_file.read_text(encoding="utf-8") == "hmac-456"

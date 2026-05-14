@@ -46,6 +46,10 @@ class TlsConfig:
     renew_days_before: int
     renew_check_seconds: int
     acme_server: str
+    acme_eab_kid: str
+    acme_eab_hmac_key: str
+    acme_eab_kid_file: str
+    acme_eab_hmac_key_file: str
     cert_file: str
     key_file: str
 
@@ -85,6 +89,8 @@ class AppPaths:
     http_jsonl_path: Path
     mqtt_jsonl_path: Path
     cloudflare_token_file: Path
+    acme_eab_kid_file: Path
+    acme_eab_hmac_key_file: Path
     cert_file: Path
     key_file: Path
 
@@ -222,6 +228,10 @@ def load_config(path: str | Path) -> AppConfig:
             renew_days_before=_as_int(tls.get("renew_days_before"), "tls.renew_days_before", 30),
             renew_check_seconds=_as_int(tls.get("renew_check_seconds"), "tls.renew_check_seconds", 43200),
             acme_server=str(tls.get("acme_server", "zerossl")).strip() or "zerossl",
+            acme_eab_kid=str(tls.get("acme_eab_kid", "")).strip(),
+            acme_eab_hmac_key=str(tls.get("acme_eab_hmac_key", "")).strip(),
+            acme_eab_kid_file=str(tls.get("acme_eab_kid_file", "")).strip(),
+            acme_eab_hmac_key_file=str(tls.get("acme_eab_hmac_key_file", "")).strip(),
             cert_file=str(tls.get("cert_file", "")).strip(),
             key_file=str(tls.get("key_file", "")).strip(),
         ),
@@ -250,6 +260,19 @@ def load_config(path: str | Path) -> AppConfig:
         _normalize_hostname(config.tls.base_domain, "tls.base_domain")
         _require_non_empty(config.tls.email, "tls.email")
         _require_non_empty(config.tls.cloudflare_token_file, "tls.cloudflare_token_file")
+        has_kid = bool(config.tls.acme_eab_kid or config.tls.acme_eab_kid_file)
+        has_hmac = bool(config.tls.acme_eab_hmac_key or config.tls.acme_eab_hmac_key_file)
+        if has_kid != has_hmac:
+            raise ValueError(
+                "tls.acme_eab_kid/tls.acme_eab_kid_file and "
+                "tls.acme_eab_hmac_key/tls.acme_eab_hmac_key_file must be set together"
+            )
+        if config.tls.acme_server == "actalis":
+            if not has_kid:
+                raise ValueError(
+                    "Actalis requires tls.acme_eab_kid or tls.acme_eab_kid_file, "
+                    "and tls.acme_eab_hmac_key or tls.acme_eab_hmac_key_file"
+                )
     else:
         _require_non_empty(config.tls.cert_file, "tls.cert_file")
         _require_non_empty(config.tls.key_file, "tls.key_file")
@@ -278,6 +301,12 @@ def resolve_paths(config_file: str | Path, config: AppConfig) -> AppPaths:
     cloudflare_token_file = Path(config.tls.cloudflare_token_file or state_dir / "cloudflare_token")
     if not cloudflare_token_file.is_absolute():
         cloudflare_token_file = (config_root / cloudflare_token_file).resolve()
+    acme_eab_kid_file = Path(config.tls.acme_eab_kid_file or state_dir / "acme_eab_kid")
+    if not acme_eab_kid_file.is_absolute():
+        acme_eab_kid_file = (config_root / acme_eab_kid_file).resolve()
+    acme_eab_hmac_key_file = Path(config.tls.acme_eab_hmac_key_file or state_dir / "acme_eab_hmac_key")
+    if not acme_eab_hmac_key_file.is_absolute():
+        acme_eab_hmac_key_file = (config_root / acme_eab_hmac_key_file).resolve()
 
     return AppPaths(
         config_file=config_path,
@@ -294,6 +323,8 @@ def resolve_paths(config_file: str | Path, config: AppConfig) -> AppPaths:
         http_jsonl_path=runtime_dir / "decompiled_http.jsonl",
         mqtt_jsonl_path=runtime_dir / "decompiled_mqtt.jsonl",
         cloudflare_token_file=cloudflare_token_file,
+        acme_eab_kid_file=acme_eab_kid_file,
+        acme_eab_hmac_key_file=acme_eab_hmac_key_file,
         cert_file=cert_file,
         key_file=key_file,
     )

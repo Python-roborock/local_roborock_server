@@ -64,6 +64,24 @@ class CertificateManager:
             raise RuntimeError(f"Cloudflare token file is empty: {self.paths.cloudflare_token_file}")
         return token
 
+    @staticmethod
+    def _read_optional_secret_file(path: Path) -> str:
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8").strip()
+
+    def _load_eab_credentials(self) -> tuple[str, str]:
+        kid = self.config.tls.acme_eab_kid or self._read_optional_secret_file(self.paths.acme_eab_kid_file)
+        hmac_key = self.config.tls.acme_eab_hmac_key or self._read_optional_secret_file(self.paths.acme_eab_hmac_key_file)
+        if bool(kid) != bool(hmac_key):
+            raise RuntimeError("ACME EAB credentials are incomplete; both KID and HMAC key are required")
+        if self.config.tls.acme_server == "actalis" and not kid:
+            raise RuntimeError(
+                "Actalis ACME requires EAB credentials. "
+                f"Checked inline config plus {self.paths.acme_eab_kid_file} and {self.paths.acme_eab_hmac_key_file}."
+            )
+        return kid, hmac_key
+
     def _run_acme(self, args: Iterable[str]) -> None:
         self.paths.acme_dir.mkdir(parents=True, exist_ok=True)
         if not ACME_SH_PATH.exists():
@@ -94,26 +112,31 @@ class CertificateManager:
 
     def _provision_or_renew(self) -> None:
         self.paths.certs_dir.mkdir(parents=True, exist_ok=True)
-        base_domain = self.config.tls.base_domain
-        self._run_acme(["--register-account", "-m", self.config.tls.email])
+        primary_domain, issue_domains = self._certificate_domains()
+        register_args = ["--register-account", "-m", self.config.tls.email]
+        eab_kid, eab_hmac_key = self._load_eab_credentials()
+        if eab_kid and eab_hmac_key:
+            register_args.extend(
+                [
+                    "--eab-kid",
+                    eab_kid,
+                    "--eab-hmac-key",
+                    eab_hmac_key,
+                ]
+            )
+        self._run_acme(register_args)
+        issue_args = ["--issue", "--dns", "dns_cf"]
+        for domain in issue_domains:
+            issue_args.extend(["-d", domain])
+        issue_args.extend(["--keylength", "2048"])
         self._run_acme(
-            [
-                "--issue",
-                "--dns",
-                "dns_cf",
-                "-d",
-                base_domain,
-                "-d",
-                f"*.{base_domain}",
-                "--keylength",
-                "2048",
-            ]
+            issue_args
         )
         self._run_acme(
             [
                 "--install-cert",
                 "-d",
-                base_domain,
+                primary_domain,
                 "--fullchain-file",
                 str(self.paths.cert_file),
                 "--key-file",
@@ -123,3 +146,9 @@ class CertificateManager:
         if not self.paths.cert_file.exists() or not self.paths.key_file.exists():
             raise RuntimeError("ACME completed without writing certificate files")
 
+    def _certificate_domains(self) -> tuple[str, list[str]]:
+        if self.config.tls.acme_server == "actalis":
+            stack_fqdn = self.config.network.stack_fqdn
+            return stack_fqdn, [stack_fqdn]
+        base_domain = self.config.tls.base_domain
+        return base_domain, [base_domain, f"*.{base_domain}"]

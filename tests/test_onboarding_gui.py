@@ -37,3 +37,9 @@ def test_gui_server_normalization_supports_default_and_custom_ports(
 def test_gui_server_normalization_rejects_non_numeric_port() -> None:
     with pytest.raises(ValueError, match="Server port must be numeric."):
         normalize_api_base_url("api-roborock.example.com:not-a-port")
+
+
+def test_gui_server_normalization_enforces_32_char_limit() -> None:
+    assert sanitize_stack_server("roborockss.luke-lashley.com:555") == "roborockss.luke-lashley.com:555/"
+    with pytest.raises(ValueError, match="token.r must be at most 32 characters, got 33"):
+        sanitize_stack_server("roborocksss.luke-lashley.com:555")

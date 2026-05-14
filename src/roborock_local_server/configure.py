@@ -36,6 +36,8 @@ def hash_password(password: str, *, iterations: int = 600_000) -> str:
 
 _HOST_RE = re.compile(r"^[a-z0-9.-]+$")
 _CLOUDFLARE_TOKEN_CONTAINER_PATH = "/run/secrets/cloudflare_token"
+_ACTALIS_EAB_KID_CONTAINER_PATH = "/run/secrets/acme_eab_kid"
+_ACTALIS_EAB_HMAC_KEY_CONTAINER_PATH = "/run/secrets/acme_eab_hmac_key"
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,9 @@ class ConfigureAnswers:
     tls_mode: str
     base_domain: str
     email: str
+    acme_server: str
+    acme_eab_kid: str
+    acme_eab_hmac_key: str
     cloudflare_token: str
     password_hash: str
     session_secret: str
@@ -58,6 +63,8 @@ class ConfigureAnswers:
 class ConfigureResult:
     config_file: Path
     cloudflare_token_file: Path | None
+    actalis_eab_kid_file: Path | None
+    actalis_eab_hmac_key_file: Path | None
     broker_template_needs_edit: bool
 
 
@@ -193,13 +200,20 @@ def collect_configure_answers() -> ConfigureAnswers:
 
     base_domain = ""
     email = ""
+    acme_server = "zerossl"
+    acme_eab_kid = ""
+    acme_eab_hmac_key = ""
     cloudflare_token = ""
     if use_cloudflare_acme:
         base_domain = _prompt_hostname(
-            "Base domain for the wildcard certificate (example.com): ",
+            "Base domain / DNS zone for ACME DNS validation (example.com): ",
             field_name="tls.base_domain",
         )
         email = _prompt_non_empty("Email for the ACME account: ")
+        acme_server = "actalis" if _prompt_yes_no("Use Actalis instead of ZeroSSL as the ACME CA?", default=False) else "zerossl"
+        if acme_server == "actalis":
+            acme_eab_kid = _prompt_non_empty("Actalis EAB KID: ")
+            acme_eab_hmac_key = _prompt_non_empty("Actalis EAB HMAC key: ")
         cloudflare_token = getpass("Cloudflare API token (input hidden): ").strip()
         while not cloudflare_token:
             print("A Cloudflare API token is required.")
@@ -216,6 +230,9 @@ def collect_configure_answers() -> ConfigureAnswers:
         tls_mode=tls_mode,
         base_domain=base_domain,
         email=email,
+        acme_server=acme_server,
+        acme_eab_kid=acme_eab_kid,
+        acme_eab_hmac_key=acme_eab_hmac_key,
         cloudflare_token=cloudflare_token,
         password_hash=hash_password(password),
         session_secret=secrets.token_urlsafe(32),
@@ -274,7 +291,11 @@ def render_config_toml(answers: ConfigureAnswers) -> str:
                 f"cloudflare_token_file = {_toml_string(_CLOUDFLARE_TOKEN_CONTAINER_PATH)}",
                 "renew_days_before = 30",
                 "renew_check_seconds = 43200",
-                'acme_server = "zerossl"',
+                f"acme_server = {_toml_string(answers.acme_server)}",
+                'acme_eab_kid = ""',
+                'acme_eab_hmac_key = ""',
+                f"acme_eab_kid_file = {_toml_string(_ACTALIS_EAB_KID_CONTAINER_PATH if answers.acme_server == 'actalis' else '')}",
+                f"acme_eab_hmac_key_file = {_toml_string(_ACTALIS_EAB_HMAC_KEY_CONTAINER_PATH if answers.acme_server == 'actalis' else '')}",
             ]
         )
     else:
@@ -285,7 +306,11 @@ def render_config_toml(answers: ConfigureAnswers) -> str:
                 'cloudflare_token_file = ""',
                 "renew_days_before = 30",
                 "renew_check_seconds = 43200",
-                'acme_server = "zerossl"',
+                f"acme_server = {_toml_string(answers.acme_server)}",
+                'acme_eab_kid = ""',
+                'acme_eab_hmac_key = ""',
+                'acme_eab_kid_file = ""',
+                'acme_eab_hmac_key_file = ""',
                 'cert_file = "/data/certs/fullchain.pem"',
                 'key_file = "/data/certs/privkey.pem"',
             ]
@@ -315,10 +340,14 @@ def write_config_setup(
 ) -> ConfigureResult:
     config_path = Path(config_file).resolve()
     token_path = config_path.parent / "secrets" / "cloudflare_token"
+    actalis_kid_path = config_path.parent / "secrets" / "acme_eab_kid"
+    actalis_hmac_path = config_path.parent / "secrets" / "acme_eab_hmac_key"
 
     protected_paths = [config_path]
     if answers.tls_mode == "cloudflare_acme":
         protected_paths.append(token_path)
+        if answers.acme_server == "actalis":
+            protected_paths.extend([actalis_kid_path, actalis_hmac_path])
 
     if not force:
         existing = [path for path in protected_paths if path.exists()]
@@ -330,16 +359,36 @@ def write_config_setup(
     config_path.write_text(render_config_toml(answers), encoding="utf-8")
 
     written_token_path: Path | None = None
+    written_actalis_kid_path: Path | None = None
+    written_actalis_hmac_path: Path | None = None
     if answers.tls_mode == "cloudflare_acme":
         token_path.parent.mkdir(parents=True, exist_ok=True)
         token_path.write_text(answers.cloudflare_token, encoding="utf-8")
         if os.name != "nt":
             token_path.chmod(0o600)
         written_token_path = token_path
+        if answers.acme_server == "actalis":
+            actalis_kid_path.write_text(answers.acme_eab_kid, encoding="utf-8")
+            actalis_hmac_path.write_text(answers.acme_eab_hmac_key, encoding="utf-8")
+            if os.name != "nt":
+                actalis_kid_path.chmod(0o600)
+                actalis_hmac_path.chmod(0o600)
+            written_actalis_kid_path = actalis_kid_path
+            written_actalis_hmac_path = actalis_hmac_path
+        else:
+            for stale_path in (actalis_kid_path, actalis_hmac_path):
+                if stale_path.exists():
+                    stale_path.unlink()
+    else:
+        for stale_path in (token_path, actalis_kid_path, actalis_hmac_path):
+            if stale_path.exists():
+                stale_path.unlink()
 
     return ConfigureResult(
         config_file=config_path,
         cloudflare_token_file=written_token_path,
+        actalis_eab_kid_file=written_actalis_kid_path,
+        actalis_eab_hmac_key_file=written_actalis_hmac_path,
         broker_template_needs_edit=answers.broker_mode == "external",
     )
 

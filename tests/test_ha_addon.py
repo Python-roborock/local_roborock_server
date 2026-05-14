@@ -185,6 +185,7 @@ def test_write_config_from_home_assistant_options_cloudflare(tmp_path: Path) -> 
             "tls_mode": "cloudflare_acme",
             "tls_base_domain": "example.com",
             "tls_email": "acme@example.com",
+            "acme_server": "zerossl",
             "cloudflare_token": "cloudflare-token-123",
             "admin_password": "secret",
             "protocol_login_email": "user@example.com",
@@ -202,6 +203,7 @@ def test_write_config_from_home_assistant_options_cloudflare(tmp_path: Path) -> 
     assert parsed["tls"]["mode"] == "cloudflare_acme"
     assert parsed["tls"]["base_domain"] == "example.com"
     assert parsed["tls"]["email"] == "acme@example.com"
+    assert parsed["tls"]["acme_server"] == "zerossl"
     assert parsed["tls"]["cloudflare_token_file"] == str(token_path)
     assert token_path.read_text(encoding="utf-8") == "cloudflare-token-123"
 
@@ -218,6 +220,7 @@ def test_write_config_from_home_assistant_options_infers_cloudflare_acme_from_to
             "tls_mode": "provided",
             "tls_base_domain": "example.com",
             "tls_email": "acme@example.com",
+            "acme_server": "zerossl",
             "cloudflare_token": "cloudflare-token-123",
             "cert_file": "",
             "key_file": "",
@@ -237,10 +240,79 @@ def test_write_config_from_home_assistant_options_infers_cloudflare_acme_from_to
     assert parsed["tls"]["mode"] == "cloudflare_acme"
     assert parsed["tls"]["base_domain"] == "example.com"
     assert parsed["tls"]["email"] == "acme@example.com"
+    assert parsed["tls"]["acme_server"] == "zerossl"
     assert parsed["tls"]["cloudflare_token_file"] == str(token_path)
     assert "cert_file" not in parsed["tls"]
     assert "key_file" not in parsed["tls"]
     assert token_path.read_text(encoding="utf-8") == "cloudflare-token-123"
+
+
+def test_write_config_from_home_assistant_options_actalis_requires_eab(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+
+    _write_options(
+        options_path,
+        {
+            "stack_fqdn": "api-roborock.example.com",
+            "tls_mode": "cloudflare_acme",
+            "tls_base_domain": "example.com",
+            "tls_email": "acme@example.com",
+            "acme_server": "actalis",
+            "cloudflare_token": "cloudflare-token-123",
+            "admin_password": "secret",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "654321",
+        },
+    )
+
+    with pytest.raises(ValueError, match="acme_eab_kid is required"):
+        write_config_from_home_assistant_options(
+            options_path=options_path,
+            config_path=config_path,
+        )
+
+
+def test_write_config_from_home_assistant_options_actalis_writes_eab(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+    token_path = tmp_path / "run" / "secrets" / "cloudflare_token"
+    kid_path = tmp_path / "run" / "secrets" / "acme_eab_kid"
+    hmac_path = tmp_path / "run" / "secrets" / "acme_eab_hmac_key"
+
+    _write_options(
+        options_path,
+        {
+            "stack_fqdn": "api-roborock.example.com",
+            "tls_mode": "cloudflare_acme",
+            "tls_base_domain": "example.com",
+            "tls_email": "acme@example.com",
+            "acme_server": "actalis",
+            "acme_eab_kid": "kid-123",
+            "acme_eab_hmac_key": "hmac-456",
+            "cloudflare_token": "cloudflare-token-123",
+            "admin_password": "secret",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "654321",
+        },
+    )
+
+    write_config_from_home_assistant_options(
+        options_path=options_path,
+        config_path=config_path,
+        cloudflare_token_path=token_path,
+        acme_eab_kid_path=kid_path,
+        acme_eab_hmac_key_path=hmac_path,
+    )
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["tls"]["acme_server"] == "actalis"
+    assert parsed["tls"]["acme_eab_kid"] == ""
+    assert parsed["tls"]["acme_eab_hmac_key"] == ""
+    assert parsed["tls"]["acme_eab_kid_file"] == str(kid_path)
+    assert parsed["tls"]["acme_eab_hmac_key_file"] == str(hmac_path)
+    assert kid_path.read_text(encoding="utf-8") == "kid-123"
+    assert hmac_path.read_text(encoding="utf-8") == "hmac-456"
 
 
 def test_write_config_from_home_assistant_options_rejects_external_tls(tmp_path: Path) -> None:
@@ -316,8 +388,12 @@ def test_write_config_from_home_assistant_options_removes_stale_cloudflare_token
     options_path = tmp_path / "options.json"
     config_path = tmp_path / "config.toml"
     token_path = tmp_path / "run" / "secrets" / "cloudflare_token"
+    kid_path = tmp_path / "run" / "secrets" / "acme_eab_kid"
+    hmac_path = tmp_path / "run" / "secrets" / "acme_eab_hmac_key"
     token_path.parent.mkdir(parents=True, exist_ok=True)
     token_path.write_text("stale-token", encoding="utf-8")
+    kid_path.write_text("stale-kid", encoding="utf-8")
+    hmac_path.write_text("stale-hmac", encoding="utf-8")
 
     _write_options(
         options_path,
@@ -336,6 +412,10 @@ def test_write_config_from_home_assistant_options_removes_stale_cloudflare_token
         options_path=options_path,
         config_path=config_path,
         cloudflare_token_path=token_path,
+        acme_eab_kid_path=kid_path,
+        acme_eab_hmac_key_path=hmac_path,
     )
 
     assert token_path.exists() is False
+    assert kid_path.exists() is False
+    assert hmac_path.exists() is False

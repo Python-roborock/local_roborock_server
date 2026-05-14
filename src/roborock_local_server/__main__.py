@@ -39,6 +39,10 @@ def main() -> int:
         print(f"Wrote config: {result.config_file}")
         if result.cloudflare_token_file is not None:
             print(f"Wrote Cloudflare token file: {result.cloudflare_token_file}")
+        if result.actalis_eab_kid_file is not None:
+            print(f"Wrote Actalis EAB KID file: {result.actalis_eab_kid_file}")
+        if result.actalis_eab_hmac_key_file is not None:
+            print(f"Wrote Actalis EAB HMAC key file: {result.actalis_eab_hmac_key_file}")
         if result.broker_template_needs_edit:
             print("Fill in broker.host before starting the stack.")
         return 0

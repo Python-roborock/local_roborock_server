@@ -31,6 +31,8 @@ This is an installation method, not a post-install integration step. The add-on 
    - TLS settings:
      - `tls_mode = provided` with explicit `cert_file` and `key_file`
      - or `tls_mode = cloudflare_acme` with `tls_base_domain`, `tls_email`, and `cloudflare_token`
+     - optional ACME CA selection with `acme_server`
+     - if `acme_server = actalis`, also set `acme_eab_kid` and `acme_eab_hmac_key`.
 
 5. Start the add-on.
 
