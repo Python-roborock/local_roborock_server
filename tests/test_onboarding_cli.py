@@ -416,9 +416,9 @@ def test_onboarding_server_normalization_defaults_to_port_555() -> None:
 
 
 def test_onboarding_server_normalization_enforces_32_char_limit() -> None:
-    assert sanitize_stack_server("roborockss.luke-lashley.com:555") == "roborockss.luke-lashley.com:555/"
+    assert sanitize_stack_server("abcdefghijklmno.example.com:555") == "abcdefghijklmno.example.com:555/"
     with pytest.raises(ValueError, match="token.r must be at most 32 characters, got 33"):
-        sanitize_stack_server("roborocksss.luke-lashley.com:555")
+        sanitize_stack_server("abcdefghijklmnop.example.com:555")
 
 
 def test_remote_onboarding_api_uses_custom_port_base_url() -> None:

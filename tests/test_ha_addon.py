@@ -315,6 +315,31 @@ def test_write_config_from_home_assistant_options_actalis_writes_eab(tmp_path: P
     assert hmac_path.read_text(encoding="utf-8") == "hmac-456"
 
 
+def test_write_config_from_home_assistant_options_rejects_invalid_acme_server(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+
+    _write_options(
+        options_path,
+        {
+            "stack_fqdn": "api-roborock.example.com",
+            "tls_mode": "provided",
+            "acme_server": "bad-ca",
+            "cert_file": "/ssl/fullchain.pem",
+            "key_file": "/ssl/privkey.pem",
+            "admin_password": "secret",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "654321",
+        },
+    )
+
+    with pytest.raises(ValueError, match="acme_server must be 'zerossl' or 'actalis'"):
+        write_config_from_home_assistant_options(
+            options_path=options_path,
+            config_path=config_path,
+        )
+
+
 def test_write_config_from_home_assistant_options_rejects_external_tls(tmp_path: Path) -> None:
     options_path = tmp_path / "options.json"
     config_path = tmp_path / "config.toml"

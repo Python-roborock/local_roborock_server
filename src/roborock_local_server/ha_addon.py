@@ -106,6 +106,13 @@ def _require_pin(value: object, *, field_name: str) -> str:
     return text
 
 
+def _normalize_acme_server(value: object, *, field_name: str) -> str:
+    normalized = str(value or "").strip().lower() or "zerossl"
+    if normalized not in {"zerossl", "actalis"}:
+        raise ValueError(f"{field_name} must be 'zerossl' or 'actalis'")
+    return normalized
+
+
 def _load_options(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -163,7 +170,7 @@ def _render_config_toml(
         raise ValueError("tls_mode must be 'provided' or 'cloudflare_acme'")
     tls_base_domain = str(merged.get("tls_base_domain", "") or "").strip()
     tls_email = str(merged.get("tls_email", "") or "").strip()
-    acme_server = str(merged.get("acme_server", "zerossl") or "zerossl").strip().lower() or "zerossl"
+    acme_server = _normalize_acme_server(merged.get("acme_server", "zerossl"), field_name="acme_server")
     acme_eab_kid = str(merged.get("acme_eab_kid", "") or "").strip()
     acme_eab_hmac_key = str(merged.get("acme_eab_hmac_key", "") or "").strip()
     cloudflare_token = str(merged.get("cloudflare_token", "") or "").strip()

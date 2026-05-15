@@ -56,7 +56,9 @@ class CertificateManager:
         except Exception:
             return True
         deadline = datetime.now(timezone.utc) + timedelta(days=self.config.tls.renew_days_before)
-        return cert.not_valid_after_utc <= deadline
+        if cert.not_valid_after_utc <= deadline:
+            return True
+        return not self._certificate_matches_configuration(cert)
 
     def _read_cloudflare_token(self) -> str:
         token = self.paths.cloudflare_token_file.read_text(encoding="utf-8").strip()
@@ -96,6 +98,36 @@ class CertificateManager:
                 redact_next = True
         return " ".join(redacted)
 
+    @staticmethod
+    def _redact_text(text: str, sensitive_values: Iterable[str]) -> str:
+        redacted = text
+        for value in sorted({item for item in sensitive_values if item}, key=len, reverse=True):
+            redacted = redacted.replace(value, "<redacted>")
+        return redacted
+
+    @staticmethod
+    def _sensitive_values(command: list[str], env: dict[str, str]) -> list[str]:
+        sensitive_values: list[str] = []
+        for index, part in enumerate(command[:-1]):
+            if part in {"--eab-kid", "--eab-hmac-key"}:
+                sensitive_values.append(command[index + 1])
+        cloudflare_token = env.get("CF_Token", "").strip()
+        if cloudflare_token:
+            sensitive_values.append(cloudflare_token)
+        return sensitive_values
+
+    def _certificate_matches_configuration(self, cert: x509.Certificate) -> bool:
+        try:
+            san_names = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(
+                x509.DNSName
+            )
+        except x509.ExtensionNotFound:
+            return False
+        actual_domains = {name.strip().lower() for name in san_names if name.strip()}
+        _primary_domain, issue_domains = self._certificate_domains()
+        expected_domains = {domain.strip().lower() for domain in issue_domains if domain.strip()}
+        return actual_domains == expected_domains
+
     def _run_acme(self, args: Iterable[str]) -> None:
         self.paths.acme_dir.mkdir(parents=True, exist_ok=True)
         if not ACME_SH_PATH.exists():
@@ -111,6 +143,7 @@ class CertificateManager:
             self.config.tls.acme_server,
         ]
         display_command = self._redact_command(command)
+        sensitive_values = self._sensitive_values(command, env)
         LOG.info("Running ACME command: %s", display_command)
         result = subprocess.run(
             command,
@@ -121,7 +154,7 @@ class CertificateManager:
             check=False,
         )
         if result.stdout.strip():
-            LOG.info("ACME output:\n%s", result.stdout.strip())
+            LOG.info("ACME output:\n%s", self._redact_text(result.stdout.strip(), sensitive_values))
         if result.returncode != 0:
             raise RuntimeError(f"ACME command failed ({result.returncode}): {display_command}")
 
