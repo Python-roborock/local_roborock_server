@@ -497,7 +497,10 @@ def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout) ->
 
 def choose_device(devices: list[dict[str, Any]], *, output: TextIO) -> dict[str, Any] | None:
     if not devices:
-        output.write("No known vacuums are available for onboarding.\n")
+        output.write(
+            "No known vacuums are available for onboarding. "
+            "Finish the cloud import/fetch-data step first, then retry.\n"
+        )
         return None
 
     name_counts: dict[str, int] = {}
@@ -534,6 +537,7 @@ def poll_session_until_progress(
 ) -> tuple[str, dict[str, Any]]:
     deadline = time.monotonic() + timeout_seconds
     latest = dict(baseline_status or {"session_id": session_id, "query_samples": baseline_samples})
+    baseline_has_public_key = bool((baseline_status or {}).get("has_public_key"))
     waiting_for_reconnect = False
     while True:
         try:
@@ -557,9 +561,9 @@ def poll_session_until_progress(
             return "conflict", latest
         if bool(latest.get("connected")):
             return "connected", latest
-        if bool(latest.get("has_public_key")):
+        if bool(latest.get("has_public_key")) and not baseline_has_public_key:
             return "public_key_ready", latest
-        if int(latest.get("query_samples") or 0) > baseline_samples:
+        if int(latest.get("query_samples") or 0) > baseline_samples and not baseline_has_public_key:
             return "sample_increased", latest
         if time.monotonic() >= deadline:
             return "timeout", latest
@@ -603,11 +607,17 @@ def run_guided_onboarding(
             while True:
                 status = api.get_session(session_id=session_id)
                 baseline_samples = int(status.get("query_samples") or 0)
+                baseline_has_public_key = bool(status.get("has_public_key"))
                 output.write(
                     "\nReset the vacuum Wi-Fi, connect this machine to the vacuum Wi-Fi, "
                     "then press Enter to send onboarding.\n"
                 )
                 output.write("Type 'reselect' to choose another vacuum or 'quit' to exit.\n")
+                if baseline_has_public_key:
+                    output.write(
+                        "The public key is already ready. This should be the final pairing cycle, "
+                        "but some vacuums still take a few minutes to finish reconnecting.\n"
+                    )
                 raw = input("> ").strip().lower()
                 if raw == "quit":
                     return 0
@@ -629,7 +639,9 @@ def run_guided_onboarding(
 
                 output.write(
                     "Reconnect this machine to your normal Wi-Fi. "
-                    "The script will poll the main server every 5 seconds for up to 5 minutes.\n"
+                    "Once the main server is reachable again, the script will poll every 5 seconds "
+                    "for up to 5 minutes. Some vacuums take most of that window, especially on the "
+                    "final cycle.\n"
                 )
                 result, status = poll_session_until_progress(
                     api,
@@ -651,6 +663,12 @@ def run_guided_onboarding(
                 if result == "sample_increased":
                     output.write("The sample count increased. Repeat the pairing cycle to collect more onboarding data.\n")
                     continue
+                if result == "timeout" and baseline_has_public_key and bool(status.get("has_public_key")):
+                    output.write(
+                        "The public key was already ready, but the vacuum did not finish connecting within the timeout. "
+                        "Some models are slow on the final cycle; wait a bit longer if the vacuum is still working, "
+                        "or retry if it never announces Wi-Fi connected.\n"
+                    )
 
                 action = prompt_post_attempt_action(status, output=output)
                 if action == "retry":

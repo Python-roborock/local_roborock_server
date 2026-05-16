@@ -8,6 +8,7 @@ from start_onboarding import (
     ApiReachabilityError,
     GuidedOnboardingConfig,
     RemoteOnboardingApi,
+    choose_device,
     normalize_api_base_url,
     poll_session_until_progress,
     run_guided_onboarding,
@@ -145,6 +146,15 @@ def test_guided_onboarding_happy_path(monkeypatch: pytest.MonkeyPatch, config: G
     assert "The vacuum is connected to the local server." in output.getvalue()
 
 
+def test_choose_device_empty_list_points_to_cloud_import() -> None:
+    output = StringIO()
+
+    selected = choose_device([], output=output)
+
+    assert selected is None
+    assert "Finish the cloud import/fetch-data step first" in output.getvalue()
+
+
 def test_guided_onboarding_handles_extra_cycles(monkeypatch: pytest.MonkeyPatch, config: GuidedOnboardingConfig) -> None:
     api = FakeApi(
         devices=[
@@ -223,6 +233,61 @@ def test_guided_onboarding_handles_extra_cycles(monkeypatch: pytest.MonkeyPatch,
     output_text = output.getvalue()
     assert "The sample count increased." in output_text
     assert "The public key is ready." in output_text
+
+
+def test_poll_session_final_cycle_waits_for_connection_when_public_key_already_ready() -> None:
+    class FinalCycleApi:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_session(self, *, session_id: str) -> dict:
+            assert session_id == "sess-1"
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "session_id": session_id,
+                    "query_samples": 2,
+                    "has_public_key": True,
+                    "public_key_state": "ready",
+                    "connected": False,
+                    "guidance": "Public key is ready.",
+                    "target": {"name": "Q7 Upstairs", "duid": "cloud-q7-a", "did": "1103821560705"},
+                }
+            return {
+                "session_id": session_id,
+                "query_samples": 2,
+                "has_public_key": True,
+                "public_key_state": "ready",
+                "connected": True,
+                "guidance": "Device paired and connected.",
+                "target": {"name": "Q7 Upstairs", "duid": "cloud-q7-a", "did": "1103821560705"},
+            }
+
+    output = StringIO()
+    sleeps: list[float] = []
+
+    result, status = poll_session_until_progress(
+        FinalCycleApi(),
+        session_id="sess-1",
+        baseline_samples=2,
+        baseline_status={
+            "session_id": "sess-1",
+            "query_samples": 2,
+            "has_public_key": True,
+            "public_key_state": "ready",
+            "connected": False,
+            "target": {"name": "Q7 Upstairs", "duid": "cloud-q7-a", "did": "1103821560705"},
+        },
+        output=output,
+        poll_interval_seconds=5.0,
+        timeout_seconds=20.0,
+        sleep_fn=sleeps.append,
+    )
+
+    assert result == "connected"
+    assert status["connected"] is True
+    assert sleeps == [5.0]
+    assert "Waiting for the server to observe new onboarding traffic..." in output.getvalue()
 
 
 def test_guided_onboarding_timeout_can_retry_without_restart(

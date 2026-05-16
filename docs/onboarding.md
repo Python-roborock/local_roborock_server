@@ -2,6 +2,8 @@
 
 Before you start, finish [Installation](installation.md) and make sure the server is reachable on your `api-...` hostname. If you want a compatibility snapshot, also check [Tested vacuums](tested_vacuums.md).
 
+Make sure you have already completed the cloud import/fetch-data step from Installation before starting onboarding. If you skip that step, the onboarding tools will not know which vacuum to target and you can end up with `No known vacuums are available for onboarding.`
+
 If this is a brand new vacuum, it is still a good idea to set it up once in the official Roborock app first so the app can fetch the vacuum's current metadata and confirm the firmware is up to date.
 
 ## Guided Flow
@@ -28,7 +30,7 @@ The guided CLI will:
 4. Ask you to reset the vacuum Wi-Fi, join the vacuum's Wi-Fi network, and press Enter when ready.
 5. Send the cfgwifi onboarding packet.
 6. Ask you to reconnect the second machine to your normal Wi-Fi.
-7. Poll the main server every 5 seconds for up to 5 minutes to see whether query samples increased, the public key was recovered, or the vacuum connected.
+7. Wait for the main server to become reachable again, then poll it every 5 seconds for up to 5 minutes to see whether query samples increased, the public key was recovered, or the vacuum connected.
 8. Tell you whether to retry, wait, choose a different vacuum, or finish.
 
 You do not need to watch the admin dashboard manually during the loop anymore.
@@ -77,10 +79,11 @@ Japan (No DST): `JST-9`
 - The first successful attempt usually increases the query sample count.
 - If the sample count increases but the public key is still missing, run another cycle.
 - Once the public key is ready, the script will tell you to do one final pairing cycle so the vacuum connects fully.
+- Some vacuums are slow on that final cycle and may take a few minutes before they say Wi-Fi connected or show up as connected in the server.
 - Some vacuums need 2-4 cycles total.
 - If something goes wrong, the CLI lets you `retry`, `refresh`, `reselect`, or `quit`.
 
-You still need to reset the vacuum's Wi-Fi manually. On many Roborock models that means holding the two buttons on the dock or the left and right buttons on the vacuum for 3-5 seconds until you hear the Wi-Fi reset prompt. If you are unsure, search for your exact model's Wi-Fi reset steps.
+You still need to reset the vacuum's Wi-Fi manually. On many Roborock models that means holding the two buttons on the dock or the left and right buttons on the vacuum for 3-5 seconds until you hear the Wi-Fi reset prompt. Do a Wi-Fi reset, not a full factory reset. If you are unsure, search for your exact model's Wi-Fi reset steps.
 
 Congrats! Once the script reports that the vacuum is connected to the local server, the onboarding flow is complete.
 
@@ -116,7 +119,7 @@ The UI shows a stepper across the top and walks you through five phases:
 1. **Configure.** Fill in the server host, admin password, your home Wi-Fi SSID and password, timezone, and country domain. The POSIX TZ string and country domain are auto-derived from the timezone if you leave them blank. Same fields as the CLI, just in a form.
 2. **Select vacuum.** The script logs into the main server and lists the known vacuums with pills showing whether each has a public key, is connected, and how many query samples it has. Click one to start a session.
 3. **Send onboarding.** Reset the vacuum's Wi-Fi, join its hotspot on this machine, then click "Send onboarding packet". The script sends the cfgwifi packet to `192.168.8.1` over the hotspot.
-4. **Reconnect and poll.** Switch back to your normal Wi-Fi. The UI waits for the main server to become reachable again (up to two minutes), then polls every few seconds for up to five minutes. If you know you are already back online, click "I'm back online, skip the wait".
+4. **Reconnect and poll.** Switch back to your normal Wi-Fi. The UI waits for the main server to become reachable again (up to two minutes), then polls every few seconds for up to five minutes. That five-minute window is for the vacuum to make progress, not a deadline for you to reconnect instantly. If you know you are already back online, click "I'm back online, skip the wait".
 5. **Done.** The UI tells you whether to run another cycle, pick a different vacuum, or finish.
 
 A live log pane below the stepper shows every packet, status check, and state transition. This is the same information the CLI prints to the terminal.
@@ -133,8 +136,9 @@ Everything in "What To Expect" above still applies. Some vacuums need 2-4 cycles
 
 - **The browser didn't open.** Copy the URL printed in the terminal (including the `?token=...` query string) and open it manually.
 - **"Onboarding send failed" right after clicking send.** You are probably not joined to the vacuum's hotspot yet, or the vacuum is not in pairing mode. Reset its Wi-Fi and try again.
+- **"No known vacuums are available for onboarding."** Go back and finish the cloud import/fetch-data step first so the server has the vacuum inventory.
 - **"Could not reach the server after leaving the vacuum hotspot."** Your machine did not rejoin your normal Wi-Fi within two minutes. Check your network and click Retry.
-- **The UI is stuck on "Polling...".** Give it the full five-minute timeout. If nothing changes, check the log pane for errors, then click Retry or Pick another vacuum.
+- **The UI is stuck on "Polling...".** Give it the full five-minute timeout. Some vacuums are especially slow on the final cycle after the public key is already ready. If nothing changes, check the log pane for errors, then click Retry or Pick another vacuum.
 
 ## Related Docs
 

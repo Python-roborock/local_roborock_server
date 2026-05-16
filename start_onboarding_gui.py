@@ -40,7 +40,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 import uvicorn
 
-from onboarding_shared import build_ssl_context, perform_onboarding_preflight
+from onboarding_shared import perform_onboarding_preflight
 
 
 CFGWIFI_HOST = "192.168.8.1"
@@ -274,7 +274,6 @@ class GuidedOnboardingConfig:
     timezone: str
     cst: str
     country_domain: str
-    allow_insecure_tls: bool = False
 
 
 class RemoteOnboardingApi:
@@ -578,7 +577,6 @@ def _build_config_from_payload(payload: dict[str, Any]) -> GuidedOnboardingConfi
     timezone = str(payload.get("timezone") or "").strip() or DEFAULT_TIMEZONE
     cst = str(payload.get("cst") or "").strip() or posix_tz_from_iana(timezone) or DEFAULT_CST
     country_domain = str(payload.get("country_domain") or "").strip() or country_from_iana(timezone) or DEFAULT_COUNTRY_DOMAIN
-    allow_insecure_tls = bool(payload.get("allow_insecure_tls") or False)
     return GuidedOnboardingConfig(
         api_base_url=api_base_url,
         stack_server=stack_server,
@@ -588,7 +586,6 @@ def _build_config_from_payload(payload: dict[str, Any]) -> GuidedOnboardingConfi
         timezone=timezone,
         cst=cst,
         country_domain=country_domain,
-        allow_insecure_tls=allow_insecure_tls,
     )
 
 
@@ -639,6 +636,8 @@ def _poll_until_progress(
         api: RemoteOnboardingApi,
         session_id: str,
         baseline_samples: int,
+        *,
+        baseline_has_public_key: bool,
 ) -> tuple[str, dict[str, Any]]:
     deadline = time.monotonic() + POLL_TIMEOUT_SECONDS
     latest: dict[str, Any] = {}
@@ -654,9 +653,9 @@ def _poll_until_progress(
             return "conflict", latest
         if bool(latest.get("connected")):
             return "connected", latest
-        if bool(latest.get("has_public_key")):
+        if bool(latest.get("has_public_key")) and not baseline_has_public_key:
             return "public_key_ready", latest
-        if int(latest.get("query_samples") or 0) > baseline_samples:
+        if int(latest.get("query_samples") or 0) > baseline_samples and not baseline_has_public_key:
             return "sample_increased", latest
         if time.monotonic() >= deadline:
             return "timeout", latest
@@ -707,6 +706,7 @@ def _run_onboarding_for_device(
                 continue
 
             baseline = int(status.get("query_samples") or 0)
+            baseline_has_public_key = bool(status.get("has_public_key"))
             _print_status_summary(status, _log)
             _set_phase(
                 "awaiting_vacuum_wifi",
@@ -719,6 +719,11 @@ def _run_onboarding_for_device(
                 error_message=None,
                 can_continue=False,
             )
+            if baseline_has_public_key:
+                _log.info(
+                    "Public key is already ready. This should be the final pairing cycle, "
+                    "but some vacuums still take a few minutes to finish reconnecting."
+                )
 
             result = _wait_for_command({"send_onboarding", "reselect", "quit"})
             if result is None or result[0] == "quit":
@@ -752,7 +757,11 @@ def _run_onboarding_for_device(
 
             # Wait for normal Wi-Fi to come back
             _set_phase("awaiting_normal_wifi")
-            _log.info("Waiting for normal Wi-Fi / server reachability...")
+            _log.info(
+                "Waiting for normal Wi-Fi / server reachability. "
+                "After the server is reachable again, polling can still take up to 5 minutes, "
+                "especially on the final cycle."
+            )
             reachable = _wait_for_reachability(api, session_id, timeout_seconds=120.0)
             if not reachable:
                 _log.err("Could not reach the server after leaving the vacuum hotspot.")
@@ -770,7 +779,12 @@ def _run_onboarding_for_device(
             _log.ok("Server reachable. Polling for progress...")
 
             _set_phase("polling")
-            outcome, latest = _poll_until_progress(api, session_id, baseline)
+            outcome, latest = _poll_until_progress(
+                api,
+                session_id,
+                baseline,
+                baseline_has_public_key=baseline_has_public_key,
+            )
             _print_status_summary(latest, _log)
 
             status_serialized = _serialize_status(latest)
@@ -796,9 +810,15 @@ def _run_onboarding_for_device(
                            result_detail=str(latest.get("identity_conflict") or ""),
                            can_continue=False)
             else:
+                timeout_detail = "The server did not observe new onboarding traffic within the timeout."
+                if baseline_has_public_key and bool(latest.get("has_public_key")) and not bool(latest.get("connected")):
+                    timeout_detail = (
+                        "The public key was already ready, but the vacuum did not finish connecting within the timeout. "
+                        "Some models are slow on the final cycle; wait a bit longer or retry."
+                    )
                 _set_phase("done", status=status_serialized,
                            result_message="Timed out waiting for progress.",
-                           result_detail="The server did not observe new onboarding traffic within the timeout.",
+                           result_detail=timeout_detail,
                            can_continue=True)
 
             result = _wait_for_command({"retry", "reselect", "quit"})
@@ -828,7 +848,10 @@ def _run_device_loop(api: RemoteOnboardingApi, config: GuidedOnboardingConfig) -
         _set_phase("choosing_device", devices=_serialize_devices(devices), target=None,
                    session_id=None, status={}, result_message=None, result_detail=None,
                    error_message=None, can_continue=False)
-        _log.info(f"{len(devices)} device(s) available.")
+        if devices:
+            _log.info(f"{len(devices)} device(s) available.")
+        else:
+            _log.warn("0 device(s) available. Finish the cloud import/fetch-data step first, then refresh.")
 
         result = _wait_for_command({"select_device", "refresh_devices", "quit"})
         if result is None or result[0] == "quit":
@@ -865,22 +888,17 @@ def _worker_loop() -> None:
 
         _set_phase("logging_in", config=config, config_error=None)
         _log.info(f"Validating {config.api_base_url}...")
-        if config.allow_insecure_tls:
-            _log.warn("TLS certificate verification is DISABLED. Preflight will only test reachability.")
-            _ssl_ctx: ssl.SSLContext | None = build_ssl_context(allow_insecure_tls=True)
-        else:
-            _ssl_ctx = None  # use default verification
         api = RemoteOnboardingApi(
             base_url=config.api_base_url,
             admin_password=config.admin_password,
-            ssl_context=_ssl_ctx,
+            ssl_context=None,
         )
 
         try:
             perform_onboarding_preflight(
                 api=api,
                 api_base_url=config.api_base_url,
-                allow_insecure_tls=config.allow_insecure_tls,
+                allow_insecure_tls=False,
                 output=_log,
             )
         except Exception as exc:  # noqa: BLE001
@@ -951,7 +969,6 @@ class ConfigPayload(BaseModel):
     timezone: str = ""
     country_domain: str = ""
     cst: str = ""
-    allow_insecure_tls: bool = False
 
 
 @app.post("/api/config")

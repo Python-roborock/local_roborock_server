@@ -456,14 +456,6 @@
                         <div class="hint">Leave blank unless you need to override it.</div>
                     </div>
 
-                    <div class="field">
-                        <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;">
-                            <input type="checkbox" id="cfg-insecure-tls" />
-                            Skip TLS certificate verification (self-signed certs)
-                        </label>
-                        <div class="hint" style="color:var(--c-warn,#b45309);">&#9888; Only enable if your server uses a self-signed certificate. Disables MITM protection.</div>
-                    </div>
-
                     <div id="cfg-err" class="callout err hidden"></div>
 
                     <div class="actions">
@@ -719,7 +711,6 @@
           timezone: $("cfg-tz").value,
           country_domain: $("cfg-country").value,
           cst: $("cfg-cst").value,
-          allow_insecure_tls: $("cfg-insecure-tls").checked,
         });
       } catch (e) {
         $("cfg-err").innerHTML = `<strong>Could not continue</strong><div class="sub">${escapeHtml(e.message)}</div>`;

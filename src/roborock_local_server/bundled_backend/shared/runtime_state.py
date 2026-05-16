@@ -609,7 +609,10 @@ class RuntimeState:
             guidance = "Device paired and connected."
         elif has_public_key:
             status = "in_progress"
-            guidance = "Public key is ready. Run one more pairing cycle so the vacuum connects."
+            guidance = (
+                "Public key is ready. Run one more pairing cycle so the vacuum connects. "
+                "Some vacuums take a few minutes on this final cycle."
+            )
         elif recovery_state == "recovering":
             status = "in_progress"
             guidance = "Public key recovery is running. Wait for it to finish or retry if it stalls."
@@ -621,10 +624,16 @@ class RuntimeState:
             )
         elif checks["region"] or checks["nc"]:
             status = "in_progress"
-            guidance = "Onboarding traffic was captured. Rejoin your normal Wi-Fi and wait for new server queries."
+            guidance = (
+                "Onboarding traffic was captured. Rejoin your normal Wi-Fi and wait for new server queries. "
+                "Some vacuums take a few minutes before the next step."
+            )
         else:
             status = "waiting"
-            guidance = "Waiting for onboarding traffic from the selected vacuum."
+            guidance = (
+                "Waiting for onboarding traffic from the selected vacuum. If this never changes, confirm "
+                "cloud import is done and the vacuum can resolve and trust your api- hostname."
+            )
 
         target_payload = {
             "did": best_did,
@@ -1030,7 +1039,19 @@ class RuntimeState:
             else:
                 labels = [ONBOARDING_STEP_LABELS.get(step, step) for step in missing_steps]
                 onboarding_status = "collecting_messages"
-                guidance = f"Still waiting for onboarding messages: {', '.join(labels)}."
+                if not onboarding_steps:
+                    guidance = (
+                        f"Still waiting for onboarding messages: {', '.join(labels)}. "
+                        "If this stays empty after a cycle, finish cloud import first and verify LAN DNS/TLS "
+                        "for your api- hostname."
+                    )
+                elif missing_steps == ["nc_prepare"]:
+                    guidance = (
+                        "Still waiting for onboarding messages: NC Prepare. The vacuum reached /region, "
+                        "but some models delay NC Prepare for a few minutes."
+                    )
+                else:
+                    guidance = f"Still waiting for onboarding messages: {', '.join(labels)}."
 
         connected = bool(vac.get("connected"))
         if not connected and last_message_at:
