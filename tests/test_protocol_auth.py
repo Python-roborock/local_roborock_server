@@ -334,6 +334,14 @@ def test_protocol_login_and_onboarding_routes_block_when_new_connections_disable
     assert region_response.status_code == 403
     assert region_response.json()["data"]["flow"] == "onboarding"
 
+    api_region_response = client.get("/api/region")
+    assert api_region_response.status_code == 403
+    assert api_region_response.json()["data"]["flow"] == "onboarding"
+
+    bare_nc_response = client.get("/nc")
+    assert bare_nc_response.status_code == 403
+    assert bare_nc_response.json()["data"]["flow"] == "onboarding"
+
     newadd_response = client.get("/user/devices/newadd")
     assert newadd_response.status_code == 403
     assert newadd_response.json()["data"]["flow"] == "onboarding"

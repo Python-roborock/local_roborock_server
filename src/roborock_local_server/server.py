@@ -689,9 +689,23 @@ class ReleaseSupervisor:
         )
 
     @classmethod
+    def _is_onboarding_region_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized.rstrip("/") in ("", "/region", "/api/region", "/b/region", "/api/b/region")
+
+    @classmethod
+    def _is_onboarding_nc_prepare_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return "nc" in normalized and ("prepare" in normalized or normalized.endswith("/nc"))
+
+    @classmethod
     def _new_connection_flow_for_path(cls, clean_path: str) -> str | None:
         normalized = cls._normalized_path(clean_path)
-        if normalized in {"/region", "/nc/prepare", "/user/devices/newadd"}:
+        if (
+            cls._is_onboarding_region_path(normalized)
+            or cls._is_onboarding_nc_prepare_path(normalized)
+            or normalized == "/user/devices/newadd"
+        ):
             return "onboarding"
         if cls._is_protocol_sync_path(normalized):
             return "protocol_sync"
