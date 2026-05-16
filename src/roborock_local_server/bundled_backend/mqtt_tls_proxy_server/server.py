@@ -41,6 +41,7 @@ class MqttTlsProxy:
         cloud_snapshot_path: Path | None = None,
         protocol_auth_sessions_path: Path | None = None,
         protocol_auth_enabled: Callable[[], bool] | None = None,
+        new_connections_enabled: Callable[[], bool] | None = None,
         runtime_state: RuntimeState | None = None,
         runtime_credentials: RuntimeCredentialsStore | None = None,
         zone_ranges_store: ZoneRangesStore | None = None,
@@ -58,6 +59,7 @@ class MqttTlsProxy:
         self.decoded_jsonl = decoded_jsonl
         self.cloud_snapshot_path = cloud_snapshot_path
         self._protocol_auth_enabled = protocol_auth_enabled or (lambda: True)
+        self._new_connections_enabled = new_connections_enabled or (lambda: True)
         self.runtime_state = runtime_state
         self.runtime_credentials = runtime_credentials
         self.zone_ranges_store = zone_ranges_store
@@ -270,6 +272,8 @@ class MqttTlsProxy:
                 if recovered_device is not None:
                     return True, "device_mqtt_recovered", info, None
             if auth_reason == "unknown_device_mqtt_username":
+                if not self._new_connections_enabled():
+                    return False, "new_connections_disabled", info, None
                 candidate = self._resolve_onboarding_device_mqtt_candidate(
                     client_ip=client_ip,
                     username=username,

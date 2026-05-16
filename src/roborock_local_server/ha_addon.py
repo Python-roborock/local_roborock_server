@@ -202,6 +202,7 @@ def _render_config_toml(
     # The Home Assistant add-on no longer exposes this toggle.
     # Keep protocol auth enabled even if a stale stored option is present.
     protocol_auth_enabled = True
+    new_connections_enabled = True
     protocol_login_email = _require_email(merged.get("protocol_login_email"), field_name="protocol_login_email")
     protocol_login_pin = _require_pin(merged.get("protocol_login_pin"), field_name="protocol_login_pin")
 
@@ -272,6 +273,7 @@ def _render_config_toml(
             f"session_secret = {_toml_string(admin_session_secret)}",
             "session_ttl_seconds = 86400",
             f"protocol_auth_enabled = {_toml_bool(protocol_auth_enabled)}",
+            f"new_connections_enabled = {_toml_bool(new_connections_enabled)}",
             f"protocol_login_email = {_toml_string(protocol_login_email)}",
             f"protocol_login_pin_hash = {_toml_string(protocol_login_pin_hash)}",
             "",

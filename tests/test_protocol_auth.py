@@ -87,8 +87,13 @@ def _build_supervisor_with_protocol_toggle(
     tmp_path: Path,
     *,
     protocol_auth_enabled: bool,
+    new_connections_enabled: bool = True,
 ) -> tuple[ReleaseSupervisor, object]:
-    config_file = write_release_config(tmp_path, protocol_auth_enabled=protocol_auth_enabled)
+    config_file = write_release_config(
+        tmp_path,
+        protocol_auth_enabled=protocol_auth_enabled,
+        new_connections_enabled=new_connections_enabled,
+    )
     config = load_config(config_file)
     paths = resolve_paths(config_file, config)
     _write_json(paths.inventory_path, {"home": {"id": 12345, "name": "Test Home"}, "devices": []})
@@ -307,6 +312,39 @@ def test_protocol_password_login_is_rejected(tmp_path: Path) -> None:
     response = client.post("/api/v5/auth/email/login/pwd", json={"email": "user@example.com", "password": "secret"})
     assert response.status_code == 400
     assert response.json()["msg"] == "password_login_not_supported"
+
+
+def test_protocol_login_and_onboarding_routes_block_when_new_connections_disabled(tmp_path: Path) -> None:
+    supervisor, _paths = _build_supervisor_with_protocol_toggle(
+        tmp_path,
+        protocol_auth_enabled=True,
+        new_connections_enabled=False,
+    )
+    client = TestClient(supervisor.app)
+
+    login_response = client.post(
+        "/api/v5/auth/email/login/code",
+        json={"email": "user@example.com", "code": "123456"},
+    )
+    assert login_response.status_code == 403
+    assert login_response.json()["msg"] == "new_connections_disabled"
+    assert login_response.json()["data"]["flow"] == "login"
+
+    region_response = client.get("/region")
+    assert region_response.status_code == 403
+    assert region_response.json()["data"]["flow"] == "onboarding"
+
+    api_region_response = client.get("/api/region")
+    assert api_region_response.status_code == 403
+    assert api_region_response.json()["data"]["flow"] == "onboarding"
+
+    bare_nc_response = client.get("/nc")
+    assert bare_nc_response.status_code == 403
+    assert bare_nc_response.json()["data"]["flow"] == "onboarding"
+
+    newadd_response = client.get("/user/devices/newadd")
+    assert newadd_response.status_code == 403
+    assert newadd_response.json()["data"]["flow"] == "onboarding"
 
 
 def test_protocol_sync_route_persists_additional_sessions_and_redacts_logs(tmp_path: Path) -> None:

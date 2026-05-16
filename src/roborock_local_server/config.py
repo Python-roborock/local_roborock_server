@@ -60,6 +60,7 @@ class AdminConfig:
     session_secret: str
     session_ttl_seconds: int
     protocol_auth_enabled: bool
+    new_connections_enabled: bool
     protocol_login_email: str
     protocol_login_pin_hash: str
 
@@ -247,6 +248,7 @@ def load_config(path: str | Path) -> AppConfig:
             session_secret=_require_non_empty(admin.get("session_secret"), "admin.session_secret"),
             session_ttl_seconds=_as_int(admin.get("session_ttl_seconds"), "admin.session_ttl_seconds", 86400),
             protocol_auth_enabled=_as_bool(admin.get("protocol_auth_enabled"), True),
+            new_connections_enabled=_as_bool(admin.get("new_connections_enabled"), True),
             protocol_login_email=_require_non_empty(admin.get("protocol_login_email"), "admin.protocol_login_email"),
             protocol_login_pin_hash=_require_non_empty(
                 admin.get("protocol_login_pin_hash"),
