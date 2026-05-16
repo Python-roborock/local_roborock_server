@@ -58,10 +58,10 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           <button id="fetchData">Fetch Data</button>
           <pre id="cloudResult">No cloud request yet.</pre>
         </section>
-        <section><h2>Protocol Auth</h2>
-          <label><input id="protocolAuthEnabled" type="checkbox" /> Require token/Hawk auth on protocol API routes</label>
-          <button id="saveAuth" style="margin-left:8px">Save</button>
-          <div id="authMeta" style="margin-top:8px;color:#333">Loading auth state...</div>
+        <section><h2>New Connections</h2>
+          <label><input id="newConnectionsEnabled" type="checkbox" /> Allow new app logins, onboarding, and first-time vacuum connections</label>
+          <button id="saveConnections" style="margin-left:8px">Save</button>
+          <div id="authMeta" style="margin-top:8px;color:#333">Loading connection state...</div>
           <div style="margin-top:12px">
             <div style="font-weight:600">Protocol Sync Secret</div>
             <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -71,6 +71,7 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
             <div id="syncSecretMeta" style="margin-top:6px;color:#555">Use this with <code>mitm_redirect.py --sync-secret ...</code>.</div>
           </div>
           <div id="pendingRecovery" style="margin-top:8px"></div>
+          <div style="margin-top:12px;font-weight:600">Protocol Sessions</div>
           <div id="sessionList" style="display:grid;gap:8px;margin-top:12px">Loading sessions...</div>
         </section>
 
@@ -144,10 +145,10 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           }}
         }}
         function renderAuth(auth) {{
-          const enabled = Boolean(auth.protocol_auth_enabled);
-          document.getElementById("protocolAuthEnabled").checked = enabled;
+          const enabled = Boolean(auth.new_connections_enabled);
+          document.getElementById("newConnectionsEnabled").checked = enabled;
           document.getElementById("authMeta").textContent =
-            `Protocol auth: ${{enabled ? "Enabled" : "Disabled"}}. Persisted sessions: ${{Number(auth.protocol_session_count || 0)}}.`;
+            `New connections: ${{enabled ? "Allowed" : "Blocked"}}. Persisted sessions: ${{Number(auth.protocol_session_count || 0)}}.`;
           const sessionSecret = String(auth.admin_session_secret || "");
           document.getElementById("adminSessionSecret").value = sessionSecret;
           document.getElementById("syncSecretMeta").textContent = sessionSecret
@@ -246,13 +247,13 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
             document.getElementById("cloudResult").textContent = error.message;
           }}
         }});
-        document.getElementById("saveAuth").addEventListener("click", async () => {{
+        document.getElementById("saveConnections").addEventListener("click", async () => {{
           try {{
             const payload = await fetchJson("/admin/api/auth", {{
               method: "POST",
               headers: {{"Content-Type":"application/json"}},
               body: JSON.stringify({{
-                protocol_auth_enabled: document.getElementById("protocolAuthEnabled").checked
+                new_connections_enabled: document.getElementById("newConnectionsEnabled").checked
               }})
             }});
             renderAuth(payload);
@@ -355,16 +356,28 @@ def register_standalone_admin_routes(
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
         if not isinstance(body, dict):
             return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
-        if "protocol_auth_enabled" not in body:
-            return JSONResponse({"error": "protocol_auth_enabled is required"}, status_code=400)
-        protocol_auth_enabled = body.get("protocol_auth_enabled")
-        if not isinstance(protocol_auth_enabled, bool):
-            return JSONResponse({"error": "protocol_auth_enabled must be a boolean"}, status_code=400)
-        try:
-            payload = supervisor.set_protocol_auth_enabled(protocol_auth_enabled)
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": str(exc)}, status_code=500)
-        return JSONResponse(payload)
+        if "new_connections_enabled" in body:
+            new_connections_enabled = body.get("new_connections_enabled")
+            if not isinstance(new_connections_enabled, bool):
+                return JSONResponse({"error": "new_connections_enabled must be a boolean"}, status_code=400)
+            try:
+                payload = supervisor.set_new_connections_enabled(new_connections_enabled)
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse({"error": str(exc)}, status_code=500)
+            return JSONResponse(payload)
+        if "protocol_auth_enabled" in body:
+            protocol_auth_enabled = body.get("protocol_auth_enabled")
+            if not isinstance(protocol_auth_enabled, bool):
+                return JSONResponse({"error": "protocol_auth_enabled must be a boolean"}, status_code=400)
+            try:
+                payload = supervisor.set_protocol_auth_enabled(protocol_auth_enabled)
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse({"error": str(exc)}, status_code=500)
+            return JSONResponse(payload)
+        return JSONResponse(
+            {"error": "new_connections_enabled or protocol_auth_enabled is required"},
+            status_code=400,
+        )
 
     @app.delete("/admin/api/auth/sessions/{hawk_id}/{hawk_session}")
     async def admin_auth_delete_session(hawk_id: str, hawk_session: str, request: Request) -> JSONResponse:

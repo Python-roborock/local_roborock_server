@@ -52,6 +52,7 @@ def test_write_config_from_home_assistant_options_provided_tls(tmp_path: Path) -
     assert parsed["tls"]["cert_file"] == "/ssl/fullchain.pem"
     assert parsed["tls"]["key_file"] == "/ssl/privkey.pem"
     assert parsed["admin"]["protocol_auth_enabled"] is True
+    assert parsed["admin"]["new_connections_enabled"] is True
     assert parsed["admin"]["protocol_login_email"] == "user@example.com"
     assert len(str(parsed["admin"]["session_secret"])) >= 24
     assert str(parsed["admin"]["password_hash"]).startswith("pbkdf2_sha256$")
@@ -107,6 +108,7 @@ def test_write_config_from_home_assistant_options_ignores_legacy_protocol_auth_t
 
     parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert parsed["admin"]["protocol_auth_enabled"] is True
+    assert parsed["admin"]["new_connections_enabled"] is True
 
 
 def test_write_config_from_home_assistant_options_reuses_existing_session_secret(tmp_path: Path) -> None:

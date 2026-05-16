@@ -525,6 +525,85 @@ def test_authorize_connect_accepts_unknown_device_credentials_only_for_matching_
     assert rejected_candidate is None
 
 
+def test_authorize_connect_rejects_onboarding_candidate_when_new_connections_disabled(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    key_state_path = tmp_path / "device_key_state.json"
+    _seed_key_state(key_state_path, did="1103821560705")
+    runtime_credentials_path = tmp_path / "runtime_credentials.json"
+    _write_json(
+        runtime_credentials_path,
+        {
+            "schema_version": 2,
+            "mqtt_usr": "bootstrap-user",
+            "mqtt_passwd": "bootstrap-pass",
+            "mqtt_clientid": "bootstrap-client",
+            "devices": [
+                {
+                    "did": "1103821560705",
+                    "duid": "6HL2zfniaoYYV01CkVuhkO",
+                    "name": "Roborock Qrevo MaxV 2",
+                    "model": "roborock.vacuum.a87",
+                    "product_id": "5gUei3OIJIXVD3eD85Balg",
+                    "localkey": "xPd5Dr8CGGqtdDlH",
+                    "local_key_source": "inventory",
+                    "device_mqtt_usr": "",
+                    "device_mqtt_pass": "",
+                    "updated_at": "2026-04-17T17:00:00+00:00",
+                    "last_nc_at": "",
+                    "last_mqtt_seen_at": "",
+                }
+            ],
+        },
+    )
+    runtime_credentials = RuntimeCredentialsStore(runtime_credentials_path)
+    runtime_state = RuntimeState(log_dir=tmp_path, key_state_file=key_state_path, runtime_credentials=runtime_credentials)
+    runtime_state.upsert_vacuum("6HL2zfniaoYYV01CkVuhkO", name="Roborock Qrevo MaxV 2", id_kind="duid")
+    runtime_state.start_onboarding_session(target_duid="6HL2zfniaoYYV01CkVuhkO", target_name="Roborock Qrevo MaxV 2")
+    event_time = datetime.now(timezone.utc).isoformat()
+    for route_name, path_name in (("region", "/region"), ("nc_prepare", "/nc")):
+        runtime_state.record_http_event(
+            event_time=event_time,
+            route_name=route_name,
+            clean_path=path_name,
+            raw_path=path_name,
+            method="GET",
+            host="api-roborock.example.com",
+            remote="192.168.8.10:54321",
+            did="1103821560705",
+        )
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        runtime_state=runtime_state,
+        runtime_credentials=runtime_credentials,
+        new_connections_enabled=lambda: False,
+    )
+
+    packet = _build_connect_packet(
+        client_id="a012391cb5f8bc97",
+        username="c25b14ceac358d2a",
+        password="ff8922d24a9a9af81f18f35dcee9a5a5",
+    )
+    authorized, reason, info, candidate = proxy._authorize_connect_packet_for_client(
+        packet,
+        client_ip="192.168.8.10",
+    )
+
+    assert authorized is False
+    assert reason == "new_connections_disabled"
+    assert info is not None
+    assert candidate is None
+
+
 def test_trace_packet_persists_confirmed_onboarding_device_mqtt_credentials(tmp_path) -> None:
     cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
     _seed_cloud_snapshot(cloud_snapshot_path)

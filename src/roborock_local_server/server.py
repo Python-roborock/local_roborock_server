@@ -491,6 +491,9 @@ class ReleaseSupervisor:
     def protocol_auth_enabled(self) -> bool:
         return bool(self.config.admin.protocol_auth_enabled)
 
+    def new_connections_enabled(self) -> bool:
+        return bool(self.config.admin.new_connections_enabled)
+
     def _protocol_login_email(self) -> str:
         return str(self.config.admin.protocol_login_email or "").strip()
 
@@ -667,6 +670,36 @@ class ReleaseSupervisor:
         }
 
     @classmethod
+    def _is_login_flow_path(cls, clean_path: str) -> bool:
+        normalized = cls._normalized_path(clean_path)
+        return normalized in {
+            "/api/v1/getUrlByEmail",
+            "/api/v1/ml/c",
+            "/api/v3/key/sign",
+            "/api/v4/key/captcha",
+        } or any(
+            checker(normalized)
+            for checker in (
+                cls._is_code_send_path,
+                cls._is_code_validate_path,
+                cls._is_code_submit_path,
+                cls._is_password_login_path,
+                cls._is_password_reset_path,
+            )
+        )
+
+    @classmethod
+    def _new_connection_flow_for_path(cls, clean_path: str) -> str | None:
+        normalized = cls._normalized_path(clean_path)
+        if normalized in {"/region", "/nc/prepare", "/user/devices/newadd"}:
+            return "onboarding"
+        if cls._is_protocol_sync_path(normalized):
+            return "protocol_sync"
+        if cls._is_login_flow_path(normalized):
+            return "login"
+        return None
+
+    @classmethod
     def _required_protocol_auth(cls, clean_path: str) -> str | None:
         normalized = cls._normalized_path(clean_path)
         if cls._is_public_protocol_path(normalized):
@@ -729,6 +762,14 @@ class ReleaseSupervisor:
             missing_fields=list(availability.missing_fields) or None,
         )
         return 412, payload
+
+    @staticmethod
+    def _new_connections_disabled_payload(flow: str) -> tuple[int, dict[str, Any]]:
+        return 403, {
+            "code": 40301,
+            "msg": "new_connections_disabled",
+            "data": {"reason": "new_connections_disabled", "flow": flow},
+        }
 
     @classmethod
     def _is_protocol_sync_path(cls, clean_path: str) -> bool:
@@ -946,6 +987,38 @@ class ReleaseSupervisor:
                 "query_sample_added": query_sample_added,
                 "header_sample_added": header_sample_added,
             }
+
+        blocked_flow = None if self.new_connections_enabled() else self._new_connection_flow_for_path(clean_path)
+        if blocked_flow is not None:
+            route_name = f"new_connections_disabled_{blocked_flow}"
+            status_code, response_payload = self._new_connections_disabled_payload(blocked_flow)
+            entry["route"] = route_name
+            entry["response_json"] = response_payload
+            try:
+                self.runtime_state.record_http_event(
+                    event_time=str(entry["time"]),
+                    route_name=route_name,
+                    clean_path=clean_path,
+                    raw_path=raw_path,
+                    method=request.method,
+                    host=host,
+                    remote=str(entry["remote"]),
+                    did=explicit_did or None,
+                    pid=explicit_pid or None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("runtime_state record_http_event failed: %s", exc)
+            append_jsonl(self.context.http_jsonl, entry)
+            logger.info(
+                "%s %s host=%s route=%s status=%d body_sha256=%s",
+                request.method,
+                clean_path,
+                host or "-",
+                route_name,
+                status_code,
+                body_sha256[:16],
+            )
+            return JSONResponse(response_payload, status_code=status_code)
 
         custom_sync = await self._handle_protocol_sync_route(
             method=request.method,
@@ -1304,6 +1377,7 @@ class ReleaseSupervisor:
         ]
         return {
             "protocol_auth_enabled": self.protocol_auth_enabled(),
+            "new_connections_enabled": self.new_connections_enabled(),
             "admin_session_secret": self.config.admin.session_secret,
             "protocol_sessions": sessions,
             "protocol_session_count": len(sessions),
@@ -1358,10 +1432,18 @@ class ReleaseSupervisor:
         self.config = load_config(self.paths.config_file)
         return self._auth_payload()
 
+    def set_new_connections_enabled(self, enabled: bool) -> dict[str, Any]:
+        normalized_enabled = bool(enabled)
+        self._rewrite_admin_bool_setting(key="new_connections_enabled", value=normalized_enabled)
+        self.config = load_config(self.paths.config_file)
+        return self._auth_payload()
+
     def remove_protocol_session(self, *, hawk_id: str, hawk_session: str) -> bool:
         return self.protocol_auth.remove_session(hawk_id=hawk_id, hawk_session=hawk_session)
 
     def start_onboarding_session(self, *, duid: str) -> dict[str, Any]:
+        if not self.new_connections_enabled():
+            raise ValueError("New connections are disabled.")
         normalized_duid = str(duid or "").strip()
         if not normalized_duid:
             raise ValueError("duid is required")
@@ -1500,6 +1582,7 @@ class ReleaseSupervisor:
             cloud_snapshot_path=self.paths.cloud_snapshot_path,
             protocol_auth_sessions_path=self.paths.protocol_auth_sessions_path,
             protocol_auth_enabled=self.protocol_auth_enabled,
+            new_connections_enabled=self.new_connections_enabled,
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self.context.zone_ranges_store,

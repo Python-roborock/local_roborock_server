@@ -242,7 +242,8 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
     dashboard_page = client.get("/admin")
     assert dashboard_page.status_code == 200
     assert "Cloud Import" in dashboard_page.text
-    assert "Protocol Auth" in dashboard_page.text
+    assert "New Connections" in dashboard_page.text
+    assert "Allow new app logins, onboarding, and first-time vacuum connections" in dashboard_page.text
     assert "Protocol Sync Secret" in dashboard_page.text
 
     assert "Num query samples" in dashboard_page.text
@@ -261,7 +262,7 @@ def test_admin_login_and_status_flow(tmp_path: Path) -> None:
     assert status_after_logout.status_code == 401
 
 
-def test_admin_auth_endpoints_toggle_protocol_auth_and_manage_sessions(tmp_path: Path) -> None:
+def test_admin_auth_endpoints_toggle_new_connections_and_manage_sessions(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
     paths = resolve_paths(config_file, config)
@@ -283,17 +284,22 @@ def test_admin_auth_endpoints_toggle_protocol_auth_and_manage_sessions(tmp_path:
     assert auth_payload.status_code == 200
     auth_json = auth_payload.json()
     assert auth_json["protocol_auth_enabled"] is True
+    assert auth_json["new_connections_enabled"] is True
     assert auth_json["admin_session_secret"] == config.admin.session_secret
     assert auth_json["protocol_session_count"] >= 1
     session = next(item for item in auth_json["protocol_sessions"] if item["hawk_id"] == issued["rriot"]["u"])
 
-    toggled = client.post("/admin/api/auth", json={"protocol_auth_enabled": False})
+    toggled = client.post("/admin/api/auth", json={"new_connections_enabled": False})
     assert toggled.status_code == 200
-    assert toggled.json()["protocol_auth_enabled"] is False
-    assert 'protocol_auth_enabled = false' in paths.config_file.read_text(encoding="utf-8")
+    assert toggled.json()["new_connections_enabled"] is False
+    assert 'new_connections_enabled = false' in paths.config_file.read_text(encoding="utf-8")
 
-    unauthed_home = client.get("/api/v1/getHomeDetail")
-    assert unauthed_home.status_code == 200
+    blocked_login = client.post(
+        "/api/v5/auth/email/login/code",
+        json={"email": "user@example.com", "code": "123456"},
+    )
+    assert blocked_login.status_code == 403
+    assert blocked_login.json()["msg"] == "new_connections_disabled"
 
     deleted = client.delete(f"/admin/api/auth/sessions/{session['hawk_id']}/{session['hawk_session']}")
     assert deleted.status_code == 200
@@ -314,9 +320,9 @@ def test_admin_auth_update_rejects_invalid_payload_types(tmp_path: Path) -> None
     login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
     assert login.status_code == 200
 
-    invalid_string = client.post("/admin/api/auth", json={"protocol_auth_enabled": "false"})
+    invalid_string = client.post("/admin/api/auth", json={"new_connections_enabled": "false"})
     assert invalid_string.status_code == 400
-    assert invalid_string.json()["error"] == "protocol_auth_enabled must be a boolean"
+    assert invalid_string.json()["error"] == "new_connections_enabled must be a boolean"
 
     invalid_container = client.post("/admin/api/auth", json=["not-an-object"])
     assert invalid_container.status_code == 400
@@ -329,6 +335,10 @@ def test_admin_auth_update_rejects_invalid_payload_types(tmp_path: Path) -> None
     )
     assert invalid_json.status_code == 400
     assert invalid_json.json()["error"] == "Invalid JSON body"
+
+    missing_toggle = client.post("/admin/api/auth", json={})
+    assert missing_toggle.status_code == 400
+    assert missing_toggle.json()["error"] == "new_connections_enabled or protocol_auth_enabled is required"
 
 
 def test_set_protocol_auth_enabled_rewrites_only_exact_admin_key(tmp_path: Path) -> None:
@@ -352,6 +362,29 @@ def test_set_protocol_auth_enabled_rewrites_only_exact_admin_key(tmp_path: Path)
     assert "protocol_auth_enabled_backup = true" in rendered
     assert "protocol_auth_enabled = false" in rendered
     assert rendered.count("protocol_auth_enabled = false") == 1
+
+
+def test_set_new_connections_enabled_rewrites_only_exact_admin_key(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    original = config_file.read_text(encoding="utf-8")
+    modified = original.replace(
+        "new_connections_enabled = true",
+        "# new_connections_enabled = true\nnew_connections_enabled_backup = true",
+    )
+    config_file.write_text(modified, encoding="utf-8")
+
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+
+    payload = supervisor.set_new_connections_enabled(False)
+
+    rendered = config_file.read_text(encoding="utf-8")
+    assert payload["new_connections_enabled"] is False
+    assert "# new_connections_enabled = true" in rendered
+    assert "new_connections_enabled_backup = true" in rendered
+    assert "new_connections_enabled = false" in rendered
+    assert rendered.count("new_connections_enabled = false") == 1
 
 
 def test_admin_onboarding_endpoints_require_auth_and_manage_session(tmp_path: Path) -> None:
@@ -455,6 +488,40 @@ def test_admin_onboarding_endpoints_require_auth_and_manage_session(tmp_path: Pa
 
     deleted_missing = client.get(f"/admin/api/onboarding/sessions/{session_id}")
     assert deleted_missing.status_code == 404
+
+
+def test_admin_onboarding_start_is_blocked_when_new_connections_disabled(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path, new_connections_enabled=False)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps(
+            {
+                "devices": [
+                    {
+                        "duid": "cloud-q7-a",
+                        "did": "1103821560705",
+                        "name": "Q7 Upstairs",
+                        "model": "roborock.vacuum.sc05",
+                        "product_id": "product-q7-a",
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    supervisor.refresh_inventory_state()
+    client = TestClient(supervisor.app)
+
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
+
+    started = client.post("/admin/api/onboarding/sessions", json={"duid": "cloud-q7-a"})
+    assert started.status_code == 400
+    assert started.json()["error"] == "New connections are disabled."
 
 
 def test_core_only_mode_disables_standalone_admin_routes(tmp_path: Path) -> None:
