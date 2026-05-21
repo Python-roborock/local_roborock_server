@@ -667,6 +667,127 @@ def _save_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _load_existing_inventory_for_merge(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _record_identity(record: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = record.get(key)
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _merge_record_lists_by_identity(
+    cloud_records: Any,
+    local_records: Any,
+    *,
+    identity_keys: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    index_by_identity: dict[str, int] = {}
+
+    for raw in cloud_records if isinstance(cloud_records, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        record = dict(raw)
+        identity = _record_identity(record, identity_keys)
+        if identity is not None and identity not in index_by_identity:
+            index_by_identity[identity] = len(merged)
+        merged.append(record)
+
+    for raw in local_records if isinstance(local_records, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        record = dict(raw)
+        identity = _record_identity(record, identity_keys)
+        if identity is not None and identity in index_by_identity:
+            merged[index_by_identity[identity]] = record
+            continue
+        if identity is not None:
+            index_by_identity[identity] = len(merged)
+        merged.append(record)
+
+    return merged
+
+
+def _merge_scene_order(cloud_order: Any, local_order: Any) -> list[Any]:
+    if not isinstance(local_order, list) or not local_order:
+        return list(cloud_order) if isinstance(cloud_order, list) else []
+
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for value in [*local_order, *(cloud_order if isinstance(cloud_order, list) else [])]:
+        normalized = str(value).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(value)
+    return merged
+
+
+def _inventory_rooms(inventory: dict[str, Any]) -> Any:
+    rooms = inventory.get("rooms")
+    if isinstance(rooms, list):
+        return rooms
+    home = inventory.get("home")
+    if isinstance(home, dict) and isinstance(home.get("rooms"), list):
+        return home.get("rooms")
+    return []
+
+
+def _merge_existing_inventory_mutations(
+    cloud_inventory: dict[str, Any],
+    existing_inventory: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Preserve local app mutations when refreshing cloud-derived inventory."""
+
+    if not isinstance(existing_inventory, dict) or not existing_inventory:
+        return cloud_inventory
+
+    merged = dict(cloud_inventory)
+
+    rooms = _merge_record_lists_by_identity(
+        _inventory_rooms(merged),
+        _inventory_rooms(existing_inventory),
+        identity_keys=("id", "room_id", "roomId"),
+    )
+    if rooms:
+        merged["rooms"] = rooms
+        home = dict(merged.get("home")) if isinstance(merged.get("home"), dict) else {}
+        home["rooms"] = rooms
+        merged["home"] = home
+
+    scenes = _merge_record_lists_by_identity(
+        merged.get("scenes"),
+        existing_inventory.get("scenes"),
+        identity_keys=("id", "scene_id", "sceneId"),
+    )
+    if scenes:
+        merged["scenes"] = scenes
+
+    home_scenes = _merge_record_lists_by_identity(
+        merged.get("home_scenes"),
+        existing_inventory.get("home_scenes"),
+        identity_keys=("id", "scene_id", "sceneId"),
+    )
+    if home_scenes:
+        merged["home_scenes"] = home_scenes
+
+    merged["scene_order"] = _merge_scene_order(merged.get("scene_order"), existing_inventory.get("scene_order"))
+    return merged
+
+
 async def _request_cloud_login_code(email: str, base_url: str | None) -> dict[str, Any]:
     normalized_email = email.strip()
     if not normalized_email:
@@ -862,12 +983,16 @@ async def _main_async() -> None:
         "home_data": _to_jsonable(home_data),
         "web_api_cache": _to_jsonable(web_cache),
     }
+    normalized_inventory = _merge_existing_inventory_mutations(
+        _to_jsonable(inventory),
+        _load_existing_inventory_for_merge(args.output),
+    )
 
     if args.print_only:
-        print(json.dumps(_to_jsonable(inventory), indent=2))
+        print(json.dumps(normalized_inventory, indent=2))
     else:
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(_to_jsonable(inventory), indent=2) + "\n", encoding="utf-8")
+        args.output.write_text(json.dumps(normalized_inventory, indent=2) + "\n", encoding="utf-8")
         print(f"Wrote inventory: {args.output}")
         if not args.no_full_snapshot:
             full_snapshot_output = (
@@ -882,14 +1007,14 @@ async def _main_async() -> None:
             )
             print(f"Wrote full snapshot: {full_snapshot_output}")
 
-    device_names = [device.get("name", "<unnamed>") for device in inventory.get("devices", [])]
-    shared_names = [device.get("name", "<unnamed>") for device in inventory.get("received_devices", [])]
-    print(f"Home: {inventory.get('home', {}).get('name', '<unknown>')}")
-    print(f"Rooms ({len(inventory.get('rooms', []))}): cached")
-    print(f"Scenes ({len(inventory.get('scenes', []))}): cached")
+    device_names = [device.get("name", "<unnamed>") for device in normalized_inventory.get("devices", [])]
+    shared_names = [device.get("name", "<unnamed>") for device in normalized_inventory.get("received_devices", [])]
+    print(f"Home: {normalized_inventory.get('home', {}).get('name', '<unknown>')}")
+    print(f"Rooms ({len(normalized_inventory.get('rooms', []))}): cached")
+    print(f"Scenes ({len(normalized_inventory.get('scenes', []))}): cached")
     print(
         "Schedules ("
-        f"{sum(len(value) for value in inventory.get('schedules', {}).values() if isinstance(value, list))}"
+        f"{sum(len(value) for value in normalized_inventory.get('schedules', {}).values() if isinstance(value, list))}"
         "): cached"
     )
     print(f"Devices ({len(device_names)}): {', '.join(device_names) if device_names else 'none'}")

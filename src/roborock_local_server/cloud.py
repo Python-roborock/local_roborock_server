@@ -19,6 +19,8 @@ from .backend import (
     _fetch_additional_web_cache,
     _fetch_cloud_home_data_with_api,
     _flatten_device_scenes,
+    _load_existing_inventory_for_merge,
+    _merge_existing_inventory_mutations,
     _normalize_dict_list,
     _normalize_dict_map,
     _normalize_room_list,
@@ -172,6 +174,10 @@ class CloudImportManager:
         }
         normalized_inventory = _to_jsonable(inventory)
         normalized_snapshot = _to_jsonable(snapshot)
+        normalized_inventory = _merge_existing_inventory_mutations(
+            normalized_inventory,
+            _load_existing_inventory_for_merge(self.inventory_path),
+        )
 
         self.inventory_path.parent.mkdir(parents=True, exist_ok=True)
         self.inventory_path.write_text(json.dumps(normalized_inventory, indent=2) + "\n", encoding="utf-8")
