@@ -40,7 +40,7 @@ Legend:
 | Roborock Saros 10R | ❓ | ❓ | ✅ | ❓ |
 | Roborock G30U | ✅ | ❓ | ❓ | ❓ |
 | Roborock Qrevo S5V | ❓ | ❓ | ❓ | ❓ |
-| QRevo MaxV | ❓ | ❓ | ❓ | ❓ |
+| QRevo MaxV | ✅ | ❓ | ✅ | ❓ |
 | QRevo Master | ❓ | ❓ | ❓ | ❓ |
 | QRevo Plus | ✅ | ❓ | ❓ | ❓ |
 
