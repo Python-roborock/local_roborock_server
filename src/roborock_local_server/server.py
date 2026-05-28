@@ -1650,6 +1650,8 @@ class ReleaseSupervisor:
             self._topic_bridge = MqttTopicBridge(
                 host=self.config.broker.host,
                 port=self.config.broker.port,
+                username=self.config.broker.username,
+                password=self.config.broker.password,
                 logger=self.loggers["mqtt"],
                 runtime_state=self.runtime_state,
                 inventory_path=self.paths.inventory_path,
@@ -1677,6 +1679,8 @@ class ReleaseSupervisor:
             self.config.broker.mode,
             self.config.broker.host,
             self.config.broker.port,
+            self.config.broker.username,
+            self.config.broker.password,
         )
 
         if self.config.tls.mode == "cloudflare_acme":
