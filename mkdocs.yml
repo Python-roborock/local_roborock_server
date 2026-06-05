@@ -53,6 +53,7 @@ nav:
     - Home Assistant: home_assistant.md
     - Cloudflare Setup: cloudflare_setup.md
     - Onboarding: onboarding.md
+    - Updating: updating.md
   - Integrations:
     - Using the Roborock App: roborock_app.md
   - Reference:

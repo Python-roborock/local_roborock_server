@@ -10,6 +10,7 @@ Use this page as the main docs hub for setup, onboarding, and follow-up guides.
    - or use [Home Assistant](home_assistant.md) to install the stack as a Home Assistant add-on
 3. Use [Cloudflare setup](cloudflare_setup.md) if you want Cloudflare DNS-01 auto-renew for certificates.
 4. Run [Onboarding](onboarding.md) from a second machine after the server is running.
+5. Use [Updating](updating.md) when moving an existing install to a newer stable release.
 
 ## Support This Project
 
@@ -20,6 +21,7 @@ If you want to support this project, next time you buy a Roborock, use one of my
 - [Known limitations](known_limitations.md)
 - [Home Assistant](home_assistant.md)
 - [Using the Roborock App](roborock_app.md)
+- [Updating](updating.md)
 - [Tested vacuums](tested_vacuums.md)
 - [Custom MQTT](custom_mqtt.md)
 - [Custom certificate management](custom_cert_management.md)

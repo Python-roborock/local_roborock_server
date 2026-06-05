@@ -30,7 +30,9 @@ After the dashboard opens:
 
 This add-on does not auto-edit Home Assistant's Roborock config entry. You still need to update `.storage/core.config_entries` so Home Assistant points at your local stack.
 
-After updating `username`, `base_url`, `rriot.r.a`, `rriot.r.l`, and `rriot.r.m`, restart Home Assistant and use **Reconfigure** on the Roborock integration. Enter `protocol_login_email` as the account and `protocol_login_pin` as the code.
+Disable the Roborock integration before editing `.storage/core.config_entries`. Update `username`, `base_url`, `rriot.r.a`, `rriot.r.l`, and `rriot.r.m`, then restart home assistant and enable the integration.
+
+Use **Reconfigure** on the Roborock integration after Home Assistant has loaded the local endpoint data. Enter `protocol_login_email` as the account and `protocol_login_pin` as the code. If **Reconfigure** is not available yet, restart Home Assistant and reopen the integration.
 
 ## Notes
 

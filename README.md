@@ -49,6 +49,7 @@ Start here if this is your first time setting up the stack:
 2. [Home Assistant](docs/home_assistant.md) if you want to install the stack as a Home Assistant add-on instead of Docker Compose.
 3. [Cloudflare setup](docs/cloudflare_setup.md) if you want Cloudflare DNS-01 auto-renew for certificates.
 4. [Onboarding](docs/onboarding.md) to pair a vacuum from a second machine after the server is running.
+5. [Updating](docs/updating.md) if you already have an install and are moving to a newer stable release.
 
 Before choosing a certificate path, check [Tested vacuums](docs/tested_vacuums.md). Different models do not all accept the same certificate chains. For most users, start with ZeroSSL. Use Actalis mainly for older vacuums or models that are already known to trust that chain more reliably.
 
@@ -59,6 +60,7 @@ Additional docs:
 - [Tested vacuums](docs/tested_vacuums.md)
 - [Home Assistant](docs/home_assistant.md) for the add-on install path and Home Assistant integration rewiring
 - [Using the Roborock App](docs/roborock_app.md)
+- [Updating](docs/updating.md)
 - [Custom MQTT](docs/custom_mqtt.md)
 - [Custom certificate management](docs/custom_cert_management.md)
 

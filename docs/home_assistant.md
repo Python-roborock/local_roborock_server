@@ -71,11 +71,27 @@ If you need the MITM protocol sync secret for the Roborock app flow, sign in to 
 
 This applies whether your local stack is running via Docker Compose or via the Home Assistant add-on.
 
-1. Open your Home Assistant configuration directory and locate `.storage/core.config_entries`.
+### Existing Roborock Integration
 
-   On many Home Assistant systems this file is at `/config/.storage/core.config_entries`.
+Use this flow when the Roborock integration already exists in Home Assistant.
 
-2. Find the Roborock entry and replace the endpoint values with your local stack URLs:
+1. Make sure the local stack is running and has a cloud import snapshot from the same Roborock account used by the Home Assistant integration.
+
+2. OPTIONAL but useful: confirm the local protocol login works from a shell on the Home Assistant host or another machine that can reach the stack:
+
+   ```bash
+   curl -sk -X POST "https://api-roborock.example.com:555/api/v5/auth/email/login/code" \
+     -H "Content-Type: application/json" \
+     -d '{"email":"you@example.com","code":"123456"}'
+   ```
+
+   Replace `you@example.com` with `protocol_login_email` and `123456` with `protocol_login_pin`. A successful response includes `data.rriot.r.a`, `data.rriot.r.l`, and `data.rriot.r.m` pointing at your local stack.
+
+3. Disable the Roborock integration in Home Assistant.
+
+   On many Home Assistant systems this file is at `/config/.storage/core.config_entries`. The file is rewritten while Home Assistant is running, so make the edit while the Roborock integration is stopped.
+
+5. Find the Roborock entry and replace the endpoint values with your local stack URLs:
 
    - `username` -> the email configured as `protocol_login_email` (you likely don't need to change this)
    - `base_url` -> `https://api-roborock.example.com:555`
@@ -85,22 +101,31 @@ This applies whether your local stack is running via Docker Compose or via the H
 
    The current server advertises the same hostname for HTTPS and MQTT/TLS, so `"m"` should normally use the same `stack_fqdn`, not a separate `mqtt-...` hostname.
 
-3. If you changed `https_port` or `mqtt_tls_port`, use those values instead.
+6. If you changed `https_port` or `mqtt_tls_port`, use those values instead.
 
-4. Restart Home Assistant so the integration reloads the updated endpoints.
+7. Restart Home Assistant (Or start it if you had it stopped).
 
-5. Reconfigure the Roborock integration in Home Assistant and complete the code login:
+8. Enable the Roborock integration.
+
+9. Reconfigure the Roborock integration and complete the code login:
 
    - The account email must be the value configured as `protocol_login_email`.
    - Use the 6 digit `protocol_login_pin` as the code.
 
    Reauth updates the stored Roborock `user_data`, including the MQTT credentials derived from `rriot`.
 
+The **Reconfigure** action may not appear until Home Assistant has loaded the edited local endpoint data. If you do not see it, check that the integration was stopped while editing `.storage/core.config_entries`, then restart Home Assistant and open the integration again.
+
 ### First Time Home Assistant Setup
 
-Home Assistant currently creates a Roborock config entry through the official Roborock login flow. If you have never added the Roborock integration before, create the integration once with the official Roborock API, then stop the integration and edit `.storage/core.config_entries` as described above.
+Home Assistant currently creates a Roborock config entry through the official Roborock login flow. If you have never added the Roborock integration before:
 
-After editing the endpoints and restarting Home Assistant, run **Reconfigure** on the Roborock integration and enter your local PIN. Home Assistant derives the MQTT username and password from `rriot.u`, `rriot.s`, and `rriot.k`; stale values commonly show up in the local server logs as:
+1. Add the Roborock integration once with the official Roborock API.
+2. Disable the integration.
+3. Edit `.storage/core.config_entries` as described above.
+4. Start Home Assistant, enable the integration, then run **Reconfigure** and enter your local PIN.
+
+Home Assistant derives the MQTT username and password from `rriot.u`, `rriot.s`, and `rriot.k`; stale values commonly show up in the local server logs as:
 
 ```text
 rejected MQTT CONNECT reason=invalid_mqtt_credentials
