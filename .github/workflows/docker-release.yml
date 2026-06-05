@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: python-roborock/local_roborock_server
 
 permissions:
   contents: read
@@ -132,7 +132,9 @@ jobs:
             type=sha,prefix=sha-
           labels: |
             org.opencontainers.image.title=roborock-local-server
-            org.opencontainers.image.description=Private Roborock HTTPS and MQTT stack you run on your own system.
+            org.opencontainers.image.source=https://github.com/python-roborock/local_roborock_server
+            org.opencontainers.image.description=Private Roborock HTTPS and MQTT stack for local LAN use
+            org.opencontainers.image.licenses=MIT
 
       - name: Build and push Docker image
         id: push

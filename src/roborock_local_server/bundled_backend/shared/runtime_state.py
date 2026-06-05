@@ -180,6 +180,11 @@ class RuntimeState:
                 maybe_did = self._resolve_did_from_pid_locked(normalized_pid)
                 if maybe_did:
                     resolved_did = maybe_did
+            storage_id = self._http_event_storage_id_locked(
+                event_time=event_time,
+                route_name=route_name,
+                identifier=resolved_did,
+            )
             event = {
                 "time": event_time,
                 "type": "http",
@@ -192,11 +197,16 @@ class RuntimeState:
                 "did": resolved_did or did,
                 "pid": normalized_pid,
             }
+            if storage_id and storage_id != resolved_did:
+                event["duid"] = storage_id
             self._recent_events.append(event)
 
             if step_name:
-                if resolved_did:
-                    vac = self._ensure_vacuum_locked(resolved_did)
+                if storage_id:
+                    vac = self._ensure_vacuum_locked(storage_id)
+                    if resolved_did and resolved_did != storage_id:
+                        vac["did"] = resolved_did
+                        vac["id_kind"] = "duid"
                     vac["onboarding_steps"][step_name] = event_time
                     if ip:
                         pending = self._pending_steps_by_ip.pop(ip, {})
@@ -206,8 +216,11 @@ class RuntimeState:
                     pending = self._pending_steps_by_ip.setdefault(ip, {})
                     pending[step_name] = event_time
 
-            if resolved_did:
-                vac = self._ensure_vacuum_locked(resolved_did)
+            if storage_id:
+                vac = self._ensure_vacuum_locked(storage_id)
+                if resolved_did and resolved_did != storage_id:
+                    vac["did"] = resolved_did
+                    vac["id_kind"] = "duid"
                 if ip:
                     vac["ips"].add(ip)
                     vac["last_ip"] = ip
@@ -399,6 +412,18 @@ class RuntimeState:
     def pairing_snapshot(self) -> dict[str, Any]:
         return self.onboarding_session_snapshot()
 
+    def active_onboarding_target_did(self) -> str:
+        with self._lock:
+            session = self._pairing_session
+            if session is None or not session.get("active"):
+                return ""
+            target_did = str(session.get("target_did") or "").strip()
+            if target_did:
+                return target_did
+            selected_duid = str(session.get("target_duid") or "").strip()
+            selected_vac = self._find_vacuum_by_identity_locked(duid=selected_duid) if selected_duid else None
+            return str((selected_vac or {}).get("did") or "").strip()
+
     def onboarding_device_mqtt_candidate(self, *, client_ip: str) -> dict[str, str] | None:
         normalized_ip = client_ip.strip()
         if not normalized_ip:
@@ -475,6 +500,93 @@ class RuntimeState:
         }
         self._vacuums[normalized] = created
         return created
+
+    def _merge_vacuum_records_locked(self, *, source_key: str, target_key: str) -> dict[str, Any]:
+        normalized_source = source_key.strip()
+        normalized_target = target_key.strip()
+        target = self._ensure_vacuum_locked(normalized_target)
+        if not normalized_source or normalized_source == normalized_target:
+            return target
+        source = self._vacuums.pop(normalized_source, None)
+        if source is None:
+            return target
+        for vacuums in self._conn_to_vacuums.values():
+            if normalized_source in vacuums:
+                vacuums.discard(normalized_source)
+                vacuums.add(normalized_target)
+
+        if not target.get("did"):
+            source_did = str(source.get("did") or "").strip()
+            target["did"] = source_did or normalized_source
+        if target.get("duid") == normalized_target:
+            target["id_kind"] = "duid"
+        for field in ("name", "local_key", "source"):
+            if not target.get(field) and source.get(field):
+                target[field] = source[field]
+        target["ips"].update(source.get("ips") or set())
+        for step, step_time in (source.get("onboarding_steps") or {}).items():
+            existing_time = str(target["onboarding_steps"].get(step) or "")
+            if not existing_time or _is_newer_timestamp(str(step_time or ""), existing_time):
+                target["onboarding_steps"][step] = step_time
+
+        if source.get("connected"):
+            target["connected"] = True
+        for timestamp_field in ("last_http_at", "last_mqtt_at", "last_disconnect_at", "last_message_at"):
+            source_time = str(source.get(timestamp_field) or "")
+            if _is_newer_timestamp(source_time, str(target.get(timestamp_field) or "")):
+                target[timestamp_field] = source_time
+                if timestamp_field == "last_http_at":
+                    for field in (
+                        "last_ip",
+                        "last_http_route",
+                        "last_http_path",
+                        "last_http_remote",
+                        "last_http_host",
+                    ):
+                        target[field] = source.get(field, target.get(field, ""))
+                elif timestamp_field == "last_mqtt_at":
+                    for field in (
+                        "last_ip",
+                        "last_mqtt_topic",
+                        "last_mqtt_direction",
+                        "last_mqtt_payload_preview",
+                        "last_mqtt_conn_id",
+                    ):
+                        target[field] = source.get(field, target.get(field, ""))
+                elif timestamp_field == "last_message_at":
+                    target["last_message_source"] = source.get(
+                        "last_message_source",
+                        target.get("last_message_source", ""),
+                    )
+        target["restored_activity"] = bool(target.get("restored_activity") or source.get("restored_activity"))
+        return target
+
+    def _http_event_storage_id_locked(self, *, event_time: str, route_name: str, identifier: str) -> str:
+        normalized = identifier.strip()
+        if not normalized:
+            return ""
+        session = self._pairing_session
+        if session is None or not session.get("active"):
+            return normalized
+        if not _is_same_or_newer_timestamp(event_time, str(session.get("started_at") or "")):
+            return normalized
+        if route_name not in {"region", "nc_prepare", "login_key_sign"}:
+            return normalized
+
+        selected_duid = str(session.get("target_duid") or "").strip()
+        if not selected_duid:
+            return normalized
+        if self._resolve_identity_kind_locked(normalized) != "did":
+            return normalized
+
+        self._adopt_pairing_did_locked(session=session, did=normalized, event_time=event_time)
+        if session.get("identity_conflict"):
+            return normalized
+        target_did = str(session.get("target_did") or "").strip()
+        if target_did == normalized:
+            self._merge_vacuum_records_locked(source_key=normalized, target_key=selected_duid)
+            return selected_duid
+        return normalized
 
     @staticmethod
     def _vacuum_effectively_connected_locked(vac: dict[str, Any] | None) -> bool:
@@ -859,6 +971,7 @@ class RuntimeState:
                 vac["id_kind"] = "duid"
                 if selected_name and not vac.get("name"):
                     vac["name"] = selected_name
+                self._merge_vacuum_records_locked(source_key=normalized_did, target_key=target_duid)
 
         if session.get("target_did") != normalized_did:
             session["target_did"] = normalized_did

@@ -698,6 +698,13 @@ class ReleaseSupervisor:
         return "nc" in normalized and ("prepare" in normalized or normalized.endswith("/nc"))
 
     @classmethod
+    def _allows_onboarding_key_capture_fallback(cls, clean_path: str, query: str) -> bool:
+        if "signature=" not in str(query or ""):
+            return False
+        normalized = cls._normalized_path(clean_path)
+        return cls._is_onboarding_region_path(normalized) or cls._is_onboarding_nc_prepare_path(normalized)
+
+    @classmethod
     def _new_connection_flow_for_path(cls, clean_path: str) -> str | None:
         normalized = cls._normalized_path(clean_path)
         if (
@@ -923,16 +930,19 @@ class ReleaseSupervisor:
 
         explicit_did = self.context.extract_explicit_did(query_params, body_params)
         explicit_pid = _extract_explicit_pid(query_params, body_params)
+        key_capture_did = explicit_did
+        if not key_capture_did and self._allows_onboarding_key_capture_fallback(clean_path, request.url.query):
+            key_capture_did = self.runtime_state.active_onboarding_target_did()
         key_cache = self.context.device_key_cache()
 
         query_sample_added = False
         header_sample_added = False
-        if key_cache is not None and explicit_did:
+        if key_cache is not None and key_capture_did:
             if request.url.query:
                 try:
-                    query_sample_added = key_cache.add_signed_query(explicit_did, request.url.query)
+                    query_sample_added = key_cache.add_signed_query(key_capture_did, request.url.query)
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("key_cache add_signed_query failed did=%s: %s", explicit_did, exc)
+                    logger.warning("key_cache add_signed_query failed did=%s: %s", key_capture_did, exc)
             sign = _pick_first_header(
                 dict(request.headers),
                 ("sign", "x-sign", "x_roborock_sign", "x-roborock-sign"),
@@ -948,7 +958,7 @@ class ReleaseSupervisor:
                 )
                 try:
                     header_sample_added = key_cache.add_header_signature(
-                        explicit_did,
+                        key_capture_did,
                         method=request.method,
                         path=request.url.path,
                         query=request.url.query,
@@ -958,7 +968,7 @@ class ReleaseSupervisor:
                         body_sha256=body_sha256,
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("key_cache add_header_signature failed did=%s: %s", explicit_did, exc)
+                    logger.warning("key_cache add_header_signature failed did=%s: %s", key_capture_did, exc)
 
         raw_path = request.url.path
         if request.url.query:
@@ -996,7 +1006,7 @@ class ReleaseSupervisor:
                 entry["body_form"] = {key: value for key, value in body_params.items()}
         if query_sample_added or header_sample_added:
             entry["key_state_capture"] = {
-                "did": explicit_did,
+                "did": key_capture_did,
                 "query_sample_added": query_sample_added,
                 "header_sample_added": header_sample_added,
             }
@@ -1283,11 +1293,11 @@ class ReleaseSupervisor:
         except Exception as exc:  # noqa: BLE001
             logger.warning("runtime_state record_http_event failed: %s", exc)
         append_jsonl(self.context.http_jsonl, entry)
-        if key_cache is not None and explicit_did:
+        if key_cache is not None and key_capture_did:
             try:
-                key_cache.maybe_recover_async(explicit_did)
+                key_cache.maybe_recover_async(key_capture_did)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("key_cache maybe_recover_async failed did=%s: %s", explicit_did, exc)
+                logger.warning("key_cache maybe_recover_async failed did=%s: %s", key_capture_did, exc)
 
         logger.info(
             "%s %s host=%s route=%s body_sha256=%s",

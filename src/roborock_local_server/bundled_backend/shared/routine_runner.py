@@ -631,7 +631,7 @@ class _RoutineMqttClient:
                     if sent_resume and state not in (8, 23, 26):
                         sent_resume = False
                 if saw_cleaning:
-                    if is_non_cleaning:
+                    if is_ready:
                         if completion_candidate_since is None:
                             completion_candidate_since = loop.time()
                         elif (
@@ -641,7 +641,7 @@ class _RoutineMqttClient:
                             return
                     else:
                         completion_candidate_since = None
-                elif saw_activity:
+                elif saw_activity and is_ready:
                     self._logger.info(
                         "Routine wait: dock activity cycle ended (no cleaning observed), resetting"
                     )

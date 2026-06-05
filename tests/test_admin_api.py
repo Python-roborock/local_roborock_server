@@ -524,6 +524,80 @@ def test_admin_onboarding_start_is_blocked_when_new_connections_disabled(tmp_pat
     assert started.json()["error"] == "New connections are disabled."
 
 
+def test_onboarding_signed_query_fallback_uses_active_target_and_triggers_recovery(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps(
+            {
+                "devices": [
+                    {
+                        "duid": "cloud-q7-a",
+                        "name": "Q7 Upstairs",
+                        "model": "roborock.vacuum.sc05",
+                        "product_id": "product-q7-a",
+                        "local_key": "local-key-a",
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    paths.runtime_credentials_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.runtime_credentials_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "devices": [
+                    {
+                        "did": "1103821560705",
+                        "duid": "cloud-q7-a",
+                        "name": "Q7 Upstairs",
+                        "model": "roborock.vacuum.sc05",
+                        "product_id": "product-q7-a",
+                        "localkey": "local-key-a",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    supervisor.runtime_state.start_onboarding_session(
+        target_duid="cloud-q7-a",
+        target_name="Q7 Upstairs",
+        target_did="1103821560705",
+    )
+    key_cache = supervisor.context.device_key_cache()
+    assert key_cache is not None
+    recovery_calls: list[str] = []
+    monkeypatch.setattr(key_cache, "maybe_recover_async", lambda did: recovery_calls.append(did))
+
+    client = TestClient(supervisor.app)
+    region = client.get("/region?a=1&signature=QUJD")
+    assert region.status_code == 200
+
+    key_state = json.loads(paths.device_key_state_path.read_text(encoding="utf-8"))
+    samples = key_state["devices"]["1103821560705"]["samples"]
+    assert samples == [{"canonical": "a=1", "signature_b64": "QUJD"}]
+    assert recovery_calls == ["1103821560705"]
+
+    login_sign = client.post("/api/v3/key/sign?s=abc&signature=REVG")
+    assert login_sign.status_code == 200
+
+    key_state = json.loads(paths.device_key_state_path.read_text(encoding="utf-8"))
+    samples = key_state["devices"]["1103821560705"]["samples"]
+    assert samples == [{"canonical": "a=1", "signature_b64": "QUJD"}]
+    assert recovery_calls == ["1103821560705"]
+
+
 def test_core_only_mode_disables_standalone_admin_routes(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Sequence
 
+_DEVICE_ID_KEYS = ("did", "d", "duid", "device_id", "deviceId", "device_did", "deviceDid")
+
 
 def _first_non_empty(values: Sequence[str]) -> str:
     for value in values:
@@ -22,11 +24,9 @@ def request_host_override(query_params: dict[str, list[str]]) -> str:
 
 
 def extract_explicit_did(query_params: dict[str, list[str]], body_params: dict[str, list[str]]) -> str:
-    return _first_non_empty(
-        (query_params.get("did") or [])
-        + (query_params.get("d") or [])
-        + (query_params.get("duid") or [])
-        + (body_params.get("did") or [])
-        + (body_params.get("d") or [])
-        + (body_params.get("duid") or [])
-    )
+    values: list[str] = []
+    for key in _DEVICE_ID_KEYS:
+        values.extend(query_params.get(key) or [])
+    for key in _DEVICE_ID_KEYS:
+        values.extend(body_params.get(key) or [])
+    return _first_non_empty(values)

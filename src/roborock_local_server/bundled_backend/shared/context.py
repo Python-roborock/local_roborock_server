@@ -17,6 +17,8 @@ from .runtime_credentials import RuntimeCredentialsStore
 from .runtime_state import RuntimeState
 from .zone_ranges_store import ZoneRangesStore
 
+_DEVICE_ID_KEYS = ("did", "d", "duid", "device_id", "deviceId", "device_did", "deviceDid")
+
 
 def split_host_port(value: str) -> tuple[str, int | None]:
     raw = str(value or "").strip()
@@ -113,25 +115,21 @@ class ServerContext:
         }
 
     def extract_did(self, query_params: dict[str, list[str]], body_params: dict[str, list[str]]) -> str:
-        return pick_first(
-            (query_params.get("did") or [])
-            + (query_params.get("d") or [])
-            + (query_params.get("duid") or [])
-            + (body_params.get("did") or [])
-            + (body_params.get("d") or [])
-            + (body_params.get("duid") or [])
-            + [self.duid]
-        )
+        values: list[str] = []
+        for key in _DEVICE_ID_KEYS:
+            values.extend(query_params.get(key) or [])
+        for key in _DEVICE_ID_KEYS:
+            values.extend(body_params.get(key) or [])
+        values.append(self.duid)
+        return pick_first(values)
 
     def extract_explicit_did(self, query_params: dict[str, list[str]], body_params: dict[str, list[str]]) -> str:
-        return pick_first(
-            (query_params.get("did") or [])
-            + (query_params.get("d") or [])
-            + (query_params.get("duid") or [])
-            + (body_params.get("did") or [])
-            + (body_params.get("d") or [])
-            + (body_params.get("duid") or [])
-        )
+        values: list[str] = []
+        for key in _DEVICE_ID_KEYS:
+            values.extend(query_params.get(key) or [])
+        for key in _DEVICE_ID_KEYS:
+            values.extend(body_params.get(key) or [])
+        return pick_first(values)
 
     def extract_pid(self, query_params: dict[str, list[str]], body_params: dict[str, list[str]]) -> str:
         return pick_first(

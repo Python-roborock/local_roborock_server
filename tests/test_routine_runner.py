@@ -454,6 +454,29 @@ def test_wait_for_step_complete_actual_cleaning_completes(monkeypatch) -> None:
     asyncio.run(exercise())
 
 
+def test_wait_for_step_complete_waits_for_ready_after_returning_non_cleaning(monkeypatch) -> None:
+    """Returning/dock activity with in_cleaning=0 must not release the next step early."""
+    _set_fast_wait_constants(monkeypatch)
+    monkeypatch.setattr(routine_runner_module, "_STEP_START_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(routine_runner_module, "_STATUS_POLL_INTERVAL_SECONDS", 0.0)
+
+    async def exercise() -> None:
+        client = _ScriptedStatusClient([
+            {"state": 18, "in_cleaning": 3},  # segment cleaning
+            {"state": 6, "in_cleaning": 0},   # returning, but not ready
+            {"state": 6, "in_cleaning": 0},
+            {"state": 8, "in_cleaning": 0},   # charging, possible dock cycle race
+            {"state": 22, "in_cleaning": 0},  # emptying bin starts after ready
+            {"state": 15, "in_cleaning": 0},  # docking
+            {"state": 8, "in_cleaning": 0},   # ready again
+            {"state": 8, "in_cleaning": 0},
+        ])
+        await client.wait_for_step_complete()
+        assert client._index >= 8
+
+    asyncio.run(exercise())
+
+
 def test_wait_for_step_complete_dock_then_cleaning_completes(monkeypatch) -> None:
     """Dock activity followed by actual cleaning should complete after cleaning finishes."""
     _set_fast_wait_constants(monkeypatch)

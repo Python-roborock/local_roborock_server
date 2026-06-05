@@ -1,5 +1,9 @@
 FROM python:3.11-slim
 
+LABEL org.opencontainers.image.source="https://github.com/python-roborock/local_roborock_server" \
+  org.opencontainers.image.description="Private Roborock HTTPS and MQTT stack for local LAN use" \
+  org.opencontainers.image.licenses="MIT"
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
