@@ -66,6 +66,8 @@ If your model already has certificate notes on the tested-vacuums page, follow t
 
    With the current server behavior, the same hostname is advertised for both HTTPS and MQTT/TLS, so you do not need a separate `mqtt-...` hostname unless you have built your own custom client routing around one.
 
+   If a reverse proxy maps public ports to different backend listener ports, see [Reverse Proxy](reverse_proxy.md) before starting the stack.
+
 ## Method 1: Docker Compose
 
 ### Additional Requirements
@@ -133,6 +135,8 @@ If your model already has certificate notes on the tested-vacuums page, follow t
    $env:ROBOROCK_SERVER_MQTT_TLS_PORT = "9443"
    docker compose up -d --build
    ```
+
+   For reverse proxy setups, keep `network.https_port` and `network.mqtt_tls_port` set to the backend listener ports and use `network.advertised_https_port` / `network.advertised_mqtt_tls_port` for the public ports.
 
 ## Method 2: Home Assistant Add-on
 

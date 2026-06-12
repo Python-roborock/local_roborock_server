@@ -5,6 +5,10 @@ bind_host = "0.0.0.0"
 # Change these if you need custom published ports.
 https_port = 555
 mqtt_tls_port = 8881
+# Optional reverse-proxy support. Leave unset to advertise the listener ports above.
+# Set these when a proxy maps public HTTPS/MQTT ports to different backend ports.
+# advertised_https_port = 443
+# advertised_mqtt_tls_port = 8883
 region = "us"
 
 [broker]
