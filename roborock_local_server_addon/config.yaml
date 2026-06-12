@@ -25,6 +25,8 @@ options:
   stack_fqdn: "api-roborock.example.com"
   https_port: 555
   mqtt_tls_port: 8881
+  advertised_https_port: 0
+  advertised_mqtt_tls_port: 0
   region: "us"
   tls_mode: "provided"
   tls_base_domain: ""
@@ -42,6 +44,8 @@ schema:
   stack_fqdn: str
   https_port: port
   mqtt_tls_port: port
+  advertised_https_port: int
+  advertised_mqtt_tls_port: int
   region: list(us|eu|cn|ru)
   tls_mode: list(provided|cloudflare_acme)
   tls_base_domain: str

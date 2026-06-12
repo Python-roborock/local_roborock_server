@@ -17,6 +17,8 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "stack_fqdn": "",
     "https_port": 555,
     "mqtt_tls_port": 8881,
+    "advertised_https_port": 0,
+    "advertised_mqtt_tls_port": 0,
     "region": "us",
     "tls_mode": "provided",
     "tls_base_domain": "",
@@ -83,6 +85,12 @@ def _as_int(value: object, *, field_name: str, default: int) -> int:
     if not (1 <= candidate <= 65535):
         raise ValueError(f"{field_name} must be between 1 and 65535")
     return candidate
+
+
+def _as_optional_port(value: object, *, field_name: str) -> int:
+    if value in (None, "", 0, "0"):
+        return 0
+    return _as_int(value, field_name=field_name, default=0)
 
 
 def _require_non_empty(value: object, *, field_name: str) -> str:
@@ -158,6 +166,16 @@ def _render_config_toml(
         raise ValueError("listener_mode='external_tls' is no longer supported")
     https_port = _as_int(merged.get("https_port"), field_name="https_port", default=555)
     mqtt_tls_port = _as_int(merged.get("mqtt_tls_port"), field_name="mqtt_tls_port", default=8881)
+    advertised_https_port = _as_optional_port(
+        merged.get("advertised_https_port"),
+        field_name="advertised_https_port",
+    )
+    advertised_mqtt_tls_port = _as_optional_port(
+        merged.get("advertised_mqtt_tls_port"),
+        field_name="advertised_mqtt_tls_port",
+    )
+    advertised_https_port = advertised_https_port or https_port
+    advertised_mqtt_tls_port = advertised_mqtt_tls_port or mqtt_tls_port
 
     # Legacy HA options for broker selection are ignored now that the add-on
     # always runs the embedded broker with the topic bridge enabled.
@@ -218,6 +236,8 @@ def _render_config_toml(
         'bind_host = "0.0.0.0"',
         f"https_port = {https_port}",
         f"mqtt_tls_port = {mqtt_tls_port}",
+        f"advertised_https_port = {advertised_https_port}",
+        f"advertised_mqtt_tls_port = {advertised_mqtt_tls_port}",
         f"region = {_toml_string(region)}",
         "",
         "[broker]",

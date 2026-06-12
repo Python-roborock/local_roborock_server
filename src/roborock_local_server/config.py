@@ -15,6 +15,8 @@ class NetworkConfig:
     bind_host: str
     https_port: int
     mqtt_tls_port: int
+    advertised_https_port: int
+    advertised_mqtt_tls_port: int
     region: str
     localkey: str
     duid: str
@@ -201,12 +203,25 @@ def load_config(path: str | Path) -> AppConfig:
         broker_host = "127.0.0.1"
     broker_port_default = 18830 if broker_mode == "embedded" else 1883
 
+    https_port = _as_port(network.get("https_port"), "network.https_port", 555)
+    mqtt_tls_port = _as_port(network.get("mqtt_tls_port"), "network.mqtt_tls_port", 8881)
+
     config = AppConfig(
         network=NetworkConfig(
             stack_fqdn=_require_stack_fqdn(network.get("stack_fqdn"), "network.stack_fqdn"),
             bind_host=str(network.get("bind_host", "0.0.0.0")).strip() or "0.0.0.0",
-            https_port=_as_port(network.get("https_port"), "network.https_port", 555),
-            mqtt_tls_port=_as_port(network.get("mqtt_tls_port"), "network.mqtt_tls_port", 8881),
+            https_port=https_port,
+            mqtt_tls_port=mqtt_tls_port,
+            advertised_https_port=_as_port(
+                network.get("advertised_https_port"),
+                "network.advertised_https_port",
+                https_port,
+            ),
+            advertised_mqtt_tls_port=_as_port(
+                network.get("advertised_mqtt_tls_port"),
+                "network.advertised_mqtt_tls_port",
+                mqtt_tls_port,
+            ),
             region=str(network.get("region", "us")).strip().lower() or "us",
             localkey=str(network.get("localkey", "")).strip(),
             duid=str(network.get("duid", "")).strip(),

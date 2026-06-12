@@ -64,7 +64,7 @@ If you need the MITM protocol sync secret for the Roborock app flow, sign in to 
 
 - The add-on always runs the embedded MQTT broker and keeps the topic bridge enabled.
 - The add-on terminates TLS itself and publishes two ports: HTTPS on `https_port` and MQTT/TLS on `mqtt_tls_port`.
-- If you already manage certificates in another Home Assistant add-on such as Nginx Proxy Manager, you can point `cert_file` and `key_file` at those PEM files through `/all_addon_configs/...`.
+- If you already manage certificates in another Home Assistant add-on such as Nginx Proxy Manager, you can point `cert_file` and `key_file` at those PEM files through `/all_addon_configs/...`. Nginx Proxy Manager is mainly useful here as a certificate source or admin/API HTTPS convenience; it does not remove the need for a reachable MQTT/TLS port. See [Reverse Proxy](reverse_proxy.md).
 - Installing the add-on does **not** automatically rewrite Home Assistant's Roborock integration entry.
 
 ## Repoint The Home Assistant Roborock Integration

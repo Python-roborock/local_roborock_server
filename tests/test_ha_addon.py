@@ -44,6 +44,8 @@ def test_write_config_from_home_assistant_options_provided_tls(tmp_path: Path) -
     assert parsed["network"]["stack_fqdn"] == "api-roborock.example.com"
     assert parsed["network"]["https_port"] == 8443
     assert parsed["network"]["mqtt_tls_port"] == 9443
+    assert parsed["network"]["advertised_https_port"] == 8443
+    assert parsed["network"]["advertised_mqtt_tls_port"] == 9443
     assert parsed["broker"]["mode"] == "embedded"
     assert parsed["broker"]["host"] == "127.0.0.1"
     assert parsed["broker"]["port"] == 18830
@@ -58,6 +60,39 @@ def test_write_config_from_home_assistant_options_provided_tls(tmp_path: Path) -
     assert str(parsed["admin"]["password_hash"]).startswith("pbkdf2_sha256$")
     assert str(parsed["admin"]["protocol_login_pin_hash"]).startswith("pbkdf2_sha256$")
     assert token_path.exists() is False
+
+
+def test_write_config_from_home_assistant_options_reverse_proxy_settings(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+
+    _write_options(
+        options_path,
+        {
+            "stack_fqdn": "api-roborock.example.com",
+            "https_port": 555,
+            "mqtt_tls_port": 8881,
+            "advertised_https_port": 443,
+            "advertised_mqtt_tls_port": 8883,
+            "tls_mode": "provided",
+            "cert_file": "/ssl/fullchain.pem",
+            "key_file": "/ssl/privkey.pem",
+            "admin_password": "super-secret-password",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "123456",
+        },
+    )
+
+    write_config_from_home_assistant_options(
+        options_path=options_path,
+        config_path=config_path,
+    )
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["network"]["https_port"] == 555
+    assert parsed["network"]["mqtt_tls_port"] == 8881
+    assert parsed["network"]["advertised_https_port"] == 443
+    assert parsed["network"]["advertised_mqtt_tls_port"] == 8883
 
 
 def test_write_config_from_home_assistant_options_provided_tls_requires_paths_when_blank(tmp_path: Path) -> None:

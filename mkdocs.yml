@@ -59,6 +59,7 @@ nav:
   - Reference:
     - Known Limitations: known_limitations.md
     - Tested Vacuums: tested_vacuums.md
+    - Reverse Proxy: reverse_proxy.md
     - Custom MQTT: custom_mqtt.md
     - Custom Certificate Management: custom_cert_management.md
     - Technical Writeup: technical_writeup.md

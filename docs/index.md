@@ -23,6 +23,7 @@ If you want to support this project, next time you buy a Roborock, use one of my
 - [Using the Roborock App](roborock_app.md)
 - [Updating](updating.md)
 - [Tested vacuums](tested_vacuums.md)
+- [Reverse proxy](reverse_proxy.md)
 - [Custom MQTT](custom_mqtt.md)
 - [Custom certificate management](custom_cert_management.md)
 - [Technical Writeup](technical_writeup.md)

@@ -37,6 +37,8 @@ protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
     assert config.network.stack_fqdn == "api-roborock.example.com"
     assert config.network.https_port == 555
     assert config.network.mqtt_tls_port == 8881
+    assert config.network.advertised_https_port == 555
+    assert config.network.advertised_mqtt_tls_port == 8881
     assert config.admin.protocol_auth_enabled is True
     assert config.admin.new_connections_enabled is True
     assert config.admin.protocol_login_email == "user@example.com"
@@ -346,3 +348,42 @@ protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
 
     with pytest.raises(ValueError, match="network.https_port must be between 1 and 65535"):
         load_config(config_file)
+
+
+def test_load_config_accepts_reverse_proxy_network_settings(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[network]
+stack_fqdn = "api-roborock.example.com"
+https_port = 555
+mqtt_tls_port = 8881
+advertised_https_port = 443
+advertised_mqtt_tls_port = 8883
+
+[broker]
+mode = "embedded"
+
+[storage]
+data_dir = "data"
+
+[tls]
+mode = "provided"
+cert_file = "certs/fullchain.pem"
+key_file = "certs/privkey.pem"
+
+[admin]
+password_hash = "pbkdf2_sha256$600000$abc$def"
+session_secret = "abcdefghijklmnopqrstuvwxyz123456"
+protocol_login_email = "user@example.com"
+protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_file)
+
+    assert config.network.https_port == 555
+    assert config.network.mqtt_tls_port == 8881
+    assert config.network.advertised_https_port == 443
+    assert config.network.advertised_mqtt_tls_port == 8883
