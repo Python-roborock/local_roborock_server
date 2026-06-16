@@ -488,6 +488,13 @@ class ReleaseSupervisor:
         if not self._authenticated(request):
             raise HTTPException(status_code=401, detail="Authentication required")
 
+    def cookie_secure(self, request: Request) -> bool:
+        # In external_tls the backend speaks plain HTTP behind a TLS-terminating
+        # proxy, so the request scheme is "http" even though clients use HTTPS.
+        if self.config.network.listener_mode == "external_tls":
+            return True
+        return request.url.scheme == "https"
+
     def protocol_auth_enabled(self) -> bool:
         return bool(self.config.admin.protocol_auth_enabled)
 
@@ -1585,15 +1592,19 @@ class ReleaseSupervisor:
         self._register_protocol_routes(app)
         return app
 
+    def _uses_local_tls(self) -> bool:
+        return self.config.network.listener_mode == "local_tls"
+
     async def _start_http_server(self) -> None:
+        local_tls = self._uses_local_tls()
         cert_paths = self.certificate_manager.certificate_paths
         self._http_server = ManagedFastApiServer(
             app=self.app,
             bind_host=self.config.network.bind_host,
             port=self.config.network.https_port,
-            tls_enabled=True,
-            cert_file=cert_paths.cert_file,
-            key_file=cert_paths.key_file,
+            tls_enabled=local_tls,
+            cert_file=cert_paths.cert_file if local_tls else None,
+            key_file=cert_paths.key_file if local_tls else None,
         )
         await self._http_server.start()
         self.runtime_state.set_service("https_server", running=True, required=True, enabled=True)
@@ -1617,7 +1628,7 @@ class ReleaseSupervisor:
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self.context.zone_ranges_store,
-            tls_enabled=True,
+            tls_enabled=self._uses_local_tls(),
         )
         self._mqtt_proxy.start()
         self.runtime_state.set_service("mqtt_tls_proxy", running=True, required=True, enabled=True)
@@ -1649,7 +1660,8 @@ class ReleaseSupervisor:
         for path in (self.paths.data_dir, self.paths.runtime_dir, self.paths.state_dir, self.paths.certs_dir, self.paths.acme_dir):
             path.mkdir(parents=True, exist_ok=True)
 
-        self.certificate_manager.ensure_certificate()
+        if self._uses_local_tls():
+            self.certificate_manager.ensure_certificate()
         self.refresh_inventory_state()
 
         if self.config.broker.mode == "embedded":
@@ -1697,7 +1709,7 @@ class ReleaseSupervisor:
             self.config.broker.port,
         )
 
-        if self.config.tls.mode == "cloudflare_acme":
+        if self._uses_local_tls() and self.config.tls.mode == "cloudflare_acme":
             self._renew_task = asyncio.create_task(self._renew_loop(), name="tls-renew-loop")
 
     async def stop(self) -> None:

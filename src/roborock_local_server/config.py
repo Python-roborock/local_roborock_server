@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 @dataclass(frozen=True)
 class NetworkConfig:
     stack_fqdn: str
+    listener_mode: str
     bind_host: str
     https_port: int
     mqtt_tls_port: int
@@ -194,8 +195,8 @@ def load_config(path: str | Path) -> AppConfig:
     if tls_mode not in {"cloudflare_acme", "provided"}:
         raise ValueError("tls.mode must be 'cloudflare_acme' or 'provided'")
     listener_mode = str(network.get("listener_mode", "local_tls")).strip().lower() or "local_tls"
-    if listener_mode != "local_tls":
-        raise ValueError("network.listener_mode='external_tls' is no longer supported")
+    if listener_mode not in {"local_tls", "external_tls"}:
+        raise ValueError("network.listener_mode must be 'local_tls' or 'external_tls'")
 
     raw_broker_host = broker.get("host")
     broker_host = str(raw_broker_host).strip() if raw_broker_host is not None else "127.0.0.1"
@@ -209,6 +210,7 @@ def load_config(path: str | Path) -> AppConfig:
     config = AppConfig(
         network=NetworkConfig(
             stack_fqdn=_require_stack_fqdn(network.get("stack_fqdn"), "network.stack_fqdn"),
+            listener_mode=listener_mode,
             bind_host=str(network.get("bind_host", "0.0.0.0")).strip() or "0.0.0.0",
             https_port=https_port,
             mqtt_tls_port=mqtt_tls_port,
@@ -280,26 +282,36 @@ def load_config(path: str | Path) -> AppConfig:
     if config.broker.mode == "external":
         _require_non_empty(config.broker.host, "broker.host")
 
-    if config.tls.mode == "cloudflare_acme":
-        _normalize_hostname(config.tls.base_domain, "tls.base_domain")
-        _require_non_empty(config.tls.email, "tls.email")
-        _require_non_empty(config.tls.cloudflare_token_file, "tls.cloudflare_token_file")
-        has_kid = bool(config.tls.acme_eab_kid or config.tls.acme_eab_kid_file)
-        has_hmac = bool(config.tls.acme_eab_hmac_key or config.tls.acme_eab_hmac_key_file)
-        if has_kid != has_hmac:
-            raise ValueError(
-                "tls.acme_eab_kid/tls.acme_eab_kid_file and "
-                "tls.acme_eab_hmac_key/tls.acme_eab_hmac_key_file must be set together"
-            )
-        if config.tls.acme_server == "actalis":
-            if not has_kid:
+    # In external_tls the proxy terminates TLS and presents the cert to clients,
+    # so the server itself needs no certificate material.
+    if config.network.listener_mode == "local_tls":
+        if config.tls.mode == "cloudflare_acme":
+            _normalize_hostname(config.tls.base_domain, "tls.base_domain")
+            _require_non_empty(config.tls.email, "tls.email")
+            _require_non_empty(config.tls.cloudflare_token_file, "tls.cloudflare_token_file")
+            has_kid = bool(config.tls.acme_eab_kid or config.tls.acme_eab_kid_file)
+            has_hmac = bool(config.tls.acme_eab_hmac_key or config.tls.acme_eab_hmac_key_file)
+            if has_kid != has_hmac:
                 raise ValueError(
-                    "Actalis requires tls.acme_eab_kid or tls.acme_eab_kid_file, "
-                    "and tls.acme_eab_hmac_key or tls.acme_eab_hmac_key_file"
+                    "tls.acme_eab_kid/tls.acme_eab_kid_file and "
+                    "tls.acme_eab_hmac_key/tls.acme_eab_hmac_key_file must be set together"
                 )
-    else:
-        _require_non_empty(config.tls.cert_file, "tls.cert_file")
-        _require_non_empty(config.tls.key_file, "tls.key_file")
+            if config.tls.acme_server == "actalis":
+                if not has_kid:
+                    raise ValueError(
+                        "Actalis requires tls.acme_eab_kid or tls.acme_eab_kid_file, "
+                        "and tls.acme_eab_hmac_key or tls.acme_eab_hmac_key_file"
+                    )
+        else:
+            _require_non_empty(config.tls.cert_file, "tls.cert_file")
+            _require_non_empty(config.tls.key_file, "tls.key_file")
+    elif config.tls.mode == "cloudflare_acme":
+        # external_tls never issues or renews certificates, so cloudflare_acme
+        # would be a silent no-op. Require the proxy-managed 'provided' mode.
+        raise ValueError(
+            "network.listener_mode='external_tls' requires tls.mode='provided' "
+            "(the proxy terminates TLS; the server does not issue certificates)"
+        )
     return config
 
 

@@ -9,6 +9,10 @@ mqtt_tls_port = 8881
 # Set these when a proxy maps public HTTPS/MQTT ports to different backend ports.
 # advertised_https_port = 443
 # advertised_mqtt_tls_port = 8883
+# listener_mode = "local_tls" terminates TLS in the server (default).
+# Set "external_tls" only when a reverse proxy terminates TLS and forwards plain
+# traffic to the server; the proxy must present a valid cert to clients. See docs/reverse_proxy.md.
+# listener_mode = "local_tls"
 region = "us"
 
 [broker]

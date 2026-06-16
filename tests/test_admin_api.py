@@ -199,6 +199,23 @@ def _hawk_headers(
     }
 
 
+def test_admin_login_cookie_secure_in_external_tls(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path, listener_mode="external_tls")
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    # The backend speaks plain HTTP behind the TLS-terminating proxy.
+    client = TestClient(supervisor.app, base_url="http://api-roborock.example.com")
+
+    response = client.post(
+        "/admin/api/login",
+        json={"password": "correct horse battery staple"},
+    )
+
+    assert response.status_code == 200
+    assert "secure" in response.headers["set-cookie"].lower()
+
+
 def test_admin_login_and_status_flow(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)

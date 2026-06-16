@@ -329,7 +329,7 @@ def register_standalone_admin_routes(
             supervisor.session_manager.cookie_name,
             supervisor.session_manager.issue(),
             httponly=True,
-            secure=request.url.scheme == "https",
+            secure=supervisor.cookie_secure(request),
             samesite="lax",
             max_age=supervisor.config.admin.session_ttl_seconds,
             path="/",

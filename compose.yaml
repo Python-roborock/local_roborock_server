@@ -13,7 +13,9 @@ services:
       - ./data:/data
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD", "curl", "-skf", "https://127.0.0.1:${ROBOROCK_SERVER_HTTPS_PORT:-555}/admin"]
+      # Defaults to https for local_tls. Set ROBOROCK_SERVER_HEALTHCHECK_SCHEME=http
+      # when listener_mode = "external_tls" (the server speaks plain HTTP behind the proxy).
+      test: ["CMD", "curl", "-skf", "${ROBOROCK_SERVER_HEALTHCHECK_SCHEME:-https}://127.0.0.1:${ROBOROCK_SERVER_HTTPS_PORT:-555}/admin"]
       interval: 30s
       timeout: 5s
       retries: 5

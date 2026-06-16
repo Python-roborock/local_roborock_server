@@ -107,38 +107,6 @@ protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
         load_config(config_file)
 
 
-def test_load_config_rejects_external_tls(tmp_path: Path) -> None:
-    config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        """
-[network]
-stack_fqdn = "api-roborock.example.com"
-listener_mode = "external_tls"
-https_port = 443
-mqtt_tls_port = 8883
-
-[broker]
-mode = "embedded"
-
-[storage]
-data_dir = "data"
-
-[tls]
-mode = "provided"
-
-[admin]
-password_hash = "pbkdf2_sha256$600000$abc$def"
-session_secret = "abcdefghijklmnopqrstuvwxyz123456"
-protocol_login_email = "user@example.com"
-protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
-        """.strip(),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="external_tls"):
-        load_config(config_file)
-
-
 def test_load_config_normalizes_stack_fqdn_and_validates_cloudflare_base_domain(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(
@@ -387,3 +355,104 @@ protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
     assert config.network.mqtt_tls_port == 8881
     assert config.network.advertised_https_port == 443
     assert config.network.advertised_mqtt_tls_port == 8883
+    assert config.network.listener_mode == "local_tls"
+
+
+def test_load_config_external_tls_requires_no_certificate_material(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[network]
+stack_fqdn = "api-roborock.example.com"
+listener_mode = "external_tls"
+https_port = 555
+mqtt_tls_port = 8881
+
+[broker]
+mode = "embedded"
+
+[storage]
+data_dir = "data"
+
+[tls]
+mode = "provided"
+
+[admin]
+password_hash = "pbkdf2_sha256$600000$abc$def"
+session_secret = "abcdefghijklmnopqrstuvwxyz123456"
+protocol_login_email = "user@example.com"
+protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_file)
+
+    assert config.network.listener_mode == "external_tls"
+    assert config.tls.cert_file == ""
+    assert config.tls.key_file == ""
+
+
+def test_load_config_rejects_unknown_listener_mode(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[network]
+stack_fqdn = "api-roborock.example.com"
+listener_mode = "passthrough"
+
+[broker]
+mode = "embedded"
+
+[storage]
+data_dir = "data"
+
+[tls]
+mode = "provided"
+cert_file = "certs/fullchain.pem"
+key_file = "certs/privkey.pem"
+
+[admin]
+password_hash = "pbkdf2_sha256$600000$abc$def"
+session_secret = "abcdefghijklmnopqrstuvwxyz123456"
+protocol_login_email = "user@example.com"
+protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="listener_mode must be 'local_tls' or 'external_tls'"):
+        load_config(config_file)
+
+
+def test_load_config_rejects_external_tls_with_cloudflare_acme(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[network]
+stack_fqdn = "api-roborock.example.com"
+listener_mode = "external_tls"
+
+[broker]
+mode = "embedded"
+
+[storage]
+data_dir = "data"
+
+[tls]
+mode = "cloudflare_acme"
+base_domain = "example.com"
+email = "user@example.com"
+cloudflare_token_file = "secrets/cf_token"
+
+[admin]
+password_hash = "pbkdf2_sha256$600000$abc$def"
+session_secret = "abcdefghijklmnopqrstuvwxyz123456"
+protocol_login_email = "user@example.com"
+protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="external_tls.*requires tls.mode='provided'"):
+        load_config(config_file)

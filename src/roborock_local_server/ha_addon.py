@@ -163,7 +163,8 @@ def _render_config_toml(
     region = str(merged.get("region", "us") or "us").strip().lower() or "us"
     listener_mode = str(merged.get("listener_mode", "local_tls") or "local_tls").strip().lower() or "local_tls"
     if listener_mode != "local_tls":
-        raise ValueError("listener_mode='external_tls' is no longer supported")
+        # The add-on always terminates its own TLS; external_tls is Docker-only.
+        raise ValueError("listener_mode='external_tls' is not supported by the Home Assistant add-on")
     https_port = _as_int(merged.get("https_port"), field_name="https_port", default=555)
     mqtt_tls_port = _as_int(merged.get("mqtt_tls_port"), field_name="mqtt_tls_port", default=8881)
     advertised_https_port = _as_optional_port(
