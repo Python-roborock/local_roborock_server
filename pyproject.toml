@@ -1,6 +1,6 @@
 [project]
 name = "roborock-local-server"
-version = "1.0.1"
+version = "1.0.2"
 description = "private local Roborock server stack."
 requires-python = ">=3.11,<3.14"
 readme = "README.md"
