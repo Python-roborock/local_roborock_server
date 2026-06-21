@@ -20,6 +20,8 @@ region = "us"
 mode = "embedded"
 host = "127.0.0.1"
 port = 18830
+username = "roborock"
+password = "replace-with-a-secure-password"
 mosquitto_binary = "mosquitto"
 enable_topic_bridge = true
 
