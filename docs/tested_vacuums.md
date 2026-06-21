@@ -46,7 +46,7 @@ Legend:
 |---|---:|---:|---:|---:|---:|
 | Roborock S5 Max | Not reported | ❌ | ✅ | ❌ | ❓ |
 | Roborock S7 | Not reported | ❓ | ✅ | ❌ | ✅ |
-| Roborock S7 MaxV | Not reported | ✅ | ❓ | ❓ | ❓ |
+| Roborock S7 MaxV | Not reported | ✅ | ❓ | ✅ | ❓ |
 | Roborock S8 | Not reported | ❓ | ❓ | ❓ | ❓ |
 | Roborock S8 MaxV Ultra | Not reported | ✅ | ❓ | ❓ | ❓ |
 | Roborock S8 Pro Ultra (a70) | Not reported | ❓ | ❓ | ❓ | ❓ |
