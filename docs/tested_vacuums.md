@@ -46,6 +46,7 @@ Legend:
 |---|---:|---:|---:|---:|---:|
 | Roborock S5 Max | Not reported | ❌ | ✅ | ❌ | ❓ |
 | Roborock S7 | Not reported | ❓ | ✅ | ❌ | ✅ |
+| Roborock S7 Pro Ultra (a62) | Not reported | ❓ | ✅ | ❌ | ❓ |
 | Roborock S7 MaxV | Not reported | ✅ | ❓ | ✅ | ❓ |
 | Roborock S8 | Not reported | ❓ | ❓ | ❓ | ❓ |
 | Roborock S8 MaxV Ultra | Not reported | ✅ | ❓ | ❓ | ❓ |
@@ -56,6 +57,22 @@ Legend:
 | QRevo MaxV | Not reported | ✅ | ❓ | ✅ | ❓ |
 | QRevo Master | Not reported | ❓ | ❓ | ❓ | ❓ |
 | QRevo Plus | Not reported | ✅ | ❓ | ❓ | ❓ |
+
+## Diagnosing cert rejection
+
+When a vacuum rejects the TLS certificate, the failure pattern is **post-handshake close** rather than a TLS alert:
+
+- `mqtt_server.log` shows `TLS handshake ok from <vacuum-ip>` immediately followed by `client closed before MQTT CONNECT`.
+- `decompiled_http.jsonl` stays empty (the vacuum never sends an HTTP request to `:555`).
+- Packet capture shows the vacuum doing repeated short TLS connections (~30 ms) with TCP FIN and no `tls.alert` in either direction.
+
+This pattern indicates the vacuum completed the TLS handshake server-side but rejected the cert during its own validation (CA chain not trusted, or hostname mismatch). The vacuum then closes the TCP connection without sending any application data.
+
+### Hostname verification
+
+The vacuum uses the **stack hostname** (the `api-...` value from `config.toml` → `network.stack_fqdn`) for both SNI in ClientHello and hostname verification against the certificate. It does **not** use the value of the `r` field from the cfgwifi packet (which is the stack hostname with `api-` stripped).
+
+This means a single-domain certificate covering only the stack hostname (e.g. `api-roborock.example.com`) is sufficient. You do **not** need a SAN for the stripped hostname (`roborock.example.com`) or a wildcard certificate. DNS resolution for the stripped hostname is also unnecessary.
 
 ## Unlisted Vacuums
 

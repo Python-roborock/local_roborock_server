@@ -89,6 +89,35 @@ You still need to reset the vacuum's Wi-Fi manually. On many Roborock models tha
 
 Congrats! Once the script reports that the vacuum is connected to the local server, the onboarding flow is complete.
 
+## Troubleshooting
+
+### `samples=0` and the vacuum never makes progress
+
+After sending the cfgwifi packet, the script polls the server for the vacuum's onboarding status (`samples`, `public_key`, `connected`). If `samples` stays at 0 across multiple cycles, the vacuum is making TLS connections but never sending an HTTP request that the server can use to recover the public key. The most common cause is a **certificate the vacuum rejects**.
+
+Check `mqtt_server.log` on the server for the post-handshake-close pattern:
+
+```
+TLS handshake ok from 192.168.x.y:NNNNN (TLSv1.3)
+[conn N] backend connect 127.0.0.1:18830 from 192.168.x.y:NNNNN
+[WARNING] [conn N] client closed before MQTT CONNECT
+```
+
+If you see `TLS handshake ok` immediately followed by `client closed before MQTT CONNECT` and `decompiled_http.jsonl` stays empty, the vacuum completed the TLS handshake server-side but rejected the cert during its own validation (CA chain not trusted, or hostname mismatch). See [Tested Vacuums](tested_vacuums.md) → "Diagnosing cert rejection" for the full flowchart.
+
+Common fixes:
+
+- The cert must cover the **stack hostname** (the `api-...` value from `config.toml`), not the value of the `r` field from cfgwifi. See [Custom certificate management](custom_cert_management.md) → "Which hostname to cover".
+- The CA must be trusted by your vacuum model. Check [Tested Vacuums](tested_vacuums.md) for the compatibility matrix. Actalis is the safest fallback for older / pickier models.
+
+### `state=missing` for the selected vacuum
+
+The server has the vacuum in its inventory (cloud import done) but has not yet seen any onboarding traffic. Run another cycle: reset the vacuum's Wi-Fi, send the cfgwifi packet again, and wait.
+
+### `public_key=False` with `samples > 0`
+
+Recovery needs at least two query signature samples. If the count is stuck at 1, the vacuum is not making new attempts — give it a few minutes to retry, or run another cfgwifi cycle.
+
 ## Web UI (start_onboarding_gui.py)
 
 If you would rather not use the terminal, there is a web UI version of the same flow. It runs a small local server on your machine and opens your browser automatically:
