@@ -44,7 +44,7 @@ Legend:
 | Vacuum | Reported Firmware(s) | ZeroSSL / Cloudflare | Actalis | Let's Encrypt | SSL.com |
 |---|---:|---:|---:|---:|---:|
 | Roborock G30U | `02.52.32` | ✅ | ❓ | ❓ | ❓ |
-| Roborock Q5 | `2.04.06` | ❓ | ❓ | ✅ | ❓ |
+| Roborock Q5 PRO | `2.04.06` | ❓ | ❓ | ✅ | ❓ |
 | Roborock Qrevo Curv | `02.28.60` | ❓ | ❓ | ✅ | ❓ |
 | Roborock Qrevo CurvX | `02.35.88` | ✅ | ❓ | ❓ | ❓ |
 | Roborock Qrevo Edge 2 | `02.11.66` | ❓ | ❓ | ❓ | ❌ |
