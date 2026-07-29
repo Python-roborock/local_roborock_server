@@ -1,68 +1,42 @@
 # Roborock Local Server
-
 [![GHCR][badge-ghcr]][link-ghcr]
 
-The best way to support this project is the next time you are buying a Roborock device come back here and use one of my affiliate links where I will receive a commission.
+## Introduction
 
-[![Amazon Affiliate][badge-amazon]][link-amazon]
-[![Roborock Affiliate][badge-roborock-affiliate]][link-roborock-affiliate]
+**Roborock Local Server** is a private, self-hosted alternative to Roborock's cloud infrastructure. This project enables you to run a complete HTTPS and MQTT stack on your own network, giving you full control over your Roborock vacuum's communication and operations without relying on external cloud services. While the vacuum can still connect to some Roborock's owned services, this stack provides all necessary functionality for your vacuum to work with almost no compromise. 
 
-You can also support via BMAC or paypal:
+After installation, you can block internet access entirely and the vacuum will continue to function on your local network. The stack is also fully compatible with Home Assistant and the Roborock app, so you can seamlessly repoint them to your local server for integrated control.
 
-[![Buy Me a Coffee][badge-bmac]][link-bmac]
-[![PayPal][badge-paypal]][link-paypal]
+## Support
+If you appreciate this project, the best way to support it is by using my affiliate links when purchasing a Roborock device. It helps support development at no cost to you.
 
-Roborock Local Server is a private Roborock HTTPS and MQTT stack you run on your own system.
+[![Amazon Affiliate][badge-amazon]][link-amazon] [![Roborock Affiliate][badge-roborock-affiliate]][link-roborock-affiliate]
 
-This service is meant to stay private. Point your own DNS at your server's LAN IP. If you want this to work away from your home network, the server does handle auth and lets you disable new devices from connecting. BUT there is ALWAYS a risk when you make a self-hosted service publicly accessible, so please only do it if you know what you are doing. If your workflow is fine with local-only access, that will always be better. If you find any vulnerabilities, please let me know.
+Alternatively, you can also donate directly to support the project:
 
-## Container Image
+[![Buy Me a Coffee][badge-bmac]][link-bmac] [![PayPal][badge-paypal]][link-paypal]
 
-Published image:
 
-```sh
-docker pull ghcr.io/python-roborock/local_roborock_server:latest
-```
+For those who want to contribute in other ways, here are things that would be helpful:
 
-## Contributing
-
-If you would like to contribute there are a few ways that would be great!
-
-1. Code is always welcome that you have fully tested.
-2. Video walkthroughs of how to actually set this up would be great.
-3. Documentation. I hate documentation and it's something I find myself often pushing off to AI so that I can focus more on the harder problems. But I find that human written documentation always 'feels' better.
-
-## Requirements
-
-- a domain you control
-- a place to run the stack on your LAN
-- either Docker Compose or a Home Assistant installation that supports add-ons
-- a second machine for onboarding later
-- a Cloudflare API token with DNS edit access for the zone if you want automatic certificate renewal
+- Tested code contributions are always welcome.
+- Video walkthroughs showing how to set this up would be greatly appreciated.
+- Documentation is also helpful. I often put it off to AI so I can focus on the harder problems, but human-written documentation always feels better.
+- Lastly, if you have a vacuum that is not yet tested with this stack, testing it and reporting your results would be very helpful to the community. See [Tested Vacuums](tested_vacuums.md) for more information.
 
 ## Getting Started
 
-Start here if this is your first time setting up the stack:
+For the installation process, go to [installation.md](installation.md). That guide walks through the initial setup, required components, and the order in which to configure each part of the stack so you can get up and running with minimal friction.
 
-1. [Installation](docs/installation.md) for the shared requirements, network setup, and Docker Compose install path.
-2. [Home Assistant](docs/home_assistant.md) if you want to install the stack as a Home Assistant add-on instead of Docker Compose.
-3. [Cloudflare setup](docs/cloudflare_setup.md) if you want Cloudflare DNS-01 auto-renew for certificates.
-4. [Onboarding](docs/onboarding.md) to pair a vacuum from a second machine after the server is running.
-5. [Updating](docs/updating.md) if you already have an install and are moving to a newer stable release.
+## Additional docs
 
-Before choosing a certificate path, check [Tested vacuums](docs/tested_vacuums.md). Different models do not all accept the same certificate chains. For most users, start with ZeroSSL. Use Actalis mainly for older vacuums or models that are already known to trust that chain more reliably.
-
-Additional docs:
-
-- [Docs index](docs/index.md)
-- [Known limitations](docs/known_limitations.md)
-- [Tested vacuums](docs/tested_vacuums.md)
-- [Home Assistant](docs/home_assistant.md) for the add-on install path and Home Assistant integration rewiring
-- [Using the Roborock App](docs/roborock_app.md)
-- [Updating](docs/updating.md)
-- [Custom MQTT](docs/custom_mqtt.md)
-- [Custom certificate management](docs/custom_cert_management.md)
-
+- [Tested vacuums](docs/tested_vacuums.md) - List of vacuums that have been tested with this stack
+- [Known limitations](docs/known_limitations.md) - Information about known issues with specific vacuum models
+- [Home Assistant](docs/home_assistant.md) - for the add-on install path and Home Assistant integration rewiring
+- [Repointing the Roborock App](docs/roborock_app.md) - How to repoint the Roborock app to your local server
+- [Updating](docs/updating.md) - Procedures for updating an existing installation
+- [Custom MQTT](docs/custom_mqtt.md) - Instructions for using a custom MQTT broker
+- [Custom certificate management](docs/custom_cert_management.md) - Guidance for using your own certificate files
 
 
 ## Acknowledgements
