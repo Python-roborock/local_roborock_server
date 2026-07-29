@@ -88,5 +88,4 @@ docker compose logs -f roborock-local-server #check the logs for errors
 - [Updating](updating.md) for upgrading an existing instal
 - [Home Assistant](home_assistant.md#repoint-the-home-assistant-roborock-integration) if you want to repoint the Home Assistant Roborock integration to your local stack
 - [Onboarding](onboarding.md) for pairing a new vacuum
-- [Using the Roborock App](roborock_app.md) if you want to point the official app at your local stackl
-- [Docs index](index.md) for the rest of the guides
+- [Repointing the Roborock App](roborock_app.md) if you want to point the official app at your local stack

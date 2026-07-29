@@ -2,7 +2,7 @@
 
 Use this page first for the setup details that apply to both installation paths.
 
-Before getting started, check [Tested Vacuums](tested_vacuums.md).
+Before getting started, check [Tested Vacuums](tested_vacuums.md) and [Known Limitations](known_limitations.md) to see if your vacuum model has been tested and that you understand the current limitations of the stack. 
 
 ## Prerequisites
 
@@ -56,7 +56,7 @@ Different vacuums trust different certificate chains. That determines whether yo
 
 - use `zerossl` with Cloudflare DNS-01 automation,
 - use `actalis` with Cloudflare DNS-01 automation, or
-- skip Cloudflare ACME and bring your own certificate files instead
+- skip Cloudflare ACME and [bring your own certificate files instead](custom_cert_management.md)
 
 You can check [Tested Vacuums](tested_vacuums.md) to see of anyone has already tested your vacuum model with a specific certificate chain. For most users, prefer `zerossl` authority.  The `actalis` is mainly used by older vacuums or for models that already have been tested showing better compatibility with that chain.
 
