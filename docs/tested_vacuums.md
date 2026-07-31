@@ -54,7 +54,7 @@ Legend:
 | Roborock G30U | `02.52.32` | ✅ | ❓ | ❓ | ❓ |
 | Roborock Qrevo S5V | Not reported | ❓ | ❓ | ❓ | ❓ |
 | QRevo MaxV | Not reported | ✅ | ❓ | ✅ | ❓ |
-| QRevo Master | Not reported | ❓ | ❓ | ❓ | ❓ |
+| QRevo Master | `02.28.26` | ❓ | ❓ | ✅ | ❓ |
 | QRevo Plus | Not reported | ✅ | ❓ | ❓ | ❓ |
 
 ## Unlisted Vacuums
