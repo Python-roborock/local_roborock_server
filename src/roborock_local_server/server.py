@@ -1334,6 +1334,8 @@ class ReleaseSupervisor:
             "support": PROJECT_SUPPORT,
             "inventory_path": str(self.paths.inventory_path),
             "cloud_snapshot_path": str(self.paths.cloud_snapshot_path),
+            "advertised_https_port": self.config.network.advertised_https_port,
+            "advertised_mqtt_tls_port": self.config.network.advertised_mqtt_tls_port,
         }
 
     def _vacuums_payload(self) -> dict[str, Any]:
