@@ -42,7 +42,7 @@ Legend:
 - Cross: reported not working
 - Question mark: not reported yet
 
-| Vacuum | Firmware | ZeroSSL / Cloudflare | Actalis | Let's Encrypt | SSL.com |
+| Vacuum | Firmware | ZeroSSL / Cloudflare | Actalis | Let's Encrypt | SSL.com (Sectigo) |
 |---|---:|---:|---:|---:|---:|
 | Roborock S5 Max | Not reported | ❌ | ✅ | ❌ | ❓ |
 | Roborock S7 | Not reported | ❓ | ✅ | ❌ | ✅ |
@@ -54,7 +54,7 @@ Legend:
 | Roborock G30U | `02.52.32` | ✅ | ❓ | ❓ | ❓ |
 | Roborock Qrevo S5V | Not reported | ❓ | ❓ | ❓ | ❓ |
 | QRevo MaxV | Not reported | ✅ | ❓ | ✅ | ❓ |
-| QRevo Master | `02.28.26` | ❓ | ❓ | ✅ | ❓ |
+| QRevo Master | `02.28.26` | ❓ | ❓ | ✅ | ✅ |
 | QRevo Plus | Not reported | ✅ | ❓ | ❓ | ❓ |
 
 ## Unlisted Vacuums
