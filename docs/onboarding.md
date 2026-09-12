@@ -144,6 +144,7 @@ Everything in "What To Expect" above still applies. Some vacuums need 2-4 cycles
 
 ## Related Docs
 
+- [Experimental V2 public-key recovery](v2_onboarding.md)
 - [Installation](installation.md)
 - [Tested vacuums](tested_vacuums.md)
 - [Home Assistant](home_assistant.md)

@@ -56,11 +56,42 @@ def split_signed_query(query: str) -> tuple[str, str] | None:
     return canonical, signature_b64
 
 
-def _emsa_pkcs1_v1_5_sha256(msg: str, key_bytes: int) -> int:
-    digest = hashlib.sha256(msg.encode("utf-8")).digest()
-    digest_info = bytes.fromhex("3031300d060960864801650304020105000420") + digest
-    if key_bytes < len(digest_info) + 3:
-        raise ValueError("key too small for PKCS1v1.5 SHA-256 encoding")
+def split_v2_region_sample(sample: dict[str, str]) -> tuple[str, str] | None:
+    """Select the verified RSA-4096/SHA-384 GET /region header contract.
+
+    Preserve wire query bytes: decoding or re-encoding changes the signed message.
+    POST bodies and B01 /b/region are deliberately outside this verified contract.
+    """
+    if (
+        sample.get("version") != "v2"
+        or sample.get("method") != "GET"
+        or sample.get("path") not in ("/region", "/.roborock.com/region")
+    ):
+        return None
+    signature = sample.get("signature_b64", "")
+    try:
+        if len(base64.b64decode(signature, validate=True)) != 512:
+            return None
+    except (ValueError, TypeError):
+        return None
+    query = sample.get("query", "").split("&signature=", 1)[0]
+    nonce, timestamp = sample.get("nonce", ""), sample.get("ts", "")
+    if not query or not nonce or not timestamp:
+        return None
+    return f"{query}:{nonce}:{timestamp}", signature
+
+
+def _emsa_pkcs1_v1_5(msg: str, key_bytes: int, hash_name: str) -> int:
+    prefixes = {
+        "sha256": "3031300d060960864801650304020105000420",
+        "sha384": "3041300d060960864801650304020205000430",
+    }
+    if hash_name not in prefixes:
+        raise ValueError("RSA sample recovery supports sha256 or sha384")
+    digest = hashlib.new(hash_name, msg.encode("utf-8")).digest()
+    digest_info = bytes.fromhex(prefixes[hash_name]) + digest
+    if key_bytes < len(digest_info) + 11:
+        raise ValueError("key too small for PKCS1v1.5 encoding")
     ps = b"\xff" * (key_bytes - len(digest_info) - 3)
     em = b"\x00\x01" + ps + b"\x00" + digest_info
     return int.from_bytes(em, "big")
@@ -79,18 +110,25 @@ def recover_modulus_from_samples(
     samples: list[tuple[str, str]],
     *,
     e: int = DEFAULT_RSA_E,
+    hash_name: str = "sha256",
     diagnostics: dict[str, Any] | None = None,
 ) -> int | None:
-    """Recover an RSA modulus from canonical query/signature pairs.
+    """Recover an RSA public modulus from exact signed-message/signature pairs.
 
     If ``diagnostics`` is supplied, it is populated with information about each
     stage of recovery so callers can surface a precise failure reason.
+    SHA-256 remains the default for existing onboarding. Verified v2
+    RSA-4096 requests use SHA-384; callers must explicitly select it and
+    supply the exact canonical message. HMAC tags are not RSA.
     """
 
     def _diag(key: str, value: Any) -> None:
         if diagnostics is not None:
             diagnostics[key] = value
 
+    if hash_name not in ("sha256", "sha384"):
+        raise ValueError("RSA sample recovery supports sha256 or sha384")
+    _diag("hash_name", hash_name)
     _diag("input_samples", len(samples))
     dedup: dict[str, str] = {}
     for canonical, sig_b64 in samples:
@@ -106,6 +144,12 @@ def recover_modulus_from_samples(
     _diag("sig_byte_lengths", sig_lengths)
     key_bytes = max(sig_lengths)
     _diag("key_bytes", key_bytes)
+    if key_bytes < MIN_RSA_SIGNATURE_BYTES:
+        _diag(
+            "reason",
+            "Signatures are too short for RSA sample recovery; HMAC tags cannot use this method.",
+        )
+        return None
     xs: list[Any] = []
     verifiers: list[tuple[int, int]] = []
     for canonical, sig_b64 in pairs:
@@ -113,7 +157,7 @@ def recover_modulus_from_samples(
         if len(sig_bytes) != key_bytes:
             continue
         sig_int = int.from_bytes(sig_bytes, "big")
-        em_int = _emsa_pkcs1_v1_5_sha256(canonical, key_bytes)
+        em_int = _emsa_pkcs1_v1_5(canonical, key_bytes, hash_name)
         x = gmpy2.mpz(sig_int) ** e - gmpy2.mpz(em_int)
         xs.append(abs(x))
         verifiers.append((sig_int, em_int))
@@ -224,10 +268,27 @@ def _recover_modulus_subprocess(
     samples: list[tuple[str, str]],
     e: int,
     conn: Any,
+    hash_name: str = "sha256",
 ) -> None:
     diag: dict[str, Any] = {}
     try:
-        modulus = recover_modulus_from_samples(samples, e=e, diagnostics=diag)
+        # Three samples normally remove small common cofactors. Verify every
+        # remaining sample with modular exponentiation instead of huge powers.
+        recovery_samples = samples[:3] if hash_name == "sha384" else samples
+        modulus = recover_modulus_from_samples(
+            recovery_samples, e=e, hash_name=hash_name, diagnostics=diag
+        )
+        if modulus and hash_name == "sha384":
+            verified = sum(
+                len(base64.b64decode(signature, validate=True)) == 512
+                and pow(int.from_bytes(base64.b64decode(signature), "big"), e, modulus)
+                == _emsa_pkcs1_v1_5(canonical, 512, hash_name)
+                for canonical, signature in samples
+            )
+            diag["verified_samples"] = verified
+            if verified != len(samples):
+                modulus = None
+                diag["reason"] = "Recovered v2 modulus did not verify every captured sample."
         conn.send((int(modulus) if modulus else None, "", "", diag))
     except Exception as exc:  # noqa: BLE001
         tb = traceback.format_exc()
@@ -379,12 +440,13 @@ class DeviceKeyCache:
                         {
                             "method": str(sample.get("method", "")).strip().upper(),
                             "path": str(sample.get("path", "")).strip(),
-                            "query": str(sample.get("query", "")).strip(),
+                            "query": str(sample.get("query", "")),
                             "nonce": str(sample.get("nonce", "")).strip(),
                             "ts": str(sample.get("ts", "")).strip(),
                             "signature_b64": signature_b64,
                             "body_sha256": str(sample.get("body_sha256", "")).strip(),
                             "signature_len": str(sig_len),
+                            "version": str(sample.get("version", "")).strip(),
                         }
                     )
                 if clean_headers:
@@ -409,9 +471,10 @@ class DeviceKeyCache:
     def _resume_pending_recoveries(self) -> None:
         pending: list[str] = []
         with self._lock:
-            for did, samples in self._samples.items():
+            for did in set(self._samples) | set(self._header_samples):
                 if did in self._pubkeys:
                     continue
+                samples, _hash_name, _source = self._recovery_samples_locked(did)
                 if len(samples) < 2:
                     continue
                 pending.append(did)
@@ -516,6 +579,7 @@ class DeviceKeyCache:
         ts: str,
         signature_b64: str,
         body_sha256: str = "",
+        version: str = "",
     ) -> bool:
         sign = (signature_b64 or "").strip()
         if not did or not sign:
@@ -527,12 +591,13 @@ class DeviceKeyCache:
         entry = {
             "method": (method or "").strip().upper(),
             "path": (path or "").strip(),
-            "query": (query or "").strip(),
+            "query": query or "",
             "nonce": (nonce or "").strip(),
             "ts": (ts or "").strip(),
             "signature_b64": sign,
             "body_sha256": (body_sha256 or "").strip(),
             "signature_len": str(sig_len),
+            "version": (version or "").strip(),
         }
         with self._lock:
             arr = self._header_samples.setdefault(did, [])
@@ -547,6 +612,16 @@ class DeviceKeyCache:
             self._save_safe_locked()
         return True
 
+    def _recovery_samples_locked(self, did: str) -> tuple[list[tuple[str, str]], str, str]:
+        headers = [
+            pair
+            for sample in self._header_samples.get(did, [])
+            if (pair := split_v2_region_sample(sample)) is not None
+        ]
+        if headers:
+            return list(dict.fromkeys(headers)), "sha384", "v2 region header"
+        return list(self._samples.get(did, [])), "sha256", "query"
+
     def maybe_recover_async(self, did: str) -> None:
         with self._lock:
             if did in self._pubkeys:
@@ -554,9 +629,9 @@ class DeviceKeyCache:
                 if changed:
                     self._save_safe_locked()
                 return
-            samples = list(self._samples.get(did, []))
+            samples, hash_name, sample_source = self._recovery_samples_locked(did)
             if len(samples) < 2:
-                note = f"Need at least 2 query signature samples ({len(samples)} captured)."
+                note = f"Need at least 2 {sample_source} signature samples ({len(samples)} captured)."
                 changed = self._set_recovery_meta_locked(did, state="collecting", note=note)
                 if changed:
                     self._save_safe_locked()
@@ -598,7 +673,7 @@ class DeviceKeyCache:
             self._set_recovery_meta_locked(
                 did,
                 state="recovering",
-                note="Recovering RSA modulus from query signatures.",
+                note=f"Recovering RSA modulus from {sample_source} signatures ({hash_name}).",
                 started_at=started_at,
             )
             self._save_safe_locked()
@@ -609,7 +684,7 @@ class DeviceKeyCache:
                 parent_conn, child_conn = _MP_CTX.Pipe(duplex=False)
                 process = _MP_CTX.Process(
                     target=_recover_modulus_subprocess,
-                    args=(samples, DEFAULT_RSA_E, child_conn),
+                    args=(samples, DEFAULT_RSA_E, child_conn, hash_name),
                     daemon=True,
                 )
                 process.start()

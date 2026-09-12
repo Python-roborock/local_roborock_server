@@ -978,6 +978,7 @@ class ReleaseSupervisor:
                         ts=ts,
                         signature_b64=sign,
                         body_sha256=body_sha256,
+                        version=region_version,
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("key_cache add_header_signature failed did=%s: %s", key_capture_did, exc)
