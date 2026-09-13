@@ -683,6 +683,7 @@ def test_region_v2_request_surfaces_unsupported_onboarding_alert(tmp_path: Path)
             "signature_b64": "QUJD",
             "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "signature_len": "3",
+            "version": "v2",
         }
     ]
 
