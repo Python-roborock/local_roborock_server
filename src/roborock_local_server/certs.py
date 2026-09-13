@@ -17,6 +17,7 @@ from .config import AppConfig, AppPaths
 
 LOG = logging.getLogger("roborock_local_server.certs")
 ACME_SH_PATH = Path("/opt/acme.sh/acme.sh")
+ACME_RENEW_SKIP_RETURN_CODE = 2
 
 
 @dataclass(frozen=True)
@@ -155,6 +156,9 @@ class CertificateManager:
         )
         if result.stdout.strip():
             LOG.info("ACME output:\n%s", self._redact_text(result.stdout.strip(), sensitive_values))
+        if result.returncode == ACME_RENEW_SKIP_RETURN_CODE:
+            LOG.info("ACME command skipped because certificate renewal is not due: %s", display_command)
+            return
         if result.returncode != 0:
             raise RuntimeError(f"ACME command failed ({result.returncode}): {display_command}")
 

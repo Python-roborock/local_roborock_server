@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Device compatibility report
+    url: https://github.com/Python-roborock/local_roborock_server/discussions/categories/compatibility
+    about: >-
+      Confirming the server works (or does not work) on your vacuum? That goes in
+      the Compatibility Discussions category, not in Issues. Please share your
+      model, firmware, and which certificate chain you used so others can benefit.

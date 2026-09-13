@@ -1,0 +1,68 @@
+name: Bug/Issue report
+description: Report a issue related to the Roborock Local Server stack
+labels: ["bug/issue"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Thanks for taking the time to file a bug/issue! If instead you just want to
+        confirm the server/onboarding works (or does not work) on your device, please use
+        the [Compatibility Discussions
+        category](https://github.com/Python-roborock/local_roborock_server/discussions/categories/compatibility)
+        rather than opening an issue.
+
+  - type: checkboxes
+    id: confirm-issue
+    attributes:
+      label: This is a real issue?
+      options:
+        - label: I have confirmed this is a issue, not a report that the project works on my device.
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the issue/problem, including what you expected to happen instead.
+      placeholder: Onboarding fails after devices says connection to wifi...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: What did you do, in what order?
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: vacuum
+    attributes:
+      label: Vacuum model
+      description: Which Roborock model are you trying on?
+      placeholder: Roborock S8 MaxV Ultra
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Server / image version
+      description: Which version or image tag are you running?
+      placeholder: ghcr.io/python-roborock/local_roborock_server:v1.0.2
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste any relevant log output. This will be automatically formatted, no backticks needed.
+      render: shell
+    validations:
+      required: false
