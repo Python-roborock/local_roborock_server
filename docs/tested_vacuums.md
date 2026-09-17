@@ -56,6 +56,7 @@ Legend:
 | QRevo MaxV | Not reported | ✅ | ❓ | ✅ | ❓ |
 | QRevo Master | `02.28.26` | ❓ | ❓ | ✅ | ❓ |
 | QRevo Plus | Not reported | ✅ | ❓ | ❓ | ❓ |
+| QX Revo Plus (Costco version) | Not reported | ❓ | ❓ | ✅ | ❓ |
 
 ## Unlisted Vacuums
 
