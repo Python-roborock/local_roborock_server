@@ -80,6 +80,7 @@ Japan (No DST): `JST-9`
 
 - The first successful attempt usually increases the query sample count.
 - If the sample count increases but the public key is still missing, run another cycle.
+- Public-key recovery can take several minutes. On some newer models, the query sample count stays at zero during recovery; watch for **Public Key determined** instead.
 - Once the public key is ready, the script will tell you to do one final pairing cycle so the vacuum connects fully.
 - Some vacuums are slow on that final cycle and may take a few minutes before they say Wi-Fi connected or show up as connected in the server.
 - Some vacuums need 2-4 cycles total.
@@ -144,7 +145,6 @@ Everything in "What To Expect" above still applies. Some vacuums need 2-4 cycles
 
 ## Related Docs
 
-- [Experimental V2 public-key recovery](v2_onboarding.md)
 - [Installation](installation.md)
 - [Tested vacuums](tested_vacuums.md)
 - [Home Assistant](home_assistant.md)
