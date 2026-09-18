@@ -8,14 +8,14 @@ If you would like to contribute there are a few ways that would be great!
 
 ## Where does my report go?
 
-To keep Issues focused and actionable, there are three destinations depending on what you have:
+Choose the form that matches your contribution:
 
 - **Found a bug?** → Open an [Issue](https://github.com/Python-roborock/local_roborock_server/issues/new/choose).
-  Use the bug report form and confirm it is a real issue, not a "works on my device" note.
-- **Confirming (or ruling out) that the server runs on your vacuum?** → Post in the
-  [Compatibility Discussions category](https://github.com/Python-roborock/local_roborock_server/discussions/categories/compatibility).
-  Please include your model, firmware, and which certificate chain you used. These reports do **not**
-  belong in Issues.
+  Use the bug report form for a problem you need help investigating.
+- **Confirming (or ruling out) that the server runs on your vacuum?** → Open a
+  [compatibility report](https://github.com/Python-roborock/local_roborock_server/issues/new?template=compatibility.yml).
+  Include your exact model, firmware, server version, certificate issuer, and what worked or failed.
+  Mention any workarounds needed for the result.
 - **Have a confirmed, reproducible result to record?** → Open a pull request adding a row to
   [Tested Vacuums.md](/docs/tested_vacuums.md) so the next person can find it quickly.
 

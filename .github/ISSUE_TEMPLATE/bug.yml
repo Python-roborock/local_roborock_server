@@ -1,23 +1,13 @@
 name: Bug/Issue report
-description: Report a issue related to the Roborock Local Server stack
+description: Report an issue related to the Roborock Local Server stack
 labels: ["bug/issue"]
 body:
   - type: markdown
     attributes:
       value: >-
-        Thanks for taking the time to file a bug/issue! If instead you just want to
-        confirm the server/onboarding works (or does not work) on your device, please use
-        the [Compatibility Discussions
-        category](https://github.com/Python-roborock/local_roborock_server/discussions/categories/compatibility)
-        rather than opening an issue.
-
-  - type: checkboxes
-    id: confirm-issue
-    attributes:
-      label: This is a real issue?
-      options:
-        - label: I have confirmed this is a issue, not a report that the project works on my device.
-          required: true
+        Use this form for a problem you need help investigating. To share a
+        compatibility result, use the
+        [compatibility report form](https://github.com/Python-roborock/local_roborock_server/issues/new?template=compatibility.yml).
 
   - type: textarea
     id: what-happened
