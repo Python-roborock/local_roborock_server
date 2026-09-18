@@ -28,7 +28,7 @@ if you try one.
 - Qrevo Curv 2 Flow
 - Saros Z70
 
-Reports made before `1.1.0` need retesting on those devices and firmware versions.
+Failing reports made before `1.1.0` need retesting on those devices and firmware versions.
 
 ## Known Failures
 
@@ -37,7 +37,6 @@ These reports remain unresolved:
 | Vacuum | Firmware | Result | Report |
 |---|---|---|---|
 | Roborock Q7 TF+ | Not reported | Onboarding fails; uses a different protocol from the V2 models supported in `1.1.0`. | [#48](https://github.com/Python-roborock/local_roborock_server/issues/48) |
-| Roborock G20S Ultra (a143, China model) | `02.52.78` | Connects to the server, but status requests fail with `-10002` / access denied. | [#81](https://github.com/Python-roborock/local_roborock_server/issues/81) |
 
 ## Supported Vacuums
 
