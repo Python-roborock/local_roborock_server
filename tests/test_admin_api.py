@@ -615,7 +615,7 @@ def test_onboarding_signed_query_fallback_uses_active_target_and_triggers_recove
     assert recovery_calls == ["1103821560705"]
 
 
-def test_region_v2_request_surfaces_unsupported_onboarding_alert(tmp_path: Path) -> None:
+def test_region_v2_request_keeps_onboarding_in_progress(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
     paths = resolve_paths(config_file, config)
@@ -658,7 +658,7 @@ def test_region_v2_request_surfaces_unsupported_onboarding_alert(tmp_path: Path)
         encoding="utf-8",
     )
     supervisor = ReleaseSupervisor(config=config, paths=paths)
-    supervisor.runtime_state.start_onboarding_session(
+    started = supervisor.runtime_state.start_onboarding_session(
         target_duid="cloud-saros-a",
         target_name="Saros",
         target_did="1103821560705",
@@ -692,10 +692,16 @@ def test_region_v2_request_surfaces_unsupported_onboarding_alert(tmp_path: Path)
     devices = client.get("/admin/api/onboarding/devices")
     assert devices.status_code == 200
     [device] = devices.json()["devices"]
-    assert device["onboarding"]["status"] == "unsupported"
-    assert device["onboarding"]["unsupported"] is True
-    assert device["onboarding"]["unsupported_reason"] == "region_v2"
-    assert "v2 /region onboarding flow" in device["onboarding"]["guidance"]
+    assert device["onboarding"]["status"] == "collecting_messages"
+    assert device["onboarding"]["unsupported"] is False
+    assert device["onboarding"]["unsupported_reason"] == ""
+    assert "NC Prepare" in device["onboarding"]["guidance"]
+
+    session = client.get(f"/admin/api/onboarding/sessions/{started['session_id']}")
+    assert session.status_code == 200
+    assert session.json()["status"] == "in_progress"
+    assert session.json()["unsupported"] is False
+    assert session.json()["complete"] is False
 
 
 def test_core_only_mode_disables_standalone_admin_routes(tmp_path: Path) -> None:

@@ -1,5 +1,7 @@
 # Changelog
 
+Beta is currently unused. Use **Roborock Local Server** for the stable `1.1.0` release.
+
 ## 1.1.0-rc2
 
 - Parse multipart NC form fields so the server can identify the vacuum, preserve its provisioning values, encrypt the reply with its recovered public key, and record the NC onboarding step.

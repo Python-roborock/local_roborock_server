@@ -1,7 +1,7 @@
 name: Roborock Local Server Beta
 version: "1.1.0-rc2"
 slug: roborock_local_server_beta
-description: Opt-in prerelease testing of the Roborock local server, including experimental V2 key recovery.
+description: Currently unused. Install Roborock Local Server for the stable release.
 stage: experimental
 url: "https://github.com/Python-roborock/local_roborock_server"
 image: "ghcr.io/python-roborock/local_roborock_server"

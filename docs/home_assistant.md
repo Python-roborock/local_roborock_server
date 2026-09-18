@@ -60,19 +60,13 @@ After the dashboard opens, complete the same post-start steps as the Docker inst
 
 If you need the MITM protocol sync secret for the Roborock app flow, sign in to the admin page and open **Protocol Auth**. The dashboard shows the active `admin.session_secret`, so you do not need to inspect `/data/config.toml` manually.
 
-### Opt-in Beta testing
+### Beta add-on
 
-The repository also provides **Roborock Local Server Beta** for prerelease
-testing. Install it explicitly from the add-on store after its prerelease image
-has been published. Stable installations remain on their stable image version.
+**Roborock Local Server Beta** is currently unused and remains on `1.1.0-rc2`.
+Install **Roborock Local Server** for the stable `1.1.0` release.
 
-Beta has a separate add-on slug and persistent data, so the first installation
-requires its own configuration and cloud import. If reusing the same hostname
-and ports, stop the stable add-on and disable its start-on-boot setting while
-testing. Later Beta versions use the normal Home Assistant update flow.
-
-See the [Beta setup and testing instructions](https://github.com/Python-roborock/local_roborock_server/blob/main/roborock_local_server_beta_addon/DOCS.md)
-for installation, V2 checkpoints, and returning to stable.
+Beta and stable keep separate data. See [switching from Beta to stable](updating.md#switching-from-beta-to-stable)
+if you tested an RC using the Beta add-on.
 
 ### Add-on Behavior
 
