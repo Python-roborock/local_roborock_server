@@ -348,7 +348,19 @@ def test_runtime_state_completes_region_v2_onboarding(tmp_path: Path) -> None:
 
     # The status layer reads the result persisted by public-key recovery.
     key_state_path.write_text(
-        json.dumps({"devices": {"1103821560705": {"modulus_hex": "ab"}}}),
+        json.dumps(
+            {
+                "devices": {
+                    "1103821560705": {
+                        "modulus_hex": "ab",
+                        "recovery": {
+                            "state": "recovered",
+                            "finished_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    }
+                }
+            }
+        ),
         encoding="utf-8",
     )
     session = state.onboarding_session_snapshot()
