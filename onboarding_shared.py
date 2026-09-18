@@ -63,14 +63,18 @@ def perform_onboarding_preflight(
     )
     output.write(_tls_success_message(f"https://{api_host}:{api_port}", allow_insecure_tls))
 
-    output.write(f"Checking MQTT TLS listener at ssl://{api_host}:{mqtt_port}...\n")
+    # Prefer advertised port (external_tls mode) over internal listener port
+    advertised_mqtt_port = status.get("advertised_mqtt_tls_port")
+    mqtt_preflight_port = advertised_mqtt_port if advertised_mqtt_port else mqtt_port
+
+    output.write(f"Checking MQTT TLS listener at ssl://{api_host}:{mqtt_preflight_port}...\n")
     _probe_tls_endpoint(
         host=api_host,
-        port=mqtt_port,
+        port=mqtt_preflight_port,
         allow_insecure_tls=allow_insecure_tls,
-        label=f"ssl://{api_host}:{mqtt_port}",
+        label=f"ssl://{api_host}:{mqtt_preflight_port}",
     )
-    output.write(_tls_success_message(f"ssl://{api_host}:{mqtt_port}", allow_insecure_tls))
+    output.write(_tls_success_message(f"ssl://{api_host}:{mqtt_preflight_port}", allow_insecure_tls))
     return status
 
 
