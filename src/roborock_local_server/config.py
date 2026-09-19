@@ -31,6 +31,8 @@ class BrokerConfig:
     mode: str
     host: str
     port: int
+    username: str
+    password: str
     mosquitto_binary: str
     enable_topic_bridge: bool
 
@@ -203,6 +205,8 @@ def load_config(path: str | Path) -> AppConfig:
     if broker_mode == "embedded" and not broker_host:
         broker_host = "127.0.0.1"
     broker_port_default = 18830 if broker_mode == "embedded" else 1883
+    broker_username = str(broker.get("username")) or ""
+    broker_password = str(broker.get("password")) or ""
 
     https_port = _as_port(network.get("https_port"), "network.https_port", 555)
     mqtt_tls_port = _as_port(network.get("mqtt_tls_port"), "network.mqtt_tls_port", 8881)
@@ -235,6 +239,8 @@ def load_config(path: str | Path) -> AppConfig:
             mode=broker_mode,
             host=broker_host,
             port=_as_port(broker.get("port"), "broker.port", broker_port_default),
+            username=broker_username,
+            password=broker_password,
             mosquitto_binary=str(broker.get("mosquitto_binary", "mosquitto")).strip() or "mosquitto",
             enable_topic_bridge=_as_bool(broker.get("enable_topic_bridge"), True),
         ),
