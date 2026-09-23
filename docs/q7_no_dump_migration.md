@@ -53,3 +53,9 @@ Hardware gates still open:
 The existing Q7 local bootstrap implementation is described in
 [q7_b01.md](q7_b01.md). It handles devices whose HMAC secret is already known;
 it does not remove the hardware gates above for a stock, no-dump device.
+
+An additional offline probe reconstructed the inspected unit's normal
+`bootcmd` and `bootargs` from its rootfs SquashFS header and the updater's
+recovery values, matching both saved ENV copies. This may remove the need for a
+per-device ENV snapshot on the same firmware, but it has not been checked on a
+second Q7 or used in an OTA return script. The physical restore gate remains.
