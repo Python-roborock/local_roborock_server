@@ -148,3 +148,15 @@ decryption, `signed:false` handling, recovery execution, and return to normal
 boot without modifying partitions. The existing no-dump migration design for
 future owners still starts from an ordinary account import; this vendor
 capture used the inspected unit's secret solely to obtain a reference OTA.
+
+Static inspection of the 03.01.80 rootfs found its `/oem/bin/rriot_client`
+byte-for-byte identical to the 03.01.74 binary carved from the inspected
+flash image (158,516 bytes; SHA-256
+`e1d1959014efc03bcb7f8dae397ea744fdcd7934721d925941389220d2b449d2`).
+The unchanged client retains the B01 HMAC `/b/region` and `/b/nc` logic and
+the separate RSA/V2 branch. The OTA's five blocks update kernel, recovery,
+rootfs, and related environment content, not the persisted certificate or
+userdata identity. Thus this update does not introduce a V2-only onboarding
+client; the observed Q7 HMAC path should remain available after 03.01.80.
+This is a static inference about the post-update device, not a claim that the
+physical Q7 has installed 03.01.80.
