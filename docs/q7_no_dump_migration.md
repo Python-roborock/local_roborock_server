@@ -8,6 +8,12 @@ to the owner's Q7; no OTA package was delivered or installed.
 The intended input is a normal Roborock account import containing the cloud
 DUID and the device's 16-byte local key. The native numeric DID and the
 per-device HMAC bootstrap secret are not required for the proposed OTA edit.
+Use the **current account import**, not values copied from a prior firmware
+dump. On the inspected Q7, re-onboarding left two server records with the same
+hardware DID; the record with recent MQTT activity had a different DUID, and
+the current local key differed from the dumped one. An older DUID could still
+reach this one device through the local broker's DID route, so command delivery
+alone is not proof that a DUID or local key is current.
 An admin endpoint reserves an idempotent MQTT client ID, username and password
 for that DUID. `scripts/q7_prepare_migration.py` puts those values and the
 chosen HTTPS/MQTT origins in a private five-field manifest. Neither action
@@ -43,7 +49,17 @@ Hardware gates still open:
    OTA activation. It does not prove that the supplied `signed` flag or other
    fields survive to verification, nor that an encrypted package is accepted.
    The failed-download attempt remained at 0% `downloading` during initial
-   monitoring; do not send a second request while one is pending.
+   monitoring. At 22:12:51 UTC the Q7 published a device-origin P201
+   `mqttOtaStatus` event with `status:FAILED` and
+   `errMsg:DOWNLOAD_ERROR`. A later getter returned OTA `idle` and work
+   status 4 (charging). No package was served; no install or reboot was
+   observed. The OTA handler also creates an upgrade marker, restarts a robot
+   service, and removes old log files before the download result. This is a
+   stateful hardware experiment rather than a harmless getter.
+   Bounded Unicorn execution of the recovered ARM worker confirms that a
+   failed download invokes neither package verification, install nor reboot;
+   a synthetic success reaches those callbacks. The live failure event agrees
+   with the worker's failed-download branch.
 2. Verify that the robot can fetch an artifact over the chosen HTTPS origin.
    The staging route is tested locally, but the running add-on does not yet
    include it.
