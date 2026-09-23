@@ -2,8 +2,8 @@
 
 This is an experimental path for an owner of a stock `roborock.vacuum.sc05`
 running `03.01.74`. It is **not yet a device test procedure**. The local-server
-pieces below have synthetic tests; no OTA package has been sent to a Q7 through
-this path.
+pieces below have synthetic tests. A failed-download transport probe was sent
+to the owner's Q7; no OTA package was delivered or installed.
 
 The intended input is a normal Roborock account import containing the cloud
 DUID and the device's 16-byte local key. The native numeric DID and the
@@ -35,10 +35,15 @@ that happens, the topic bridge does not guess a target DID from the model.
 
 Hardware gates still open:
 
-1. Demonstrate that an owner-authenticated `ota.upgrade.set` reaches a stock
-   Q7 with the required URL, encrypted MD5/size, package type and `signed`
-   fields intact. The read-only `ota.progress.get` works on the inspected unit;
-   the write method has not been sent.
+1. Establish full package-field handling. A single owner-authenticated
+   `ota.upgrade.set` with `signed:false`, an impossible MD5, and a loopback
+   URL returned `{"result":0}` on the inspected Q7. Its OTA state changed
+   from `idle` to `downloading`, and work status changed from charging (4) to
+   updating (8). This establishes local-broker write delivery and device-side
+   OTA activation. It does not prove that the supplied `signed` flag or other
+   fields survive to verification, nor that an encrypted package is accepted.
+   The failed-download attempt remained at 0% `downloading` during initial
+   monitoring; do not send a second request while one is pending.
 2. Verify that the robot can fetch an artifact over the chosen HTTPS origin.
    The staging route is tested locally, but the running add-on does not yet
    include it.
@@ -59,3 +64,8 @@ An additional offline probe reconstructed the inspected unit's normal
 recovery values, matching both saved ENV copies. This may remove the need for a
 per-device ENV snapshot on the same firmware, but it has not been checked on a
 second Q7 or used in an OTA return script. The physical restore gate remains.
+
+The controlled probe source is `scripts/q7_ota_transport_probe.py`. It is a
+dry run unless `--live` is passed and checks for charging plus idle OTA state
+before sending one deliberately unfetchable request. It is research evidence,
+not a step in the user migration flow.
