@@ -191,3 +191,7 @@ inspected Q7's full secret, its middle AES-key slice, and a Base64 form found
 no match. The earlier owner `newadd` and firmware-info responses likewise had
 no match. This narrows the ordinary owner-cloud export route; it does not
 exclude every undocumented vendor endpoint or official support export.
+
+The inspected bootstrap-key use sites, USB gadget prerequisites, and bounded
+`signed:false` branch check are recorded in
+[q7_crypto_usb_audit.md](q7_crypto_usb_audit.md).
