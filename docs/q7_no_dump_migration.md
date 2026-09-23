@@ -160,3 +160,34 @@ userdata identity. Thus this update does not introduce a V2-only onboarding
 client; the observed Q7 HMAC path should remain available after 03.01.80.
 This is a static inference about the post-update device, not a claim that the
 physical Q7 has installed 03.01.80.
+
+## Why forcing V2 does not remove the secret requirement
+
+The unchanged Q7 `rriot_client` chooses its alternate RSA/V2 request builder
+only when the loaded factory private key has `RSA_size() == 512` (4096 bits).
+The inspected Q7's key is 2048 bits, so its current identity selects B01
+HMAC. Neither the Wi-Fi provisioning token nor an owner account setting was
+found to change that selector. Switching it would require replacing the
+factory key with a matching 4096-bit identity or changing signed firmware;
+neither has an established owner-accessible route on this Q7.
+
+The alternate builder changes request authentication and marks its headers
+`v: v2`; its NC request still uses `/b/nc` and body protocol `p=B01`.
+Consequently, selecting this branch alone would not turn the Q7 into a
+different model's complete V2 onboarding flow. The 03.01.80 vendor OTA keeps
+this client binary byte-for-byte unchanged, and its payload does not replace
+the persisted certificate or userdata identity.
+
+More decisively, bounded execution of the alternate Q7 NC branch showed that
+it rejoins the same AES response handler, which uses the existing
+`device.json` secret. Even a valid RSA/V2 request therefore would not let a
+custom server construct an accepted NC response without that secret. This is
+specific to the Q7's alternate branch and should not be generalized to other
+V2 models.
+
+A fresh read of the current owner's raw `/v3/user/homes/{home_id}` response
+returned a 16,167-byte device inventory. A private comparison against the
+inspected Q7's full secret, its middle AES-key slice, and a Base64 form found
+no match. The earlier owner `newadd` and firmware-info responses likewise had
+no match. This narrows the ordinary owner-cloud export route; it does not
+exclude every undocumented vendor endpoint or official support export.
