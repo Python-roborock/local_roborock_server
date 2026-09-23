@@ -85,3 +85,38 @@ The controlled probe source is `scripts/q7_ota_transport_probe.py`. It is a
 dry run unless `--live` is passed and checks for charging plus idle OTA state
 before sending one deliberately unfetchable request. It is research evidence,
 not a step in the user migration flow.
+
+## Capturing a vendor OTA for reference
+
+The vendor owner API has a read-only firmware-info request
+(`GET /ota/firmware/{duid}/updatev2`) and a separate upgrade trigger
+(`POST /ota/device/{duid}/upgrade`). The trigger chooses the vendor's package;
+it does not accept an owner-supplied URL. The proposed capture is to keep the
+physical Q7 on the local server, register a stand-in for **this same device**
+under the owner's vendor account, connect that stand-in to the vendor MQTT
+downlink topic, and trigger the cloud upgrade only while capturing the message.
+The stand-in must never execute the update. A vendor package would provide a
+real format/reference sample; it would not by itself prove that the custom
+data-only package installs on a physical Q7.
+
+Two credentials are separate here. The owner web API needs a valid account
+session to list/register the device and trigger the upgrade. The device MQTT
+topic needs broker credentials issued during device bootstrap; the account
+session is not a substitute for those credentials. On 2026-09-23, the saved
+Home Assistant Roborock session returned `invalid_credentials` during a
+read-only home query. A TLS MQTT CONNECT using the inspected Q7's former
+credentials from its NAND image reached `mqtt-us-b.roborock.com:8883` but
+received `Not authorized`. This was a passive connection attempt; no publish
+or OTA request was sent. The old credentials cannot currently serve as the
+stand-in. They may have been revoked when the Q7 was re-onboarded, but that
+cause is an inference, not established by the broker's reason code.
+
+Next capture prerequisites are a fresh owner account session and new valid
+device-side MQTT credentials for the stand-in. The latter likely requires
+reproducing the normal B01 region/NC bootstrap with this unit's already-known
+factory secret and completing the cloud pairing flow. This dump-assisted
+capture is only for obtaining a reference OTA; the proposed migration for
+future owners still starts from their ordinary vendor account import and
+does not assume access to their factory secret. Test cloud registration and
+message receipt before any download, and do not direct the resulting upgrade
+message to the physical Q7.
