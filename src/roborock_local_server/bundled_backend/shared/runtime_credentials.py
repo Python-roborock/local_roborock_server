@@ -6,6 +6,7 @@ from collections import Counter
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import secrets
 import threading
 from typing import Any
@@ -252,6 +253,11 @@ class RuntimeCredentialsStore:
             "last_nc_at": _clean_str(raw.get("last_nc_at")),
             "last_mqtt_seen_at": _clean_str(raw.get("last_mqtt_seen_at")),
         }
+        migration_clientid = _clean_str(raw.get("migration_mqtt_clientid"))
+        if migration_clientid:
+            device["migration_mqtt_clientid"] = migration_clientid
+        if raw.get("migration_did_verified") is True or raw.get("migration_did_verified") == "1":
+            device["migration_did_verified"] = "1"
         return device
 
     def _save_locked(self) -> None:
@@ -485,6 +491,129 @@ class RuntimeCredentialsStore:
                 self._save_locked()
             return dict(device)
 
+    def prepare_q7_migration_credentials(self, *, duid: str, did: str = "") -> dict[str, str]:
+        """Reserve MQTT credentials for a cloud-imported sc05 without a flash dump."""
+        normalized_duid = _clean_str(duid)
+        normalized_did = _clean_str(did)
+        if not normalized_duid:
+            raise ValueError("Cloud DUID is required")
+
+        with self._lock:
+            matches = [
+                item for item in self._devices
+                if item.get("duid") == normalized_duid
+                and item.get("model") == "roborock.vacuum.sc05"
+                and item.get("local_key_source") == "inventory_cloud"
+            ]
+            if not matches:
+                raise KeyError("Cloud-imported Q7 sc05 device was not found")
+            if len(matches) != 1:
+                raise ValueError("Cloud DUID is ambiguous")
+            device = matches[0]
+            localkey = _clean_str(device.get("localkey"))
+            try:
+                localkey_bytes = localkey.encode("ascii")
+            except UnicodeEncodeError:
+                localkey_bytes = b""
+            if len(localkey_bytes) != 16:
+                raise ValueError("A 16-byte cloud-imported local key is required")
+            stored_did = _clean_str(device.get("did"))
+            if normalized_did and stored_did and stored_did != normalized_did:
+                raise ValueError("DID conflicts with the cloud device")
+            if normalized_did and not stored_did:
+                linked = [
+                    item for item in self._devices
+                    if item is not device
+                    and item.get("did") == normalized_did
+                    and item.get("localkey") == localkey
+                ]
+                if len(linked) != 1:
+                    raise ValueError("DID is not linked to this cloud local key")
+
+            username = _clean_str(device.get("device_mqtt_usr"))
+            password = _clean_str(device.get("device_mqtt_pass"))
+            clientid = _clean_str(device.get("migration_mqtt_clientid"))
+            if username or password or clientid:
+                if not (
+                    re.fullmatch(r"[0-9a-f]{16}", username)
+                    and re.fullmatch(r"[0-9a-f]{32}", password)
+                    and re.fullmatch(r"[0-9a-f]{16}", clientid)
+                ):
+                    raise ValueError("Device already has non-migration MQTT credentials")
+                return {
+                    "did": stored_did or normalized_did,
+                    "duid": normalized_duid,
+                    "mqtt_clientid": clientid,
+                    "mqtt_usr": username,
+                    "mqtt_passwd": password,
+                }
+
+            existing_usernames = {_clean_str(item.get("device_mqtt_usr")) for item in self._devices}
+            while True:
+                username = secrets.token_hex(8)
+                if username not in existing_usernames:
+                    break
+            password = secrets.token_hex(16)
+            clientid = secrets.token_hex(8)
+            device["device_mqtt_usr"] = username
+            device["device_mqtt_pass"] = password
+            device["migration_mqtt_clientid"] = clientid
+            device["updated_at"] = utcnow_iso()
+            self._save_locked()
+            return {
+                "did": stored_did or normalized_did,
+                "duid": normalized_duid,
+                "mqtt_clientid": clientid,
+                "mqtt_usr": username,
+                "mqtt_passwd": password,
+            }
+
+    def migration_cloud_duid_for_mqtt_username(self, username: str) -> str:
+        """Resolve only a pre-registered Q7 migration username to its cloud DUID."""
+        normalized_username = _clean_str(username)
+        if not normalized_username:
+            return ""
+        with self._lock:
+            matches = [
+                item for item in self._devices
+                if item.get("model") == "roborock.vacuum.sc05"
+                and item.get("local_key_source") == "inventory_cloud"
+                and item.get("migration_mqtt_clientid")
+                and item.get("device_mqtt_usr") == normalized_username
+                and item.get("device_mqtt_pass")
+            ]
+            return _clean_str(matches[0].get("duid")) if len(matches) == 1 else ""
+
+    def verified_q7_migration_links(self) -> dict[str, str]:
+        """Return DUID to DID links learned from authenticated device publishes."""
+        with self._lock:
+            return {
+                _clean_str(item.get("duid")): _clean_str(item.get("did"))
+                for item in self._devices
+                if item.get("model") == "roborock.vacuum.sc05"
+                and item.get("local_key_source") == "inventory_cloud"
+                and item.get("migration_mqtt_clientid")
+                and item.get("device_mqtt_usr")
+                and item.get("device_mqtt_pass")
+                and item.get("migration_did_verified") == "1"
+                and item.get("duid")
+                and item.get("did")
+            }
+
+    def q7_migration_duids(self) -> set[str]:
+        """DUIDs that must not use model-only bridge guesses during migration."""
+        with self._lock:
+            return {
+                _clean_str(item.get("duid"))
+                for item in self._devices
+                if item.get("model") == "roborock.vacuum.sc05"
+                and item.get("local_key_source") == "inventory_cloud"
+                and item.get("migration_mqtt_clientid")
+                and item.get("device_mqtt_usr")
+                and item.get("device_mqtt_pass")
+                and item.get("duid")
+            }
+
     def link_did_to_duid(
         self,
         *,
@@ -605,15 +734,54 @@ class RuntimeCredentialsStore:
                 return _clean_str(device.get("localkey")) if device else ""
         return ""
 
-    def record_mqtt_topic(self, *, topic: str) -> None:
+    def record_mqtt_topic(
+        self,
+        *,
+        topic: str,
+        direction: str = "c2b",
+        authenticated_username: str = "",
+        device_credentials_verified: bool = False,
+    ) -> None:
         normalized_topic = _clean_str(topic)
         now = utcnow_iso()
-        if normalized_topic.startswith("rr/d/"):
+        if direction == "c2b" and normalized_topic.startswith("rr/d/i/"):
             parts = normalized_topic.split("/")
             if len(parts) >= 5:
+                did, username = parts[3], parts[4]
+                if authenticated_username and authenticated_username != username:
+                    return
+                with self._lock:
+                    migrated = [
+                        item for item in self._devices
+                        if item.get("model") == "roborock.vacuum.sc05"
+                        and item.get("local_key_source") == "inventory_cloud"
+                        and item.get("migration_mqtt_clientid")
+                        and item.get("device_mqtt_usr") == username
+                        and item.get("device_mqtt_pass")
+                    ]
+                    did_taken = any(
+                        item.get("did") == did
+                        and all(item is not candidate for candidate in migrated)
+                        for item in self._devices
+                    )
+                    if migrated and (
+                        len(migrated) != 1
+                        or not device_credentials_verified
+                        or authenticated_username != username
+                        or did_taken
+                        or (migrated[0].get("did") and migrated[0].get("did") != did)
+                    ):
+                        return
+                    if len(migrated) == 1:
+                        migrated[0]["did"] = did
+                        migrated[0]["migration_did_verified"] = "1"
+                        migrated[0]["last_mqtt_seen_at"] = now
+                        migrated[0]["updated_at"] = now
+                        self._save_locked()
+                        return
                 self.ensure_device(
-                    did=parts[3],
-                    device_mqtt_usr=parts[4],
+                    did=did,
+                    device_mqtt_usr=username,
                     last_mqtt_seen_at=now,
                     assign_localkey=False,
                 )
@@ -827,7 +995,10 @@ class RuntimeCredentialsStore:
                         ),
                         "",
                     )
-                    if did and device.get("did") != did:
+                    if (
+                        did and device.get("did") != did
+                        and not (device.get("migration_mqtt_clientid") and device.get("did"))
+                    ):
                         device["did"] = did
                         changed = True
                         device_changed = True

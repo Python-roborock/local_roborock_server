@@ -27,6 +27,7 @@ from .bundled_backend.shared.data_helpers import utcnow_iso
 from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIRED_ONBOARDING_STEPS
 from .cloud import CloudImportManager
 from .config import AppConfig, AppPaths, load_config, resolve_paths
+from .q7_ota_artifact import Q7OtaArtifactStore
 from .standalone_admin import register_standalone_admin_routes
 from .backend import (
     MqttTlsProxy,
@@ -365,6 +366,7 @@ class ReleaseSupervisor:
             inventory_path=self.paths.inventory_path,
             key_state_file=self.paths.device_key_state_path,
         )
+        self.q7_ota_artifacts = Q7OtaArtifactStore()
         self.runtime_state = RuntimeState(
             log_dir=self.paths.runtime_dir,
             key_state_file=self.paths.device_key_state_path,
@@ -1713,6 +1715,7 @@ class ReleaseSupervisor:
                 port=self.config.broker.port,
                 logger=self.loggers["mqtt"],
                 runtime_state=self.runtime_state,
+                runtime_credentials=self.runtime_credentials,
                 inventory_path=self.paths.inventory_path,
             )
             await self._topic_bridge.start()

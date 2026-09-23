@@ -72,6 +72,7 @@ class MqttTopicBridge:
         fixed_device_duid: str = "",
         fixed_device_mqtt_usr: str = "",
         runtime_state: Any | None = None,
+        runtime_credentials: Any | None = None,
         inventory_path: Path | None = None,
     ) -> None:
         self._host = host
@@ -91,6 +92,7 @@ class MqttTopicBridge:
         self._warned_unmapped_device_topics: set[DeviceTopicKey] = set()
         self._warned_multi_device = False
         self._runtime_state = runtime_state
+        self._runtime_credentials = runtime_credentials
         self._inventory_path = Path(inventory_path) if inventory_path is not None else None
 
         fixed_did = fixed_device_did.strip() or fixed_device_duid.strip()
@@ -116,7 +118,10 @@ class MqttTopicBridge:
             self._task = None
 
     def _remember_device_seen(self, device_topic: DeviceTopicKey) -> None:
+        first_seen = device_topic not in self._seen_device_topics
         self._seen_device_topics[device_topic] = time.monotonic()
+        if first_seen:
+            self._last_duid_map_refresh_monotonic = 0.0
         seen_device_count = self._seen_device_did_count()
         if seen_device_count <= 1:
             return
@@ -173,7 +178,7 @@ class MqttTopicBridge:
         return devices
 
     def _refresh_duid_to_did_map(self) -> None:
-        if self._runtime_state is None or self._inventory_path is None:
+        if self._runtime_state is None and self._runtime_credentials is None:
             return
 
         now = time.monotonic()
@@ -182,17 +187,13 @@ class MqttTopicBridge:
         self._last_duid_map_refresh_monotonic = now
 
         try:
-            key_models_by_did = self._runtime_state.key_models_by_did()
+            key_models_by_did = self._runtime_state.key_models_by_did() if self._runtime_state is not None else {}
         except Exception:
             key_models_by_did = {}
         if not isinstance(key_models_by_did, dict):
             key_models_by_did = {}
 
         inventory_devices = self._load_inventory_devices()
-        if not inventory_devices:
-            self._duid_to_did = {}
-            return
-
         did_counts_by_model: dict[str, int] = {}
         unique_did_by_model: dict[str, str] = {}
         for did, model_value in key_models_by_did.items():
@@ -211,9 +212,15 @@ class MqttTopicBridge:
                 inv_counts_by_model[model] = inv_counts_by_model.get(model, 0) + 1
 
         fresh_map: dict[str, str] = {}
+        migration_duids = (
+            self._runtime_credentials.q7_migration_duids()
+            if self._runtime_credentials is not None else set()
+        )
         for raw in inventory_devices:
             duid = str(raw.get("duid") or raw.get("did") or raw.get("device_id") or "").strip()
             if not duid:
+                continue
+            if duid in migration_duids:
                 continue
             explicit_did = str(raw.get("did") or raw.get("device_did") or "").strip()
             if explicit_did:
@@ -229,6 +236,10 @@ class MqttTopicBridge:
             mapped_did = unique_did_by_model.get(model)
             if mapped_did:
                 fresh_map[duid] = mapped_did
+
+        if self._runtime_credentials is not None:
+            for duid, did in self._runtime_credentials.verified_q7_migration_links().items():
+                fresh_map[duid] = did
 
         map_changed = fresh_map != self._duid_to_did
         if map_changed:

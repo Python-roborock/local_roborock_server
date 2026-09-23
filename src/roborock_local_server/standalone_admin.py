@@ -7,8 +7,9 @@ from textwrap import dedent
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
+from .q7_ota_artifact import MAX_PACKAGE_BYTES
 from .security import verify_password
 
 
@@ -400,6 +401,81 @@ def register_standalone_admin_routes(
     async def admin_onboarding_devices(request: Request) -> JSONResponse:
         supervisor._require_admin(request)
         return JSONResponse(supervisor._onboarding_devices_payload())
+
+    @app.post("/admin/api/q7/migration-credentials")
+    async def admin_q7_migration_credentials(request: Request) -> JSONResponse:
+        """Reserve local MQTT credentials without requiring a Q7 flash dump."""
+        supervisor._require_admin(request)
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
+        did = str(body.get("did") or "").strip()
+        duid = str(body.get("duid") or "").strip()
+        try:
+            credentials = supervisor.runtime_credentials.prepare_q7_migration_credentials(
+                did=did,
+                duid=duid,
+            )
+        except KeyError:
+            return JSONResponse({"error": "Q7 device was not found"}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(
+            {
+                **credentials,
+                "hardware_tested": False,
+                "warning": "Experimental Q7 migration preparation only; no OTA or device command was sent",
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/admin/api/q7/ota-package")
+    async def admin_q7_ota_package(request: Request) -> JSONResponse:
+        """Stage encrypted bytes for a brief owner-controlled download window."""
+        supervisor._require_admin(request)
+        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/octet-stream":
+            return JSONResponse({"error": "Content-Type must be application/octet-stream"}, status_code=400)
+        try:
+            declared_length = int(request.headers.get("content-length", "0") or "0")
+        except ValueError:
+            return JSONResponse({"error": "Invalid Content-Length"}, status_code=400)
+        if declared_length > MAX_PACKAGE_BYTES:
+            return JSONResponse({"error": "Q7 package exceeds size limit"}, status_code=413)
+        chunks: list[bytes] = []
+        received = 0
+        async for chunk in request.stream():
+            received += len(chunk)
+            if received > MAX_PACKAGE_BYTES:
+                return JSONResponse({"error": "Q7 package exceeds size limit"}, status_code=413)
+            chunks.append(chunk)
+        payload = b"".join(chunks)
+        try:
+            result = supervisor.q7_ota_artifacts.register(
+                payload,
+                sha256=request.headers.get("x-q7-sha256", ""),
+                md5=request.headers.get("x-q7-md5", ""),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({
+            **result,
+            "hardware_tested": False,
+            "warning": "Staged only; no OTA command or device change was sent",
+        })
+
+    @app.get("/q7/ota-package/{token}")
+    async def q7_ota_package(token: str) -> Response:
+        payload = supervisor.q7_ota_artifacts.fetch(token)
+        if payload is None:
+            return JSONResponse({"error": "Not Found"}, status_code=404)
+        return Response(
+            payload,
+            media_type="application/octet-stream",
+            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        )
 
     @app.post("/admin/api/onboarding/sessions")
     async def admin_onboarding_start(request: Request) -> JSONResponse:
