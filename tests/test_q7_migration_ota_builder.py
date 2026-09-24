@@ -2,8 +2,12 @@
 
 import gzip
 import json
+import os
 from pathlib import Path
+import shutil
 import struct
+import subprocess
+import sys
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import pytest
@@ -87,3 +91,55 @@ def test_refuses_unsafe_values_and_tampered_profile(
     with pytest.raises(ValueError, match="pinned hash"):
         builder.build(FIELDS, profile, out)
     assert not out.exists()
+
+
+def test_accepts_pinned_reentry_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = tmp_path / "profile"
+    _fixture_profile(profile, monkeypatch)
+    manifest_path = profile / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["schema"] = builder.REENTRY_SCHEMA
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(builder, "REENTRY_PROFILE_HASHES", manifest["file_sha256"])
+    metadata = builder.build(FIELDS, profile, tmp_path / "candidate")
+    assert metadata["profile_schema"] == builder.REENTRY_SCHEMA
+    assert builder._sha256(Path(builder.__file__).with_name("q7_iot_local_fields_reentry.sh").read_bytes()) == (
+        "2fce38f7ba828b361fa644c5e8fea8c5858f9bc0eeaeab931610e18e6da3fb04"
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not shutil.which("sh"), reason="requires POSIX shell")
+def test_reentry_editor_preserves_matching_backup_and_refuses_mismatch(tmp_path: Path) -> None:
+    script = Path(builder.__file__).with_name("q7_iot_local_fields_reentry.sh")
+    wrapper = tmp_path / "busybox"
+    wrapper.write_text('#!/bin/sh\nexec "$@"\n')
+    wrapper.chmod(0o755)
+    source = {
+        "api_url": "https://vendor.test",
+        "mqtt_url": "ssl://vendor.test:8883",
+        "mqtt_clientid": "fedcba9876543210",
+        "mqtt_usr": "1234567890abcdef",
+        "mqtt_passwd": "fedcba9876543210fedcba9876543210",
+        "duid": "leave-this-alone",
+    }
+    original = (json.dumps(source, indent=2) + "\n").encode()
+    iot = tmp_path / "iot.json"
+    backup = tmp_path / "iot.json.before-q7-local-edit"
+    env = {**os.environ, "Q7_BUSYBOX": str(wrapper)}
+    command = ["sh", str(script), str(iot), *FIELDS.values()]
+
+    iot.write_bytes(original)
+    assert subprocess.run(command, env=env, capture_output=True).returncode == 0
+    assert backup.read_bytes() == original
+    assert json.loads(iot.read_bytes())["duid"] == source["duid"]
+
+    iot.write_bytes(original)
+    assert subprocess.run(command, env=env, capture_output=True).returncode == 0
+    assert backup.read_bytes() == original
+    assert all(json.loads(iot.read_bytes())[name] == value for name, value in FIELDS.items())
+
+    iot.write_bytes(original)
+    backup.write_bytes(b"mismatch")
+    assert subprocess.run(command, env=env, capture_output=True).returncode != 0
+    assert iot.read_bytes() == original
+    assert backup.read_bytes() == b"mismatch"

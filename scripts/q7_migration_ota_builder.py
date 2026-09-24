@@ -22,6 +22,7 @@ except ImportError:  # Direct ``python scripts/q7_migration_ota_builder.py`` exe
 
 
 SCHEMA = "q7-sc05-03.01.74-migration-profile-v1"
+REENTRY_SCHEMA = "q7-sc05-03.01.74-migration-profile-v2"
 MODEL = "roborock.vacuum.sc05"
 VERSION = "03.01.74"
 FIELDS = ("api_url", "mqtt_url", "mqtt_clientid", "mqtt_usr", "mqtt_passwd")
@@ -29,6 +30,10 @@ PROFILE_HASHES = {
     "ota-key.bin": "a02bdcf7b3afdb5b0dce179326d81839c9d04d5bfb47fd318aba777633b01f5e",
     "return.sh": "cffc933b62405211a18157c47c425344854607e7bdb830cac8fee527bc391a0c",
     "editor.sh": "80ba06173a49e476d606d6f39610b2ed976e9f559961df80262f873e7623df01",
+}
+REENTRY_PROFILE_HASHES = {
+    **PROFILE_HASHES,
+    "editor.sh": "2fce38f7ba828b361fa644c5e8fea8c5858f9bc0eeaeab931610e18e6da3fb04",
 }
 URL_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[A-Za-z0-9._:/+\-]+$")
 HEX_LENGTHS = {"mqtt_clientid": 16, "mqtt_usr": 16, "mqtt_passwd": 32}
@@ -65,14 +70,18 @@ def _fields(raw: object) -> dict[str, str]:
     return values
 
 
-def _profile(path: Path) -> tuple[bytes, bytes, bytes]:
+def _profile(path: Path) -> tuple[bytes, bytes, bytes, str]:
     manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
-    if (not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA
-            or manifest.get("model") != MODEL or manifest.get("firmware_version") != VERSION
-            or manifest.get("file_sha256") != PROFILE_HASHES):
+    if not isinstance(manifest, dict):
+        raise ValueError("The firmware-wide profile manifest is malformed")
+    schema = manifest.get("schema")
+    expected = {SCHEMA: PROFILE_HASHES, REENTRY_SCHEMA: REENTRY_PROFILE_HASHES}.get(schema)
+    if (expected is None or manifest.get("model") != MODEL
+            or manifest.get("firmware_version") != VERSION
+            or manifest.get("file_sha256") != expected):
         raise ValueError("The firmware-wide profile is not the inspected Q7 build")
     blobs = {}
-    for name, expected_hash in PROFILE_HASHES.items():
+    for name, expected_hash in expected.items():
         item = path / name
         if item.is_symlink() or not item.is_file():
             raise ValueError(f"Profile file {name} must be a regular file")
@@ -83,14 +92,14 @@ def _profile(path: Path) -> tuple[bytes, bytes, bytes]:
     key, end, editor = blobs["ota-key.bin"], blobs["return.sh"], blobs["editor.sh"]
     if len(key) != 16 or not end.startswith(b"#!/bin/sh\n") or not editor.startswith(b"#!/bin/sh\n"):
         raise ValueError("Profile key or recovery scripts have unexpected structure")
-    return key, end, editor
+    return key, end, editor, schema
 
 
 def build(config: object, profile: Path, out: Path) -> dict[str, object]:
     values = _fields(config)
     if out.exists():
         raise FileExistsError(f"Refusing to overwrite {out}")
-    key, end, editor = _profile(profile)
+    key, end, editor, schema = _profile(profile)
     args = ['"${Q7_IOT_JSON_PATH:-/userdata/rriot/data_dir/iot.json}"']
     args.extend("'" + values[name] + "'" for name in FIELDS)
     begin = ("#!/bin/sh\nset -- " + " ".join(args) + "\n").encode("ascii") + editor.split(b"\n", 1)[1]
@@ -115,6 +124,7 @@ def build(config: object, profile: Path, out: Path) -> dict[str, object]:
         "begin_sha256": _sha256(begin),
         "end_sha256": _sha256(end),
         "build_mode": "portable_profile",
+        "profile_schema": schema,
         "signed": False,
         "hardware_tested": False,
         "secrets_in_package": True,

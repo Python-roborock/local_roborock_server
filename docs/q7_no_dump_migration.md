@@ -3,7 +3,9 @@
 This is an experimental path for an owner of a stock `roborock.vacuum.sc05`
 running `03.01.74`. One physical Q7 has completed the five-field migration to
 the live FDS add-on and answered a read-only owner RPC through its normal MQTT
-topic. This is a single-device result, not yet a general device test procedure.
+topic. The same Q7 subsequently completed a restore to vendor cloud and a
+re-entry using the generic owner sender and the revised profile. This remains
+a single-device result, not yet a second-device validation.
 
 The intended input is a normal Roborock account import containing the cloud
 DUID and the device's 16-byte local key. The native numeric DID and the
@@ -37,10 +39,18 @@ encrypted output was byte-identical to the 2,688-byte package accepted by the
 physical Q7 (SHA-256
 `04defa005b2f06c26585240ea21e7106aa164a98121a9daa4e836cf4271a0256`).
 That comparison validates the builder, not a second device or firmware build.
+For new trials, use the **v2 re-entry profile**. Its editor accepts an existing
+rollback copy only if it is byte-identical to the current restored `iot.json`;
+it refuses a mismatched copy. The updated editor is reviewable in
+`scripts/q7_iot_local_fields_reentry.sh`. The v2 encrypted package was 2,768
+bytes (SHA-256
+`ddd698e97f4df4ef5f3355d6f5df5dd988c829e4533fa07e3e305c6f5dd991ee`)
+and was accepted by the same physical Q7 on re-entry. The four-file v2 profile
+archive is private and outside Git.
 From the source checkout, after obtaining the profile privately:
 
 ```text
-uv run --no-sync python scripts/q7_migration_ota_builder.py --config ../private/q7-five-fields.json --profile ../private/q7_ota_profile_sc05_030174 --out ../private/q7-candidate
+uv run --no-sync python scripts/q7_migration_ota_builder.py --config ../private/q7-five-fields.json --profile ../private/q7_ota_profile_sc05_030174_reentry --out ../private/q7-candidate
 uv run --no-sync python scripts/q7_stage_ota.py --artifact-dir ../private/q7-candidate
 ```
 
@@ -71,8 +81,10 @@ encrypted artifact immediately before it could send the command. The physical
 test used a LAN HTTP URL. The server's short-lived HTTPS staging endpoint is
 also available, but the stock Q7's trust of an arbitrary local HTTPS
 certificate was not established by the physical test. A second physical Q7,
-generic sender, and return path have not been tested end-to-end; this remains
-an experimental procedure rather than a release-ready instruction.
+the email-code login path on a new account, and a different firmware build
+have not been tested end-to-end; this remains an experimental procedure rather
+than a release-ready instruction. The existing private-account-export path of
+the generic sender was used in the successful physical re-entry.
 
 The server also provides an admin-only `POST /admin/api/q7/ota-package` to
 stage at most two AES-aligned encrypted packages, each at most 4 MiB, after
@@ -128,10 +140,34 @@ the normal `rr/m/i` owner-topic probe returned charging status 4 and OTA state
 `idle`. Other device identities were left intact.
 
 The return package remains temporarily hosted for recovery. Its byte-identical
-restore behavior was tested with the recovered updater in isolated QEMU, but
-the restore has **not** been sent to the physical Q7. Physical Wi-Fi reset after
-this custom URL edit, Roborock app behavior, a second Q7, and complete firmware
-payload replacement are still untested.
+restore behavior was tested with the recovered updater in isolated QEMU and was
+subsequently sent to the physical Q7 as described below. Physical Wi-Fi reset
+after this custom URL edit, Roborock app behavior, a second Q7, and complete
+firmware payload replacement are still untested.
+
+### Physical restore and re-entry on the same Q7
+
+With the Q7 charging and answering owner RPC on the local server, an
+owner-authenticated local `ota.upgrade.set` delivered the encrypted restore
+package. The device reported `installed` and rebooted. About 30 seconds later,
+the current Roborock account listed the same Q7 online at `03.01.74`. This
+restored its saved vendor `iot.json` from the adjacent rollback copy. It
+demonstrates a physical path back to vendor cloud without a per-device dump.
+
+A first attempt to re-enter with the original 2,688-byte v1 package also
+reported installation, but the Q7 remained on vendor cloud. The original edit
+script refused an existing rollback copy; the updater's install status did not
+report that script failure. The revised v2 editor permits reuse only when the
+existing copy is a regular, non-symlink file byte-identical to the current
+restored source. A mismatch still refuses the edit. The v2 package passed
+three isolated QEMU cases: first migration, restored source with a matching
+copy, and mismatched copy. The generic owner sender then delivered that
+2,768-byte package through vendor MQTT on the physical Q7. After reboot,
+read-only local owner RPC again returned charging status 4 and OTA `idle`,
+while vendor cloud listed the device offline. This verifies the full
+restore/re-entry cycle on this one Q7, including the current cloud account
+import, exact hosted artifact check, owner MQTT delivery, saved-config edit,
+and local-server authentication.
 
 After ordinary re-pairing to the owner's Roborock account, the physical Q7
 appeared online with a current 16-byte local key. Through the vendor owner
@@ -228,9 +264,10 @@ it does not remove the hardware gates above for a stock, no-dump device.
 
 An additional offline probe reconstructed the inspected unit's normal
 `bootcmd` and `bootargs` from its rootfs SquashFS header and the updater's
-recovery values, matching both saved ENV copies. This may remove the need for a
-per-device ENV snapshot on the same firmware, but it has not been checked on a
-second Q7 or used in an OTA return script. The physical restore gate remains.
+recovery values, matching both saved ENV copies. The actual restore script
+used in the physical cycle came from the analyzed firmware profile and worked
+on this Q7. Its assumptions have not been checked on a second Q7 or another
+firmware build.
 
 The controlled probe source is `scripts/q7_ota_transport_probe.py`. It is a
 dry run unless `--live` is passed and checks for charging plus idle OTA state
