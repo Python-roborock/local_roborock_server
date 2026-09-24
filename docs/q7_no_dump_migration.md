@@ -7,6 +7,12 @@ topic. The same Q7 subsequently completed a restore to vendor cloud and a
 re-entry using the generic owner sender and the revised profile. This remains
 a single-device result, not yet a second-device validation.
 
+An offline `03.01.80` profile and version-matched sender path are also
+available; see `docs/q7_030180_compatibility.md`. The captured vendor update
+leaves the recovery installer unchanged, but no `03.01.80` physical Q7 has
+accepted a custom package yet. The steps below remain the tested `03.01.74`
+procedure.
+
 The intended input is a normal Roborock account import containing the cloud
 DUID and the device's 16-byte local key. The native numeric DID and the
 per-device HMAC bootstrap secret are not required for the proposed OTA edit.

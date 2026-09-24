@@ -90,16 +90,19 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     device = candidates[0]
     if models.get(device.product_id) != "roborock.vacuum.sc05":
         raise ValueError("The selected cloud device is not a Q7 sc05")
+    _payload, package = inspect(args.artifact_dir)
+    target_firmware = str(package["target_firmware"])
     report: dict[str, object] = {
         "duid_hash": hashlib.sha256(device.duid.encode()).hexdigest()[:12],
         "model": models[device.product_id],
         "firmware": device.fv,
         "cloud_online": device.online,
-        "package_sha256": hashlib.sha256((args.artifact_dir / "q7-migration-v03.bin.gz.aes").read_bytes()).hexdigest(),
+        "package_sha256": package["encrypted_sha256"],
+        "target_firmware": target_firmware,
         "command_sent": False,
     }
-    if device.online is not True or device.fv != "03.01.74" or len(device.local_key or "") != 16:
-        report["aborted"] = "Q7 must be cloud-online on 03.01.74 with a current 16-byte local key"
+    if device.online is not True or device.fv != target_firmware or len(device.local_key or "") != 16:
+        report["aborted"] = f"Q7 must be cloud-online on {target_firmware} with a current 16-byte local key"
         return report
     mqtt_params = create_mqtt_params(owner.rriot)
     session = await create_mqtt_session(mqtt_params)

@@ -122,6 +122,28 @@ def test_accepts_pinned_reentry_profile(tmp_path: Path, monkeypatch: pytest.Monk
     )
 
 
+def test_030180_profile_requires_its_own_return_script_and_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = tmp_path / "profile"
+    _fixture_profile(profile, monkeypatch)
+    manifest_path = profile / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["schema"] = builder.EXPERIMENTAL_030180_SCHEMA
+    manifest["firmware_version"] = "03.01.80"
+    monkeypatch.setattr(builder, "EXPERIMENTAL_030180_HASHES", manifest["file_sha256"])
+    manifest_path.write_text(json.dumps(manifest))
+    candidate = tmp_path / "candidate"
+    metadata = builder.build(FIELDS, profile, candidate)
+    assert metadata["target_firmware"] == "03.01.80"
+    _, details = inspect(candidate)
+    assert details["target_firmware"] == "03.01.80"
+    manifest["firmware_version"] = "03.01.74"
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="inspected Q7 build"):
+        builder.build(FIELDS, profile, tmp_path / "wrong-version")
+
+
 @pytest.mark.skipif(sys.platform == "win32" or not shutil.which("sh"), reason="requires POSIX shell")
 def test_reentry_editor_preserves_matching_backup_and_refuses_mismatch(tmp_path: Path) -> None:
     script = Path(builder.__file__).with_name("q7_iot_local_fields_reentry.sh")

@@ -53,6 +53,9 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     request = package_request(args.artifact_dir, args.url, package_kind="restore")
     source = json.loads(args.config.read_text(encoding="utf-8"))
     metadata = json.loads((args.artifact_dir / "metadata.json").read_text(encoding="utf-8"))
+    target_firmware = metadata.get("target_firmware", "03.01.74")
+    if target_firmware not in ("03.01.74", "03.01.80"):
+        raise ValueError("Restore package targets an unsupported Q7 firmware")
     config_sha256 = hashlib.sha256(
         json.dumps(source, sort_keys=True, separators=(",", ":")).encode("ascii")
     ).hexdigest()
@@ -68,12 +71,13 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
         raise ValueError("Exactly one device with the selected DUID must belong to this account")
     device = candidates[0]
     if (models.get(device.product_id) != "roborock.vacuum.sc05"
-            or device.fv != "03.01.74" or len(device.local_key or "") != 16):
-        raise ValueError("Selected device must be a Q7 sc05 on 03.01.74 with a 16-byte local key")
+            or device.fv != target_firmware or len(device.local_key or "") != 16):
+        raise ValueError(f"Selected device must be a Q7 sc05 on {target_firmware} with a 16-byte local key")
     report: dict[str, object] = {
         "duid_hash": hashlib.sha256(device.duid.encode()).hexdigest()[:12],
         "model": models[device.product_id],
         "firmware": device.fv,
+        "target_firmware": target_firmware,
         "package_sha256": hashlib.sha256(
             (args.artifact_dir / "q7-restore-local-v03.bin.gz.aes").read_bytes()
         ).hexdigest(),

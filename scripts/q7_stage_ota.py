@@ -55,8 +55,14 @@ def inspect(artifact_dir: Path, *, package_kind: str = "") -> tuple[bytes, dict[
         expected_sha = selected.get("sha256")
         expected_md5 = selected.get("md5")
     else:
-        if "roborock.vacuum.sc05 03.01.74" not in str(metadata.get("firmware", "")):
+        version = metadata.get("target_firmware", "03.01.74")
+        if (version not in ("03.01.74", "03.01.80")
+                or f"roborock.vacuum.sc05 {version}" not in str(metadata.get("firmware", ""))):
             raise ValueError("Package metadata does not name the inspected Q7 firmware")
+        if version == "03.01.80" and metadata.get("profile_schema") != (
+            "q7-sc05-03.01.80-migration-profile-v1"
+        ):
+            raise ValueError("03.01.80 requires its version-specific profile")
         if package_kind == "restore":
             selected = metadata.get("restore_package")
             if not isinstance(selected, dict) or selected.get("package") != RESTORE_PACKAGE_NAME:
@@ -92,6 +98,7 @@ def inspect(artifact_dir: Path, *, package_kind: str = "") -> tuple[bytes, dict[
         "encrypted_sha256": digest_sha,
         "encrypted_md5": digest_md5,
         "hardware_tested": False,
+        "target_firmware": metadata.get("target_firmware", "03.01.74"),
     }
 
 

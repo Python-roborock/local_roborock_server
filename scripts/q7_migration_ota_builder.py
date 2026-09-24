@@ -1,4 +1,4 @@
-"""Build a Q7 03.01.74 custom-region OTA from a shared firmware profile.
+"""Build a Q7 custom-region OTA from a pinned firmware-wide profile.
 
 The profile is firmware-wide, not a dump of the next owner's vacuum. Its OTA
 key and the output package are private. This command only builds files; it
@@ -23,6 +23,7 @@ except ImportError:  # Direct ``python scripts/q7_migration_ota_builder.py`` exe
 
 SCHEMA = "q7-sc05-03.01.74-migration-profile-v1"
 REENTRY_SCHEMA = "q7-sc05-03.01.74-migration-profile-v2"
+EXPERIMENTAL_030180_SCHEMA = "q7-sc05-03.01.80-migration-profile-v1"
 MODEL = "roborock.vacuum.sc05"
 VERSION = "03.01.74"
 FIELDS = ("api_url", "mqtt_url", "mqtt_clientid", "mqtt_usr", "mqtt_passwd")
@@ -54,6 +55,11 @@ PROFILE_HASHES = {
 REENTRY_PROFILE_HASHES = {
     **PROFILE_HASHES,
     "editor.sh": "2fce38f7ba828b361fa644c5e8fea8c5858f9bc0eeaeab931610e18e6da3fb04",
+}
+EXPERIMENTAL_030180_HASHES = {
+    "ota-key.bin": PROFILE_HASHES["ota-key.bin"],
+    "return.sh": "a5f599aaaa53c898090b81ff8e8a9a9312e48e75f18fb0a93f523492a6cacc26",
+    "editor.sh": REENTRY_PROFILE_HASHES["editor.sh"],
 }
 URL_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[A-Za-z0-9._:/+\-]+$")
 HEX_LENGTHS = {"mqtt_clientid": 16, "mqtt_usr": 16, "mqtt_passwd": 32}
@@ -90,14 +96,21 @@ def _fields(raw: object) -> dict[str, str]:
     return values
 
 
-def _profile(path: Path) -> tuple[bytes, bytes, bytes, str]:
+def _profile(path: Path) -> tuple[bytes, bytes, bytes, str, str]:
     manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("The firmware-wide profile manifest is malformed")
     schema = manifest.get("schema")
-    expected = {SCHEMA: PROFILE_HASHES, REENTRY_SCHEMA: REENTRY_PROFILE_HASHES}.get(schema)
-    if (expected is None or manifest.get("model") != MODEL
-            or manifest.get("firmware_version") != VERSION
+    spec = {
+        SCHEMA: (VERSION, PROFILE_HASHES),
+        REENTRY_SCHEMA: (VERSION, REENTRY_PROFILE_HASHES),
+        EXPERIMENTAL_030180_SCHEMA: ("03.01.80", EXPERIMENTAL_030180_HASHES),
+    }.get(schema)
+    if spec is None:
+        raise ValueError("The firmware-wide profile is not the inspected Q7 build")
+    version, expected = spec
+    if (manifest.get("model") != MODEL
+            or manifest.get("firmware_version") != version
             or manifest.get("file_sha256") != expected):
         raise ValueError("The firmware-wide profile is not the inspected Q7 build")
     blobs = {}
@@ -112,7 +125,7 @@ def _profile(path: Path) -> tuple[bytes, bytes, bytes, str]:
     key, end, editor = blobs["ota-key.bin"], blobs["return.sh"], blobs["editor.sh"]
     if len(key) != 16 or not end.startswith(b"#!/bin/sh\n") or not editor.startswith(b"#!/bin/sh\n"):
         raise ValueError("Profile key or recovery scripts have unexpected structure")
-    return key, end, editor, schema
+    return key, end, editor, schema, version
 
 
 def build(config: object, profile: Path, out: Path) -> dict[str, object]:
@@ -120,7 +133,7 @@ def build(config: object, profile: Path, out: Path) -> dict[str, object]:
     config_sha256 = _sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode("ascii"))
     if out.exists():
         raise FileExistsError(f"Refusing to overwrite {out}")
-    key, end, editor, schema = _profile(profile)
+    key, end, editor, schema, version = _profile(profile)
     args = ['"${Q7_IOT_JSON_PATH:-/userdata/rriot/data_dir/iot.json}"']
     args.extend("'" + values[name] + "'" for name in FIELDS)
     begin = ("#!/bin/sh\nset -- " + " ".join(args) + "\n").encode("ascii") + editor.split(b"\n", 1)[1]
@@ -142,7 +155,8 @@ def build(config: object, profile: Path, out: Path) -> dict[str, object]:
     with os.fdopen(restore_descriptor, "wb") as handle:
         handle.write(restore_encrypted)
     metadata: dict[str, object] = {
-        "firmware": f"{MODEL} {VERSION}, pinned inspected firmware profile",
+        "firmware": f"{MODEL} {version}, pinned inspected firmware profile",
+        "target_firmware": version,
         "package": name,
         "encrypted_size_bytes": len(encrypted),
         "encrypted_md5": hashlib.md5(encrypted).hexdigest(),

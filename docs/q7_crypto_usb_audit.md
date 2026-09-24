@@ -3,7 +3,9 @@
 Read-only analysis of the inspected Q7 03.01.74 image and the recovered vendor
 03.01.80 OTA. The two versions have byte-identical `rriot_client` binaries
 (SHA-256 `e1d1959014efc03bcb7f8dae397ea744fdcd7934721d925941389220d2b449d2`).
-No USB gadget or unsigned OTA package was run on the physical vacuum.
+No USB gadget was run on the physical vacuum. Subsequent owner-authenticated
+tests did deliver unsigned script-only OTA packages; see
+`docs/q7_no_dump_migration.md` for the observed recovery and reboot behavior.
 
 ## Which key protects which traffic
 
@@ -57,7 +59,7 @@ or a separate indirect software trigger remains unverified.
 
 A bounded synthetic ARM execution of the application verification branch on
 both 03.01.74 and 03.01.80 confirms `signed:false` skips its ECDSA check and
-`signed:true` enters signature setup. This is a branch-level result only. The
-physical Q7 accepted a `signed:false` command and entered `downloading`, but
-the deliberately unreachable URL failed before verification. Full encrypted
-package acceptance, recovery execution, and normal reboot remain untested.
+`signed:true` enters signature setup. The physical 03.01.74 Q7 subsequently
+accepted unsigned encrypted script-only packages, reported installation,
+rebooted, and connected to both vendor and custom MQTT endpoints during a
+restore/re-entry cycle. The corresponding 03.01.80 path remains offline-only.
