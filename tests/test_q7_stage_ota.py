@@ -67,3 +67,34 @@ def test_stage_only_uses_admin_login_and_package_upload(tmp_path: Path) -> None:
     assert paths == ["/admin/api/login", "/admin/api/q7/ota-package"]
     assert result["download_url"] == "https://local.example:555/q7/ota-package/" + "a" * 64
     assert result["device_command_sent"] is False
+
+
+def test_inspect_api_only_pair_requires_explicit_package_and_matching_digest(tmp_path: Path) -> None:
+    folder = tmp_path / "api-only"
+    folder.mkdir()
+    packages = {}
+    for kind, name in staging.API_ONLY_PACKAGE_NAMES.items():
+        payload = PAYLOAD if kind == "set-api" else b"restore-16-bytes"
+        (folder / name).write_bytes(payload)
+        packages[kind] = {
+            "file": name,
+            "size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "md5": hashlib.md5(payload).hexdigest(),
+        }
+    (folder / "metadata.json").write_text(json.dumps({
+        "model": "roborock.vacuum.sc05",
+        "target_firmware": "03.01.74",
+        "signed": False,
+        "packages": packages,
+    }), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="require --package"):
+        staging.inspect(folder)
+    for kind, name in staging.API_ONLY_PACKAGE_NAMES.items():
+        _payload, details = staging.inspect(folder, package_kind=kind)
+        assert details["package"] == name
+        assert details["encrypted_sha256"] == packages[kind]["sha256"]
+    (folder / staging.API_ONLY_PACKAGE_NAMES["restore-api"]).write_bytes(b"changed-16-bytes")
+    with pytest.raises(ValueError, match="do not match metadata"):
+        staging.inspect(folder, package_kind="restore-api")

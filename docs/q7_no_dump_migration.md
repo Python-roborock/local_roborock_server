@@ -60,13 +60,13 @@ was subsequently tested as described below.
 
 Hardware gates still open:
 
-1. Deploy and verify the production HTTPS staging origin. LAN HTTP delivery
-   and full-package acceptance succeeded, but the running add-on does not yet
-   include the expiring staging route or the Q7 migration-credential endpoint.
-   On 2026-09-23 the target hostname resolved to `192.168.20.199`; TCP ports
-   555 and 8881 accepted TLS with a certificate valid for that hostname. This
-   is transport preflight, not proof that the current add-on will accept the
-   proposed MQTT credentials or stage a package.
+1. Verify that the production HTTPS staging origin serves and expires an
+   artifact in a controlled test. The live FDS add-on now has the staging and
+   migration-credential routes; both returned 401 without admin authentication.
+   The target hostname resolved to `192.168.20.199`; TCP ports 555 and 8881
+   accepted TLS with a certificate valid for that hostname. No package has yet
+   been staged on this live add-on, and its acceptance of reserved Q7 MQTT
+   credentials has not been tested on hardware.
 2. Execute the five-field IoT edit on hardware and verify that it survives
    reboot and that B01 region/NC does not overwrite the values. Then confirm
    the custom server accepts the new MQTT credentials and routes owner RPCs.
@@ -119,7 +119,21 @@ to leave the source unchanged. `otaunpack` can still report success after a
 begin-script failure, so a real test must verify the resulting behavior rather
 than trust the install status alone. This first stage remains **hardware
 untested** and does not prove the Q7 will stay connected to vendor MQTT after
-the edit.
+the edit. `scripts/q7_stage_ota.py` can now validate either encrypted file
+with `--package set-api` or `--package restore-api`; `--stage` additionally
+requires the live server origin and admin login, and only hosts the selected
+file briefly. It does not send an OTA command.
+
+On 2026-09-23 the running Home Assistant **Roborock Local Server FDS** add-on
+was updated from 1.0.3 to `1.1.0-q7.1`, using the latest branch at `0ee8c62`
+plus the existing FDS log-capture route. The add-on's port mappings and saved
+data directory were retained. Home Assistant reported it running, the HTTPS
+admin page and FDS manifest returned 200, the two Q7 admin routes returned
+401 without authentication rather than 404, MQTT TLS completed a verified
+handshake, and all seven saved runtime device records remained. The original
+add-on source, certificates and runtime credentials were backed up in
+`private/fds_pre_q7_update_20260923`. These checks establish server deployment,
+not an OTA or a Q7 URL change.
 
 Earlier transport evidence:
 

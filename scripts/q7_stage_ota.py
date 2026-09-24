@@ -23,20 +23,47 @@ except ImportError:  # Direct ``python scripts/q7_stage_ota.py`` execution.
 
 
 PACKAGE_NAMES = {"q7-migration-v03.bin.gz.aes", "return-noop-v03.bin.gz.aes"}
+API_ONLY_PACKAGE_NAMES = {
+    "set-api": "q7-set-api-v03.bin.gz.aes",
+    "restore-api": "q7-restore-api-v03.bin.gz.aes",
+}
 DOWNLOAD_PATH = re.compile(r"/q7/ota-package/[0-9a-f]{64}\Z")
 MAX_PACKAGE_BYTES = 4 * 1024 * 1024
 
 
-def inspect(artifact_dir: Path) -> tuple[bytes, dict[str, object]]:
+def inspect(artifact_dir: Path, *, package_kind: str = "") -> tuple[bytes, dict[str, object]]:
     directory = artifact_dir.resolve()
     metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
     if not isinstance(metadata, dict) or metadata.get("signed") is not False:
         raise ValueError("Expected an unsigned Q7 research package metadata object")
-    if "roborock.vacuum.sc05 03.01.74" not in str(metadata.get("firmware", "")):
-        raise ValueError("Package metadata does not name the inspected Q7 firmware")
-    name = metadata.get("package") or metadata.get("encrypted_file")
-    if name not in PACKAGE_NAMES:
-        raise ValueError("Unexpected Q7 package name")
+    if "packages" in metadata:
+        if metadata.get("model") != "roborock.vacuum.sc05" or metadata.get("target_firmware") != "03.01.74":
+            raise ValueError("API-only package metadata does not name the inspected Q7 firmware")
+        if package_kind not in API_ONLY_PACKAGE_NAMES:
+            raise ValueError("API-only artifacts require --package set-api or restore-api")
+        package_map = metadata["packages"]
+        if not isinstance(package_map, dict):
+            raise ValueError("API-only package metadata is malformed")
+        selected = package_map.get(package_kind)
+        if not isinstance(selected, dict):
+            raise ValueError("Requested API-only package is missing")
+        name = selected.get("file")
+        if name != API_ONLY_PACKAGE_NAMES[package_kind]:
+            raise ValueError("Unexpected API-only Q7 package name")
+        expected_size = selected.get("size")
+        expected_sha = selected.get("sha256")
+        expected_md5 = selected.get("md5")
+    else:
+        if package_kind:
+            raise ValueError("--package is only valid for API-only artifacts")
+        if "roborock.vacuum.sc05 03.01.74" not in str(metadata.get("firmware", "")):
+            raise ValueError("Package metadata does not name the inspected Q7 firmware")
+        name = metadata.get("package") or metadata.get("encrypted_file")
+        if name not in PACKAGE_NAMES:
+            raise ValueError("Unexpected Q7 package name")
+        expected_size = metadata.get("encrypted_size_bytes")
+        expected_sha = metadata.get("encrypted_sha256")
+        expected_md5 = metadata.get("encrypted_md5")
     package = directory / str(name)
     if package.is_symlink() or package.resolve().parent != directory:
         raise ValueError("Package must be a regular file in the artifact directory")
@@ -45,9 +72,9 @@ def inspect(artifact_dir: Path) -> tuple[bytes, dict[str, object]]:
         raise ValueError("Package length is outside the AES-aligned limit")
     digest_sha = hashlib.sha256(payload).hexdigest()
     digest_md5 = hashlib.md5(payload).hexdigest()
-    if (metadata.get("encrypted_size_bytes") != len(payload)
-            or metadata.get("encrypted_sha256") != digest_sha
-            or metadata.get("encrypted_md5") != digest_md5):
+    if (expected_size != len(payload)
+            or expected_sha != digest_sha
+            or expected_md5 != digest_md5):
         raise ValueError("Package bytes do not match metadata")
     return payload, {
         "package": name,
@@ -58,10 +85,10 @@ def inspect(artifact_dir: Path) -> tuple[bytes, dict[str, object]]:
     }
 
 
-def stage(*, server: str, artifact_dir: Path, admin_password: str,
+def stage(*, server: str, artifact_dir: Path, admin_password: str, package_kind: str = "",
           transport: httpx.BaseTransport | None = None) -> dict[str, object]:
     origin = _https_origin(server)
-    payload, details = inspect(artifact_dir)
+    payload, details = inspect(artifact_dir, package_kind=package_kind)
     with httpx.Client(base_url=origin, timeout=30.0, follow_redirects=False, transport=transport) as client:
         login = client.post("/admin/api/login", json={"password": admin_password})
         login.raise_for_status()
@@ -93,6 +120,8 @@ def stage(*, server: str, artifact_dir: Path, admin_password: str,
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact-dir", type=Path, required=True)
+    parser.add_argument("--package", choices=tuple(API_ONLY_PACKAGE_NAMES),
+                        help="Required for API-only set or restore artifacts")
     parser.add_argument("--server", help="HTTPS local-server origin; required with --stage")
     parser.add_argument("--stage", action="store_true", help="Upload bytes to the local server (no robot command)")
     args = parser.parse_args()
@@ -100,9 +129,10 @@ def main() -> None:
         if not args.server:
             parser.error("--server is required with --stage")
         result = stage(server=args.server, artifact_dir=args.artifact_dir,
+                       package_kind=args.package or "",
                        admin_password=getpass("Local server admin password: "))
     else:
-        _payload, result = inspect(args.artifact_dir)
+        _payload, result = inspect(args.artifact_dir, package_kind=args.package or "")
         result["device_command_sent"] = False
         result["staged"] = False
     print(json.dumps(result, indent=2))
