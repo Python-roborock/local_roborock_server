@@ -52,6 +52,11 @@ version. The offline builder produced a 2,336-byte migration package (SHA-256
 and a 752-byte restore package (SHA-256
 `08ed018d3c3578aebb49529bbb79d431967979e4845dced966bec63def5d12bf`).
 Both were verified against their hosted LAN bytes before sending.
+The four-file private profile archive is SHA-256
+`5546c6e1c6bf1083cab77351614e499f4d1c45149941cd71beb9fdc4375a3979`
+(3,116 bytes). Its manifest records the one-unit physical test. A newly built
+package retains `hardware_tested:false` until that owner's package is tried;
+the profile test does not certify every future Q7.
 
 The official vendor update itself was delivered to the same Q7 through the
 local owner MQTT route with `signed:true`; its embedded vendor signature
@@ -75,3 +80,13 @@ device topic used its current cloud DUID, not the old numeric factory DID. On
 the rebuilt live add-on, refreshing the admin vacuum list still showed Q7
 MQTT connected, and a subsequent local owner query returned charging status
 4 and OTA `idle`.
+
+To check that the profile is not tied to this unit's identity, a separate
+synthetic-owner manifest with a different DUID, local key, and MQTT login was
+built with the same four-file profile. The resulting `03.01.80` packages ran
+through the recovered ARM `otaunpack` under an isolated QEMU recovery chroot.
+Migration changed only the five intended IoT fields, restore returned the
+synthetic `iot.json` byte-for-byte, re-entry worked with a matching backup,
+and a mismatched backup left the source unchanged. Boot environment writes
+and reboot were stubbed. This checks package portability offline; it is not
+a second physical-vacuum test.

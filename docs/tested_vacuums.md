@@ -30,6 +30,11 @@ if you try one.
 
 Failing reports made before `1.1.0` need retesting on those devices and firmware versions.
 
+The `roborock.vacuum.sc05` Q7 has a separate [experimental 03.01.80 no-dump
+owner trial](q7_030180_owner_trial.md). One physical unit completed migration
+and return; a second owner's unit has not yet been tested, so it is not in the
+supported-vacuums table.
+
 ## Known Failures
 
 These reports remain unresolved:

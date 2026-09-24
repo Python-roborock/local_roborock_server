@@ -26,4 +26,5 @@ If you want to support this project, next time you buy a Roborock, use one of my
 - [Reverse proxy](reverse_proxy.md)
 - [Custom MQTT](custom_mqtt.md)
 - [Custom certificate management](custom_cert_management.md)
+- [Experimental Q7 sc05 03.01.80 owner trial](q7_030180_owner_trial.md)
 - [Technical Writeup](technical_writeup.md)

@@ -9,6 +9,8 @@ installing the official update. This remains a single-device result, not yet
 a second-device validation. See `docs/q7_030180_compatibility.md` for the
 `03.01.80` firmware analysis and physical test evidence. The older detailed
 package sizes below describe the `03.01.74` trial unless noted otherwise.
+For a concise `03.01.80` tester procedure, use
+`docs/q7_030180_owner_trial.md`.
 
 The intended input is a normal Roborock account import containing the cloud
 DUID and the device's 16-byte local key. The native numeric DID and the
@@ -442,8 +444,11 @@ the separate RSA/V2 branch. The OTA's five blocks update kernel, recovery,
 rootfs, and related environment content, not the persisted certificate or
 userdata identity. Thus this update does not introduce a V2-only onboarding
 client; the observed Q7 HMAC path should remain available after 03.01.80.
-This is a static inference about the post-update device, not a claim that the
-physical Q7 has installed 03.01.80.
+The identical client is static evidence that the update does not switch this
+unit to V2 onboarding. The physical Q7 later installed `03.01.80`, returned
+to vendor cloud, and re-entered the local server as documented in
+`docs/q7_030180_compatibility.md`; no post-update factory `/b/nc` probe was
+needed for that no-dump owner OTA route.
 
 ## Why forcing V2 does not remove the secret requirement
 
