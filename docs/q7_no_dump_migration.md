@@ -62,7 +62,11 @@ Hardware gates still open:
 
 1. Deploy and verify the production HTTPS staging origin. LAN HTTP delivery
    and full-package acceptance succeeded, but the running add-on does not yet
-   include the expiring staging route.
+   include the expiring staging route or the Q7 migration-credential endpoint.
+   On 2026-09-23 the target hostname resolved to `192.168.20.199`; TCP ports
+   555 and 8881 accepted TLS with a certificate valid for that hostname. This
+   is transport preflight, not proof that the current add-on will accept the
+   proposed MQTT credentials or stage a package.
 2. Execute the five-field IoT edit on hardware and verify that it survives
    reboot and that B01 region/NC does not overwrite the values. Then confirm
    the custom server accepts the new MQTT credentials and routes owner RPCs.
