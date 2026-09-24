@@ -3,6 +3,7 @@
 The Q7 must still be online in the owner's Roborock account. This tool uses
 normal account login and the current cloud DUID/local key; it needs no device
 dump or factory HMAC secret. Without --live it sends read-only queries only.
+--save-account optionally writes a private account export for later commands.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -88,10 +90,28 @@ async def _account(args: argparse.Namespace, web_session: aiohttp.ClientSession)
     return api, await api.code_login_v4(code)
 
 
+def _save_account(path: Path, *, email: str, base_url: str, owner: UserData) -> None:
+    """Create an opt-in private export for subsequent owner commands."""
+    payload = {
+        "username": email,
+        "base_url": base_url,
+        "user_data": owner.as_dict(),
+    }
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+        json.dump(payload, output, separators=(",", ":"))
+        output.write("\n")
+
+
 async def run(args: argparse.Namespace) -> dict[str, object]:
+    if args.save_account and args.save_account.exists():
+        raise FileExistsError("Private account export already exists")
     async with aiohttp.ClientSession() as web_session:
         api, owner = await _account(args, web_session)
         home = await api.get_home_data_v3(owner)
+        if args.save_account:
+            _save_account(args.save_account, email=args.email, base_url=await api.base_url, owner=owner)
     models = {product.id: product.model for product in home.products}
     if args.list:
         return {
@@ -172,12 +192,15 @@ def main() -> None:
     identity = parser.add_mutually_exclusive_group(required=True)
     identity.add_argument("--email", help="Roborock account email; requests a login code")
     identity.add_argument("--account", type=Path, help="private JSON with username, base_url, user_data")
+    parser.add_argument("--save-account", type=Path, help="with --email, exclusively create a private account export for later runs")
     parser.add_argument("--list", action="store_true", help="list account-owned Q7 DUIDs; no device connection")
     parser.add_argument("--duid", help="current cloud DUID from the owner's account")
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--url", help="HTTP(S) URL serving the exact encrypted artifact")
     parser.add_argument("--live", action="store_true", help="send the single OTA command after preflight")
     args = parser.parse_args()
+    if args.save_account and not args.email:
+        parser.error("--save-account requires --email")
     if args.list:
         if args.duid or args.artifact_dir or args.url or args.live:
             parser.error("--list cannot be combined with OTA options")

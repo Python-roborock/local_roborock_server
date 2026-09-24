@@ -39,14 +39,17 @@ profile. The builder checks the individual file hashes again.
 
 From a checkout of this repository, run these steps. Replace the example
 email, DUID, server origin, profile path, and LAN IP with the tester's values.
-Each `--email` invocation requests a new Roborock login code; a private
-`--account` export can be used instead.
+The first command requests one Roborock login code and exclusively creates
+`../private/q7-owner-account.json`. That file contains account tokens: keep it
+private, do not share it with the server or another tester, and delete it after
+the trial. The command refuses to overwrite an existing export. Later commands
+reuse it without requesting more login codes.
 
 1. List the account's Q7 devices. Identify the intended Q7 and confirm
    firmware `03.01.74`, cloud online, and `local_key_length` 16:
 
    ```text
-   uv run --no-sync python scripts/q7_owner_ota.py --email OWNER_EMAIL --list
+   uv run --no-sync python scripts/q7_owner_ota.py --email OWNER_EMAIL --save-account ../private/q7-owner-account.json --list
    ```
 
 2. Reserve this Q7's local MQTT credentials and build both packages. This
@@ -77,8 +80,8 @@ Each `--email` invocation requests a new Roborock login code; a private
    repeat with `--live` to send one migration OTA:
 
    ```text
-   uv run --no-sync python scripts/q7_owner_ota.py --email OWNER_EMAIL --duid CURRENT_CLOUD_DUID --artifact-dir ../private/q7-candidate --url http://LAN_IP:8765/q7-migration-v03.bin.gz.aes
-   uv run --no-sync python scripts/q7_owner_ota.py --email OWNER_EMAIL --duid CURRENT_CLOUD_DUID --artifact-dir ../private/q7-candidate --url http://LAN_IP:8765/q7-migration-v03.bin.gz.aes --live
+   uv run --no-sync python scripts/q7_owner_ota.py --account ../private/q7-owner-account.json --duid CURRENT_CLOUD_DUID --artifact-dir ../private/q7-candidate --url http://LAN_IP:8765/q7-migration-v03.bin.gz.aes
+   uv run --no-sync python scripts/q7_owner_ota.py --account ../private/q7-owner-account.json --duid CURRENT_CLOUD_DUID --artifact-dir ../private/q7-candidate --url http://LAN_IP:8765/q7-migration-v03.bin.gz.aes --live
    ```
 
 5. Wait for the Q7 to reboot. Verify the local server shows its MQTT
@@ -87,7 +90,7 @@ Each `--email` invocation requests a new Roborock login code; a private
    the Q7 and it reports charging status 4 and OTA `idle`:
 
    ```text
-   uv run --no-sync python scripts/q7_local_restore.py --email OWNER_EMAIL --duid CURRENT_CLOUD_DUID --config ../private/q7-five-fields.json --artifact-dir ../private/q7-candidate --url http://LAN_IP:8765/q7-restore-local-v03.bin.gz.aes
+   uv run --no-sync python scripts/q7_local_restore.py --account ../private/q7-owner-account.json --duid CURRENT_CLOUD_DUID --config ../private/q7-five-fields.json --artifact-dir ../private/q7-candidate --url http://LAN_IP:8765/q7-restore-local-v03.bin.gz.aes
    ```
 
 6. To return to Roborock cloud, repeat that exact restore command with
