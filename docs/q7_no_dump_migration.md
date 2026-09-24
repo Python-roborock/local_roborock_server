@@ -11,6 +11,9 @@ a second-device validation. See `docs/q7_030180_compatibility.md` for the
 package sizes below describe the `03.01.74` trial unless noted otherwise.
 For a concise `03.01.80` tester procedure, use
 `docs/q7_030180_owner_trial.md`.
+The `03.01.80` cycle was repeated using the public generic restore and owner
+sender scripts in both directions, with the same physical Q7 and a private
+account export.
 
 The intended input is a normal Roborock account import containing the cloud
 DUID and the device's 16-byte local key. The native numeric DID and the

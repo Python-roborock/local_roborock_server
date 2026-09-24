@@ -70,6 +70,18 @@ answered `prop.get` and `ota.progress.get` with charging status 4 and OTA
 the same physical unit. A fresh account login and a second owner/device are
 still untested.
 
+A second cycle on that unit exercised the **public generic tools** for both
+directions. The portable builder reproduced the byte-identical 2,336-byte
+migration and 752-byte restore packages from the private profile and current
+five-field manifest. `q7_local_restore.py` passed its dry run, sent the
+restore, and observed `installed`; the owner's cloud account then showed the
+Q7 online at `03.01.80`. `q7_owner_ota.py` passed its cloud dry run, sent
+the migration, and observed `installed`. After reboot, a new generic local
+restore dry run reached the Q7 and read charging status 4 with OTA `idle`.
+Both temporary LAN package URLs were removed after verification. This
+validates the documented generic sender path with a private account export,
+still on the same physical Q7.
+
 The live add-on also exposed a routing defect during this test: a read of the
 admin vacuum list downgraded the saved Q7 key origin from `inventory_cloud`
 to `inventory`, causing the bridge to ignore the reserved migration identity.

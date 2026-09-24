@@ -5,7 +5,8 @@ Roborock account and a firmware-wide profile; it does **not** need that Q7's
 flash dump, factory HMAC secret, numeric DID, SSH, or UART. A second owner's
 device has not yet been tested. The longer evidence record is in
 [`q7_030180_compatibility.md`](q7_030180_compatibility.md).
-The same-unit physical trial used a private owner-account export; the fresh
+The public restore and owner sender scripts completed a second physical
+round trip on that same unit using a private owner-account export. The fresh
 email-code login in the commands below still needs an independent trial.
 
 Use a charging, cloud-online `roborock.vacuum.sc05` running exactly
