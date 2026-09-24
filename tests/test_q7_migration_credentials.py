@@ -7,8 +7,11 @@ import re
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import httpx
 
 from conftest import write_release_config
+from scripts import q7_local_restore, q7_migration_ota_builder, q7_owner_ota, q7_prepare_migration
+from scripts.q7_stage_ota import inspect
 from roborock_local_server.bundled_backend.mqtt_broker_server.topic_bridge import (
     CloudTopicKey,
     DeviceTopicKey,
@@ -63,6 +66,61 @@ def _publish_packet(topic: str) -> bytes:
     body = len(encoded).to_bytes(2, "big") + encoded + b"{}"
     assert len(body) < 128
     return bytes((0x30, len(body))) + body
+
+
+def test_no_dump_owner_handoff_formats_agree_across_server_and_tools(tmp_path: Path, monkeypatch) -> None:
+    """One synthetic owner can prepare, build, preflight, and parse a restore."""
+    app_client, _supervisor = _client(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = app_client.request(
+            request.method, request.url.path, content=request.content,
+            headers={"content-type": "application/json"},
+        )
+        return httpx.Response(response.status_code, content=response.content, headers=response.headers)
+
+    original_client = httpx.Client
+    monkeypatch.setattr(
+        q7_prepare_migration.httpx, "Client",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    config_path = tmp_path / "private" / "migration.json"
+    q7_prepare_migration.prepare(
+        server="https://local.test:555", duid="synthetic-q7-duid",
+        api_url="https://local.test:555", mqtt_url="ssl://local.test:8881",
+        out=config_path, admin_password="correct horse battery staple",
+    )
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    blobs = {
+        "ota-key.bin": b"synthetic-key-12",
+        "return.sh": b"#!/bin/sh\necho normal-boot\n",
+        "editor.sh": b"#!/bin/sh\necho edit-existing-iot\n",
+    }
+    hashes = {name: hashlib.sha256(blob).hexdigest() for name, blob in blobs.items()}
+    for name, blob in blobs.items():
+        (profile / name).write_bytes(blob)
+    (profile / "manifest.json").write_text(json.dumps({
+        "schema": q7_migration_ota_builder.EXPERIMENTAL_030180_SCHEMA,
+        "model": "roborock.vacuum.sc05",
+        "firmware_version": "03.01.80",
+        "file_sha256": hashes,
+    }))
+    monkeypatch.setattr(q7_migration_ota_builder, "EXPERIMENTAL_030180_HASHES", hashes)
+    artifact = tmp_path / "candidate"
+    metadata = q7_migration_ota_builder.build(config, profile, artifact)
+    migration = inspect(artifact)[1]
+    restore = inspect(artifact, package_kind="restore")[1]
+    assert migration["target_firmware"] == restore["target_firmware"] == "03.01.80"
+    assert metadata["preflight"] == migration["preflight"]
+    assert q7_owner_ota.cloud_key_matches_server_import(
+        migration["preflight"], duid="synthetic-q7-duid", local_key="0123456789abcdef"
+    )
+    assert not q7_owner_ota.cloud_key_matches_server_import(
+        migration["preflight"], duid="synthetic-q7-duid", local_key="fedcba9876543210"
+    )
+    assert q7_local_restore._broker(config_path)[2] == config["mqtt_usr"]
 
 
 def test_q7_migration_credentials_are_admin_only_idempotent_and_persisted(tmp_path: Path, monkeypatch) -> None:
