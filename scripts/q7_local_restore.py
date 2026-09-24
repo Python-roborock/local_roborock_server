@@ -1,7 +1,7 @@
 """Preflight or restore a migrated Q7 to its saved vendor region.
 
 Uses the current owner's cloud inventory for the device local key and the
-five-field migration manifest for the local broker credentials. The companion
+migration manifest's five IoT fields for the local broker credentials. The companion
 restore package must come from the same portable build as the migration OTA.
 Without --live this sends only read-only owner queries to the local Q7.
 """
@@ -31,12 +31,19 @@ except ImportError:  # Direct ``python scripts/q7_local_restore.py`` execution.
     from q7_owner_ota import _account, package_request
 
 
+IOT_FIELDS = ("api_url", "mqtt_url", "mqtt_clientid", "mqtt_usr", "mqtt_passwd")
+
+
+def _iot_values(source: object) -> dict[str, str]:
+    if not isinstance(source, dict) or set(source) not in (
+        set(IOT_FIELDS), set(IOT_FIELDS) | {"_preflight"}
+    ):
+        raise ValueError("Expected the five IoT fields and optional cloud-key preflight")
+    return {name: source[name] for name in IOT_FIELDS}
+
+
 def _broker(manifest_path: Path) -> tuple[str, int, str, str, str]:
-    values = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if not isinstance(values, dict) or set(values) != {
-        "api_url", "mqtt_url", "mqtt_clientid", "mqtt_usr", "mqtt_passwd"
-    }:
-        raise ValueError("Expected the exact five-field migration manifest")
+    values = _iot_values(json.loads(manifest_path.read_text(encoding="utf-8")))
     url = urlsplit(values["mqtt_url"])
     if (url.scheme != "ssl" or not url.hostname or url.username or url.password
             or url.path not in ("", "/") or url.query or url.fragment):
@@ -56,11 +63,14 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     target_firmware = metadata.get("target_firmware", "03.01.74")
     if target_firmware not in ("03.01.74", "03.01.80"):
         raise ValueError("Restore package targets an unsupported Q7 firmware")
+    fields = _iot_values(source)
     config_sha256 = hashlib.sha256(
-        json.dumps(source, sort_keys=True, separators=(",", ":")).encode("ascii")
+        json.dumps(fields, sort_keys=True, separators=(",", ":")).encode("ascii")
     ).hexdigest()
     if metadata.get("config_sha256") != config_sha256:
         raise ValueError("Restore manifest differs from the migration package input")
+    if metadata.get("preflight") != source.get("_preflight"):
+        raise ValueError("Restore cloud-key preflight differs from the migration package input")
     host, port, username, password, mqtt_url = _broker(args.config)
     async with aiohttp.ClientSession() as web_session:
         api, owner = await _account(args, web_session)
@@ -131,7 +141,7 @@ def main() -> None:
     identity.add_argument("--email", help="Roborock account email; requests a login code")
     identity.add_argument("--account", type=Path, help="private owner account JSON export")
     parser.add_argument("--duid", required=True, help="current cloud DUID from this account")
-    parser.add_argument("--config", type=Path, required=True, help="private five-field migration manifest")
+    parser.add_argument("--config", type=Path, required=True, help="private migration manifest with five IoT fields")
     parser.add_argument("--artifact-dir", type=Path, required=True)
     parser.add_argument("--url", required=True, help="HTTP(S) URL serving the companion restore package")
     parser.add_argument("--live", action="store_true", help="send one restore OTA after preflight")
