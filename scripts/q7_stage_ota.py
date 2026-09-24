@@ -23,6 +23,7 @@ except ImportError:  # Direct ``python scripts/q7_stage_ota.py`` execution.
 
 
 PACKAGE_NAMES = {"q7-migration-v03.bin.gz.aes", "return-noop-v03.bin.gz.aes"}
+RESTORE_PACKAGE_NAME = "q7-restore-local-v03.bin.gz.aes"
 API_ONLY_PACKAGE_NAMES = {
     "set-api": "q7-set-api-v03.bin.gz.aes",
     "restore-api": "q7-restore-api-v03.bin.gz.aes",
@@ -54,16 +55,25 @@ def inspect(artifact_dir: Path, *, package_kind: str = "") -> tuple[bytes, dict[
         expected_sha = selected.get("sha256")
         expected_md5 = selected.get("md5")
     else:
-        if package_kind:
-            raise ValueError("--package is only valid for API-only artifacts")
         if "roborock.vacuum.sc05 03.01.74" not in str(metadata.get("firmware", "")):
             raise ValueError("Package metadata does not name the inspected Q7 firmware")
-        name = metadata.get("package") or metadata.get("encrypted_file")
-        if name not in PACKAGE_NAMES:
-            raise ValueError("Unexpected Q7 package name")
-        expected_size = metadata.get("encrypted_size_bytes")
-        expected_sha = metadata.get("encrypted_sha256")
-        expected_md5 = metadata.get("encrypted_md5")
+        if package_kind == "restore":
+            selected = metadata.get("restore_package")
+            if not isinstance(selected, dict) or selected.get("package") != RESTORE_PACKAGE_NAME:
+                raise ValueError("Companion restore package is missing")
+            name = selected["package"]
+            expected_size = selected.get("encrypted_size_bytes")
+            expected_sha = selected.get("encrypted_sha256")
+            expected_md5 = selected.get("encrypted_md5")
+        elif not package_kind:
+            name = metadata.get("package") or metadata.get("encrypted_file")
+            if name not in PACKAGE_NAMES:
+                raise ValueError("Unexpected Q7 package name")
+            expected_size = metadata.get("encrypted_size_bytes")
+            expected_sha = metadata.get("encrypted_sha256")
+            expected_md5 = metadata.get("encrypted_md5")
+        else:
+            raise ValueError("Unsupported package selection for this artifact")
     package = directory / str(name)
     if package.is_symlink() or package.resolve().parent != directory:
         raise ValueError("Package must be a regular file in the artifact directory")
@@ -120,8 +130,8 @@ def stage(*, server: str, artifact_dir: Path, admin_password: str, package_kind:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact-dir", type=Path, required=True)
-    parser.add_argument("--package", choices=tuple(API_ONLY_PACKAGE_NAMES),
-                        help="Required for API-only set or restore artifacts")
+    parser.add_argument("--package", choices=(*API_ONLY_PACKAGE_NAMES, "restore"),
+                        help="Select an API-only package or the full migration restore")
     parser.add_argument("--server", help="HTTPS local-server origin; required with --stage")
     parser.add_argument("--stage", action="store_true", help="Upload bytes to the local server (no robot command)")
     args = parser.parse_args()

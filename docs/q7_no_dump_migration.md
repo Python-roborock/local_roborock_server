@@ -34,8 +34,9 @@ check the manifest hashes after transfer. The inspected profile has been saved
 as a four-file archive in the owner's private workspace, outside Git.
 The repository now has `scripts/q7_migration_ota_builder.py`, which takes that
 portable profile and a new owner's five-field manifest without accessing their
-device dump. With the inspected profile and the original test manifest, its
-encrypted output was byte-identical to the 2,688-byte package accepted by the
+device dump. It builds both migration and companion restore packages. With the
+inspected profile and the original test manifest, its encrypted migration
+output was byte-identical to the 2,688-byte package accepted by the
 physical Q7 (SHA-256
 `04defa005b2f06c26585240ea21e7106aa164a98121a9daa4e836cf4271a0256`).
 That comparison validates the builder, not a second device or firmware build.
@@ -45,18 +46,22 @@ it refuses a mismatched copy. The updated editor is reviewable in
 `scripts/q7_iot_local_fields_reentry.sh`. The v2 encrypted package was 2,768
 bytes (SHA-256
 `ddd698e97f4df4ef5f3355d6f5df5dd988c829e4533fa07e3e305c6f5dd991ee`)
-and was accepted by the same physical Q7 on re-entry. The four-file v2 profile
-archive is private and outside Git.
+and was accepted by the same physical Q7 on re-entry. The companion restore
+package is 1,216 bytes, SHA-256
+`8cc9e8a700fa8e7359e3703b57a9f7eae322013df12b19725f434adff36ea756`.
+The portable builder reproduced the exact bytes that physically restored this
+Q7 to vendor cloud. The four-file v2 profile archive is private and outside Git.
 From the source checkout, after obtaining the profile privately:
 
 ```text
 uv run --no-sync python scripts/q7_migration_ota_builder.py --config ../private/q7-five-fields.json --profile ../private/q7_ota_profile_sc05_030174_reentry --out ../private/q7-candidate
 uv run --no-sync python scripts/q7_stage_ota.py --artifact-dir ../private/q7-candidate
+uv run --no-sync python scripts/q7_stage_ota.py --artifact-dir ../private/q7-candidate --package restore
 ```
 
-The first command builds only local files; the second validates the encrypted
-file without hosting it. The package embeds the local server's reserved MQTT
-credentials. `scripts/q7_owner_ota.py` now provides a generic owner-side sender
+The first command builds only local files; the next two validate both encrypted
+files without hosting them. The migration package embeds the local server's
+reserved MQTT credentials. `scripts/q7_owner_ota.py` provides a generic owner-side sender
 without hard-coded account or device identity. It supports a Roborock email-code
 login or a private JSON account export with `username`, `base_url`, and
 `user_data` fields. `--list` reads current cloud Q7 DUIDs and firmware versions
@@ -85,6 +90,46 @@ the email-code login path on a new account, and a different firmware build
 have not been tested end-to-end; this remains an experimental procedure rather
 than a release-ready instruction. The existing private-account-export path of
 the generic sender was used in the successful physical re-entry.
+
+For another owner testing the complete no-dump path on this exact model and
+firmware:
+
+1. While the Q7 is cloud-online and charging, import the same Roborock account
+   in the local server's admin dashboard using **Send code** and **Fetch data**.
+   Run `q7_owner_ota.py --email OWNER_EMAIL --list` to obtain its current cloud
+   DUID and confirm firmware `03.01.74` and local-key length 16. Do not use a
+   DUID from an old dump or account export.
+2. Reserve local credentials with
+   `q7_prepare_migration.py --server https://LOCAL-SERVER:555 --duid CURRENT_CLOUD_DUID --api-url https://LOCAL-SERVER:555 --mqtt-url ssl://LOCAL-SERVER:8881 --out ../private/q7-five-fields.json`.
+   The admin password is prompted for. Obtain the four-file v2 firmware profile
+   privately, then build and validate both packages with the commands above.
+   Keep the manifest, profile and packages private.
+3. Make both encrypted files available at LAN HTTP URLs that the Q7 can reach
+   throughout the trial. For example, from the candidate directory run
+   `python -m http.server 8765 --bind LAN_IP` in a separate terminal and keep
+   it open. Use that host's actual LAN IP and check its firewall. Run the
+   vendor-owner dry run and `--live` command shown above with the migration
+   file's URL. Confirm the Q7 connects to the local server and answers an owner
+   RPC; an OTA `installed` status alone is insufficient.
+4. The companion restore uses the same manifest and owner account. While the
+   migrated Q7 is charging and OTA `idle`, run the following without `--live`,
+   then repeat with `--live` only when intentionally returning it to vendor
+   cloud. Confirm the Q7 subsequently appears online in that account:
+
+   ```text
+   uv run --no-sync python scripts/q7_local_restore.py --email OWNER_EMAIL --duid CURRENT_CLOUD_DUID --config ../private/q7-five-fields.json --artifact-dir ../private/q7-candidate --url http://LAN_IP:8765/q7-restore-local-v03.bin.gz.aes
+   ```
+
+The generic local restore sender's dry run and `--live` path succeeded against
+the physical Q7. It verified the hosted restore bytes and manifest binding,
+authenticated to the local broker, observed charging status 4 and OTA `idle`,
+then sent one restore OTA. The Q7 reported installation, rebooted, and appeared
+online in the owner's Roborock account at `03.01.74`. The generic cloud-owner
+sender then sent the portable v2 migration package and, after reboot, the Q7
+again authenticated to local MQTT and answered charging/idle owner queries;
+vendor cloud listed it offline. The temporary migration download was removed.
+This verifies the full generic-tool round trip on **one** physical Q7. A second
+device and fresh email-code login remain to be tested.
 
 The server also provides an admin-only `POST /admin/api/q7/ota-package` to
 stage at most two AES-aligned encrypted packages, each at most 4 MiB, after

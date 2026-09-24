@@ -31,8 +31,8 @@ except ImportError:  # Direct ``python scripts/q7_owner_ota.py`` execution.
     from q7_stage_ota import inspect
 
 
-def package_request(artifact_dir: Path, url: str) -> dict[str, object]:
-    payload, metadata = inspect(artifact_dir)
+def package_request(artifact_dir: Path, url: str, *, package_kind: str = "") -> dict[str, object]:
+    payload, metadata = inspect(artifact_dir, package_kind=package_kind)
     parsed = urlsplit(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("Package URL must be HTTP(S) and reachable by the vacuum")

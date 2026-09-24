@@ -57,6 +57,9 @@ def test_portable_package_is_stagable_and_contains_only_scripts(
     assert details["encrypted_sha256"] == metadata["encrypted_sha256"]
     assert metadata["build_mode"] == "portable_profile"
     assert metadata["signed"] is False
+    assert metadata["config_sha256"] == builder._sha256(
+        json.dumps(FIELDS, sort_keys=True, separators=(",", ":")).encode("ascii")
+    )
 
     decryptor = Cipher(algorithms.AES(key), modes.ECB()).decryptor()
     padded = decryptor.update(payload) + decryptor.finalize()
@@ -76,6 +79,17 @@ def test_portable_package_is_stagable_and_contains_only_scripts(
     assert all(value.encode("ascii") in begin for value in FIELDS.values())
     assert begin.endswith(b"echo edit-existing-iot\n")
     assert end == b"#!/bin/sh\necho normal-boot\n"
+
+    restore_payload, restore_details = inspect(out, package_kind="restore")
+    assert restore_details["encrypted_sha256"] == metadata["restore_package"]["encrypted_sha256"]
+    padded_restore = Cipher(algorithms.AES(key), modes.ECB()).decryptor().update(restore_payload)
+    restore_container = gzip.decompress(padded_restore[:-padded_restore[-1]])
+    _, restore_major, restore_minor, restore_blocks, restore_payload_size, restore_begin_size, restore_end_size = (
+        struct.unpack_from("<7I", restore_container)
+    )
+    assert (restore_major, restore_minor, restore_blocks, restore_payload_size) == (0, 3, 0, 0)
+    assert restore_container[28 : 28 + restore_begin_size] == builder.RESTORE_BEGIN
+    assert restore_container[28 + restore_begin_size : 28 + restore_begin_size + restore_end_size] == end
 
 
 def test_refuses_unsafe_values_and_tampered_profile(
