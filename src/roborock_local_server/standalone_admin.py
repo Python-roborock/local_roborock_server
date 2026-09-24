@@ -422,14 +422,7 @@ def register_standalone_admin_routes(
             return JSONResponse({"error": "Q7 device was not found"}, status_code=404)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        return JSONResponse(
-            {
-                **credentials,
-                "hardware_tested": False,
-                "warning": "Experimental Q7 migration preparation only; no OTA or device command was sent",
-            },
-            headers={"Cache-Control": "no-store"},
-        )
+        return JSONResponse(credentials, headers={"Cache-Control": "no-store"})
 
     @app.post("/admin/api/onboarding/sessions")
     async def admin_onboarding_start(request: Request) -> JSONResponse:

@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import pytest
 
 from scripts import q7_migration_ota_builder as builder
-from scripts.q7_stage_ota import inspect
+from scripts.q7_migration_ota_builder import inspect
 
 
 FIELDS = {
@@ -80,18 +80,6 @@ def test_portable_package_is_stagable_and_contains_only_scripts(
     assert begin.endswith(b"echo edit-existing-iot\n")
     assert end == b"#!/bin/sh\necho normal-boot\n"
 
-    restore_payload, restore_details = inspect(out, package_kind="restore")
-    assert restore_details["encrypted_sha256"] == metadata["restore_package"]["encrypted_sha256"]
-    padded_restore = Cipher(algorithms.AES(key), modes.ECB()).decryptor().update(restore_payload)
-    restore_container = gzip.decompress(padded_restore[:-padded_restore[-1]])
-    _, restore_major, restore_minor, restore_blocks, restore_payload_size, restore_begin_size, restore_end_size = (
-        struct.unpack_from("<7I", restore_container)
-    )
-    assert (restore_major, restore_minor, restore_blocks, restore_payload_size) == (0, 3, 0, 0)
-    assert restore_container[28 : 28 + restore_begin_size] == builder.RESTORE_BEGIN
-    assert restore_container[28 + restore_begin_size : 28 + restore_begin_size + restore_end_size] == end
-
-
 def test_portable_package_pins_cloud_key_without_embedding_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -153,9 +141,9 @@ def test_030180_profile_requires_its_own_return_script_and_version(
     _fixture_profile(profile, monkeypatch)
     manifest_path = profile / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["schema"] = builder.EXPERIMENTAL_030180_SCHEMA
+    manifest["schema"] = builder.PROFILE_030180_SCHEMA
     manifest["firmware_version"] = "03.01.80"
-    monkeypatch.setattr(builder, "EXPERIMENTAL_030180_HASHES", manifest["file_sha256"])
+    monkeypatch.setattr(builder, "PROFILE_030180_HASHES", manifest["file_sha256"])
     manifest_path.write_text(json.dumps(manifest))
     candidate = tmp_path / "candidate"
     metadata = builder.build(FIELDS, profile, candidate)

@@ -23,30 +23,12 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 SCHEMA = "q7-sc05-03.01.74-migration-profile-v1"
 REENTRY_SCHEMA = "q7-sc05-03.01.74-migration-profile-v2"
-EXPERIMENTAL_030180_SCHEMA = "q7-sc05-03.01.80-migration-profile-v1"
+PROFILE_030180_SCHEMA = "q7-sc05-03.01.80-migration-profile-v1"
 MODEL = "roborock.vacuum.sc05"
 VERSION = "03.01.74"
+PACKAGE_NAME = "q7-migration-v03.bin.gz.aes"
+MAX_PACKAGE_BYTES = 4 * 1024 * 1024
 FIELDS = ("api_url", "mqtt_url", "mqtt_clientid", "mqtt_usr", "mqtt_passwd")
-RESTORE_NAME = "q7-restore-local-v03.bin.gz.aes"
-# This companion script restored the inspected Q7's saved vendor IoT profile.
-# It does not contain device-specific values; it uses the adjacent rollback copy
-# made by the migration editor. Keep its bytes stable for physical-test parity.
-RESTORE_BEGIN = b"""#!/bin/sh
-set -eu
-json_path=${Q7_IOT_JSON_PATH:-/userdata/rriot/data_dir/iot.json}
-backup=${json_path}.before-q7-local-edit
-bb=${Q7_BUSYBOX:-/bin/busybox}
-case "$json_path" in */iot.json) ;; *) exit 1 ;; esac
-[ -f "$json_path" ] && [ ! -L "$json_path" ] || exit 1
-[ -f "$backup" ] && [ ! -L "$backup" ] || exit 1
-[ -x "$bb" ] || exit 1
-tmp=$("$bb" mktemp "${json_path}.restore.XXXXXX") || exit 1
-trap '"$bb" rm -f -- "$tmp"' EXIT
-"$bb" cp -p "$backup" "$tmp" || exit 1
-"$bb" cmp -s "$backup" "$tmp" || exit 1
-"$bb" mv -f "$tmp" "$json_path" || exit 1
-"$bb" sync
-"""
 PROFILE_HASHES = {
     "ota-key.bin": "a02bdcf7b3afdb5b0dce179326d81839c9d04d5bfb47fd318aba777633b01f5e",
     "return.sh": "cffc933b62405211a18157c47c425344854607e7bdb830cac8fee527bc391a0c",
@@ -56,7 +38,7 @@ REENTRY_PROFILE_HASHES = {
     **PROFILE_HASHES,
     "editor.sh": "2fce38f7ba828b361fa644c5e8fea8c5858f9bc0eeaeab931610e18e6da3fb04",
 }
-EXPERIMENTAL_030180_HASHES = {
+PROFILE_030180_HASHES = {
     "ota-key.bin": PROFILE_HASHES["ota-key.bin"],
     "return.sh": "a5f599aaaa53c898090b81ff8e8a9a9312e48e75f18fb0a93f523492a6cacc26",
     "editor.sh": REENTRY_PROFILE_HASHES["editor.sh"],
@@ -116,7 +98,7 @@ def _profile(path: Path) -> tuple[bytes, bytes, bytes, str, str]:
     spec = {
         SCHEMA: (VERSION, PROFILE_HASHES),
         REENTRY_SCHEMA: (VERSION, REENTRY_PROFILE_HASHES),
-        EXPERIMENTAL_030180_SCHEMA: ("03.01.80", EXPERIMENTAL_030180_HASHES),
+        PROFILE_030180_SCHEMA: ("03.01.80", PROFILE_030180_HASHES),
     }.get(schema)
     if spec is None:
         raise ValueError("The firmware-wide profile is not the inspected Q7 build")
@@ -159,22 +141,17 @@ def build(config: object, profile: Path, out: Path) -> dict[str, object]:
     args.extend("'" + values[name] + "'" for name in FIELDS)
     begin = ("#!/bin/sh\nset -- " + " ".join(args) + "\n").encode("ascii") + editor.split(b"\n", 1)[1]
     encrypted = _package(begin, end, key)
-    restore_encrypted = _package(RESTORE_BEGIN, end, key)
 
     out.mkdir(parents=True)
     try:
         out.chmod(0o700)
     except OSError:
         pass
-    name = "q7-migration-v03.bin.gz.aes"
+    name = PACKAGE_NAME
     artifact = out / name
     descriptor = os.open(artifact, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "wb") as handle:
         handle.write(encrypted)
-    restore_path = out / RESTORE_NAME
-    restore_descriptor = os.open(restore_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(restore_descriptor, "wb") as handle:
-        handle.write(restore_encrypted)
     metadata: dict[str, object] = {
         "firmware": f"{MODEL} {version}, pinned inspected firmware profile",
         "target_firmware": version,
@@ -187,23 +164,49 @@ def build(config: object, profile: Path, out: Path) -> dict[str, object]:
         "build_mode": "portable_profile",
         "profile_schema": schema,
         "signed": False,
-        "hardware_tested": False,
         "secrets_in_package": True,
         "config_field_names": list(FIELDS),
         "config_sha256": config_sha256,
         "preflight": preflight,
-        "restore_package": {
-            "package": RESTORE_NAME,
-            "encrypted_size_bytes": len(restore_encrypted),
-            "encrypted_md5": hashlib.md5(restore_encrypted).hexdigest(),
-            "encrypted_sha256": _sha256(restore_encrypted),
-            "begin_sha256": _sha256(RESTORE_BEGIN),
-            "end_sha256": _sha256(end),
-            "secrets_in_package": False,
-        },
     }
     (out / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     return metadata
+
+
+def inspect(artifact_dir: Path) -> tuple[bytes, dict[str, object]]:
+    """Verify the exact encrypted package that will be hosted for the Q7."""
+    directory = artifact_dir.resolve()
+    metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+    if not isinstance(metadata, dict) or metadata.get("signed") is not False:
+        raise ValueError("Expected an unsigned Q7 migration metadata object")
+    version = metadata.get("target_firmware")
+    if (version not in ("03.01.74", "03.01.80")
+            or f"{MODEL} {version}" not in str(metadata.get("firmware", ""))):
+        raise ValueError("Package metadata does not name the inspected Q7 firmware")
+    if version == "03.01.80" and metadata.get("profile_schema") != PROFILE_030180_SCHEMA:
+        raise ValueError("03.01.80 requires its version-specific profile")
+    if metadata.get("package") != PACKAGE_NAME:
+        raise ValueError("Unexpected Q7 migration package name")
+    package = directory / PACKAGE_NAME
+    if package.is_symlink() or package.resolve().parent != directory:
+        raise ValueError("Package must be a regular file in the artifact directory")
+    payload = package.read_bytes()
+    if not payload or len(payload) > MAX_PACKAGE_BYTES or len(payload) % 16:
+        raise ValueError("Package length is outside the AES-aligned limit")
+    digest_sha = hashlib.sha256(payload).hexdigest()
+    digest_md5 = hashlib.md5(payload).hexdigest()
+    if (metadata.get("encrypted_size_bytes") != len(payload)
+            or metadata.get("encrypted_sha256") != digest_sha
+            or metadata.get("encrypted_md5") != digest_md5):
+        raise ValueError("Package bytes do not match metadata")
+    return payload, {
+        "package": PACKAGE_NAME,
+        "encrypted_size_bytes": len(payload),
+        "encrypted_sha256": digest_sha,
+        "encrypted_md5": digest_md5,
+        "target_firmware": version,
+        "preflight": metadata.get("preflight"),
+    }
 
 
 def main() -> None:
@@ -214,13 +217,8 @@ def main() -> None:
     args = parser.parse_args()
     metadata = build(json.loads(args.config.read_text(encoding="utf-8")), args.profile, args.out)
     summary = {key: metadata[key] for key in (
-        "package", "encrypted_size_bytes", "encrypted_md5", "encrypted_sha256", "hardware_tested"
+        "package", "encrypted_size_bytes", "encrypted_md5", "encrypted_sha256"
     )}
-    summary["restore_package"] = {
-        key: metadata["restore_package"][key] for key in (
-            "package", "encrypted_size_bytes", "encrypted_md5", "encrypted_sha256"
-        )
-    }
     print(json.dumps(summary, indent=2))
 
 

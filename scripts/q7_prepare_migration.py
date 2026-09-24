@@ -1,4 +1,4 @@
-"""Reserve local MQTT credentials for an experimental dump-free Q7 migration.
+"""Reserve local MQTT credentials for a cloud-paired Q7 URL migration.
 
 Requires the local server's new admin endpoint and an existing cloud import
 with the Q7 cloud DUID and true local key. A numeric DID is not required.

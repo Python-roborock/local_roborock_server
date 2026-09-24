@@ -30,13 +30,13 @@ from roborock.protocols.b01_q7_protocol import Q7RequestMessage
 from roborock.web_api import RoborockApiClient
 
 try:
-    from .q7_stage_ota import inspect
+    from .q7_migration_ota_builder import inspect
 except ImportError:  # Direct ``python scripts/q7_owner_ota.py`` execution.
-    from q7_stage_ota import inspect
+    from q7_migration_ota_builder import inspect
 
 
-def package_request(artifact_dir: Path, url: str, *, package_kind: str = "") -> dict[str, object]:
-    payload, metadata = inspect(artifact_dir, package_kind=package_kind)
+def package_request(artifact_dir: Path, url: str) -> dict[str, object]:
+    payload, metadata = inspect(artifact_dir)
     parsed = urlsplit(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("Package URL must be HTTP(S) and reachable by the vacuum")
