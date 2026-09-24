@@ -10,10 +10,25 @@ round trip on that same unit using a private owner-account export. The fresh
 email-code login in the commands below still needs an independent trial.
 
 Use a charging, cloud-online `roborock.vacuum.sc05` running exactly
-`03.01.80`. Set up the Roborock Local Server first with an HTTPS origin and
-MQTT TLS origin that the vacuum can reach and trust. Import the **same current
-Roborock account** in its admin dashboard using **Send code** and **Fetch
-data**. Keep the vacuum on vendor cloud until the migration command below.
+`03.01.80`. The **server and owner scripts must both use the
+`research/q7-no-dump-on-latest` branch**; a stable release may lack the Q7
+migration-credentials endpoint and MQTT route fix. For a fresh source checkout:
+
+```text
+git clone --branch research/q7-no-dump-on-latest --single-branch https://github.com/Python-roborock/local_roborock_server.git
+cd local_roborock_server
+uv sync --extra dev --locked
+```
+
+Set up the server from that checkout using the Docker Compose method in
+[`installation.md`](installation.md), including `docker compose up -d --build`.
+If updating an existing server, retain its configuration and data while
+rebuilding from this branch. The stable Home Assistant add-on is not a
+substitute for deploying this branch's source. The server needs an HTTPS
+origin and MQTT TLS origin that the vacuum can reach and trust. Import the
+**same current Roborock account** in its admin dashboard using **Send code**
+and **Fetch data**. Keep the vacuum on vendor cloud until the migration
+command below.
 
 The four-file `03.01.80` profile is distributed privately because it contains
 the firmware-wide OTA key. Its archive is 3,116 bytes, SHA-256
