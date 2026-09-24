@@ -1,17 +1,14 @@
 # Q7 sc05 custom-region migration without a firmware dump
 
 This is an experimental path for an owner of a stock `roborock.vacuum.sc05`
-running `03.01.74`. One physical Q7 has completed the five-field migration to
-the live FDS add-on and answered a read-only owner RPC through its normal MQTT
-topic. The same Q7 subsequently completed a restore to vendor cloud and a
-re-entry using the generic owner sender and the revised profile. This remains
-a single-device result, not yet a second-device validation.
-
-An offline `03.01.80` profile and version-matched sender path are also
-available; see `docs/q7_030180_compatibility.md`. The captured vendor update
-leaves the recovery installer unchanged, but no `03.01.80` physical Q7 has
-accepted a custom package yet. The steps below remain the tested `03.01.74`
-procedure.
+running `03.01.74` or `03.01.80`. One physical Q7 has completed the
+five-field migration to the live FDS add-on and answered owner RPC through
+its normal MQTT topic. It completed restore/re-entry cycles on both firmware
+versions, including a vendor-cloud-delivered migration on `03.01.80` after
+installing the official update. This remains a single-device result, not yet
+a second-device validation. See `docs/q7_030180_compatibility.md` for the
+`03.01.80` firmware analysis and physical test evidence. The older detailed
+package sizes below describe the `03.01.74` trial unless noted otherwise.
 
 The intended input is a normal Roborock account import containing the cloud
 DUID and the device's 16-byte local key. The native numeric DID and the
@@ -46,7 +43,7 @@ output was byte-identical to the 2,688-byte package accepted by the
 physical Q7 (SHA-256
 `04defa005b2f06c26585240ea21e7106aa164a98121a9daa4e836cf4271a0256`).
 That comparison validates the builder, not a second device or firmware build.
-For new trials, use the **v2 re-entry profile**. Its editor accepts an existing
+For `03.01.74` trials, use the **v2 re-entry profile**. Its editor accepts an existing
 rollback copy only if it is byte-identical to the current restored `iot.json`;
 it refuses a mismatched copy. The updated editor is reviewable in
 `scripts/q7_iot_local_fields_reentry.sh`. The v2 encrypted package was 2,768
@@ -57,6 +54,13 @@ package is 1,216 bytes, SHA-256
 `8cc9e8a700fa8e7359e3703b57a9f7eae322013df12b19725f434adff36ea756`.
 The portable builder reproduced the exact bytes that physically restored this
 Q7 to vendor cloud. The four-file v2 profile archive is private and outside Git.
+For `03.01.80`, use the separate four-file
+`q7-sc05-03.01.80-migration-profile-v1` profile from the owner's private
+workspace. Its return script uses the current rootfs size rather than the
+`03.01.74` constant. The version-specific builder produced a 2,336-byte
+migration package and a 752-byte restore package; both were accepted by the
+same physical Q7. Never substitute one firmware version's profile for the
+other.
 From the source checkout, after obtaining the profile privately:
 
 ```text
@@ -64,6 +68,13 @@ uv run --no-sync python scripts/q7_migration_ota_builder.py --config ../private/
 uv run --no-sync python scripts/q7_stage_ota.py --artifact-dir ../private/q7-candidate
 uv run --no-sync python scripts/q7_stage_ota.py --artifact-dir ../private/q7-candidate --package restore
 ```
+
+For a cloud-online `03.01.80` Q7, substitute
+`../private/q7_ota_profile_sc05_030180_experimental` for the `--profile`
+directory; keep the five-field manifest and both output packages private.
+The owner sender checks that the cloud inventory firmware equals the profile's
+target before it can send anything. The `03.01.80` physical round trip used
+this version-specific profile, including its companion restore.
 
 The first command builds only local files; the next two validate both encrypted
 files without hosting them. The migration package embeds the local server's
@@ -98,17 +109,17 @@ than a release-ready instruction. The existing private-account-export path of
 the generic sender was used in the successful physical re-entry.
 
 For another owner testing the complete no-dump path on this exact model and
-firmware:
+one of the tested firmware versions:
 
 1. While the Q7 is cloud-online and charging, import the same Roborock account
    in the local server's admin dashboard using **Send code** and **Fetch data**.
    Run `q7_owner_ota.py --email OWNER_EMAIL --list` to obtain its current cloud
-   DUID and confirm firmware `03.01.74` and local-key length 16. Do not use a
+   DUID and confirm firmware `03.01.74` or `03.01.80` and local-key length 16. Do not use a
    DUID from an old dump or account export.
 2. Reserve local credentials with
    `q7_prepare_migration.py --server https://LOCAL-SERVER:555 --duid CURRENT_CLOUD_DUID --api-url https://LOCAL-SERVER:555 --mqtt-url ssl://LOCAL-SERVER:8881 --out ../private/q7-five-fields.json`.
-   The admin password is prompted for. Obtain the four-file v2 firmware profile
-   privately, then build and validate both packages with the commands above.
+   The admin password is prompted for. Obtain the matching four-file firmware
+   profile privately, then build and validate both packages with the commands above.
    Keep the manifest, profile and packages private.
 3. Make both encrypted files available at LAN HTTP URLs that the Q7 can reach
    throughout the trial. For example, from the candidate directory run
@@ -188,7 +199,10 @@ topic observation had created an anonymous duplicate record. The add-on now
 preserves the cloud-imported Q7 provenance and merges only an anonymous row
 with the same authenticated MQTT credentials. After rebuilding the live add-on,
 the normal `rr/m/i` owner-topic probe returned charging status 4 and OTA state
-`idle`. Other device identities were left intact.
+`idle`. A later `03.01.80` trial exposed a second provenance downgrade on
+admin vacuum-list reads. That path now preserves the cloud origin too, and an
+authenticated Q7 publish can recover an already-downgraded migration record.
+Other device identities were left intact.
 
 The return package remains temporarily hosted for recovery. Its byte-identical
 restore behavior was tested with the recovered updater in isolated QEMU and was

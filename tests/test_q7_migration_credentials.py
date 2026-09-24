@@ -106,6 +106,10 @@ def test_q7_migration_credentials_are_admin_only_idempotent_and_persisted(tmp_pa
         json.dumps({"devices": [{"duid": request["duid"], "model": "roborock.vacuum.sc05"}]}),
         encoding="utf-8",
     )
+    # Merely opening the admin vacuum list must not erase the cloud key's
+    # provenance and silently disable migration routing.
+    assert client.get("/admin/api/vacuums").status_code == 200
+    assert supervisor.runtime_credentials.resolve_device(duid=request["duid"])["local_key_source"] == "inventory_cloud"
     monkeypatch.setattr(supervisor.runtime_state, "key_models_by_did", lambda: {
         "incorrect-model-inferred-did": "roborock.vacuum.sc05"
     })
@@ -156,6 +160,43 @@ def test_q7_migration_credentials_reject_wrong_identity_or_existing_credentials(
     blocked = client.post(route, json={"duid": "synthetic-q7-duid"})
     assert blocked.status_code == 400
     assert "non-migration" in blocked.json()["error"]
+
+
+def test_q7_authenticated_duid_topic_replaces_stale_numeric_did(tmp_path: Path) -> None:
+    client, supervisor = _client(tmp_path, did="1234567890123")
+    _login(client)
+    response = client.post("/admin/api/q7/migration-credentials", json={"duid": "synthetic-q7-duid"})
+    assert response.status_code == 200
+    username = response.json()["mqtt_usr"]
+    store = supervisor.runtime_credentials
+
+    def publish(did: str) -> None:
+        store.record_mqtt_topic(
+            topic=f"rr/d/i/{did}/{username}", direction="c2b",
+            authenticated_username=username, device_credentials_verified=True,
+        )
+
+    publish("1234567890123")
+    assert store.verified_q7_migration_links() == {"synthetic-q7-duid": "1234567890123"}
+    publish("unrelated-topic-id")
+    assert store.verified_q7_migration_links() == {"synthetic-q7-duid": "1234567890123"}
+    # Recover records written by releases where an admin inventory read
+    # downgraded source provenance after the migration was reserved.
+    store._devices[0]["local_key_source"] = "inventory"
+    store._save_locked()
+    publish("synthetic-q7-duid")
+    assert store.verified_q7_migration_links() == {"synthetic-q7-duid": "synthetic-q7-duid"}
+    assert store.resolve_device(duid="synthetic-q7-duid")["local_key_source"] == "inventory_cloud"
+
+    bridge = MqttTopicBridge(
+        host="127.0.0.1", port=1883, logger=logging.getLogger("test.q7_duid_rebind"),
+        runtime_credentials=store, runtime_state=supervisor.runtime_state,
+        inventory_path=supervisor.paths.inventory_path,
+    )
+    observed = DeviceTopicKey(did="synthetic-q7-duid", mqtt_usr=username)
+    cloud = CloudTopicKey(rriot_u="owner", mqtt_username="owner-mqtt", duid="synthetic-q7-duid")
+    bridge._remember_device_seen(observed)
+    assert bridge._resolve_device_for_cloud(cloud) == observed
 
 
 def test_q7_migration_credentials_require_model_and_cloud_key(tmp_path: Path) -> None:

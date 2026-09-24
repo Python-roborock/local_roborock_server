@@ -480,11 +480,11 @@ class RuntimeCredentialsStore:
             if normalized_localkey and device.get("localkey") != normalized_localkey:
                 device["localkey"] = normalized_localkey
                 changed = True
-            # Inventory seeding is only a fallback provenance. A cloud-imported
-            # Q7 keeps its verified key origin and migration marker across the
-            # server's startup seed pass.
+            # Inventory lookups and seeding are fallback provenance. A
+            # cloud-imported Q7 keeps its verified key origin and migration
+            # marker when the admin dashboard reads its inventory row.
             if (
-                normalized_source == "inventory_seed"
+                normalized_source in {"inventory_seed", "inventory"}
                 and device.get("local_key_source") == "inventory_cloud"
                 and device.get("migration_mqtt_clientid")
             ):
@@ -767,7 +767,7 @@ class RuntimeCredentialsStore:
                     migrated = [
                         item for item in self._devices
                         if item.get("model") == "roborock.vacuum.sc05"
-                        and item.get("local_key_source") == "inventory_cloud"
+                        and item.get("local_key_source") in {"inventory_cloud", "inventory"}
                         and item.get("migration_mqtt_clientid")
                         and item.get("device_mqtt_usr") == username
                         and item.get("device_mqtt_pass")
@@ -798,25 +798,43 @@ class RuntimeCredentialsStore:
                         else None
                     )
                     did_taken = bool(occupants) and stale_topic_row is None
+                    # A Q7 may publish its cloud DUID as the rr/d topic ID
+                    # even when an older numeric DID was saved for the same
+                    # reserved MQTT credentials. An authenticated publish on
+                    # its exact cloud DUID is stronger evidence than that old
+                    # hint; an arbitrary different topic ID remains refused.
+                    prior_did = _clean_str(migrated[0].get("did")) if len(migrated) == 1 else ""
+                    cloud_duid_topic = (
+                        len(migrated) == 1 and did == _clean_str(migrated[0].get("duid"))
+                    )
+                    prior_did_conflicts = bool(prior_did and prior_did != did and not cloud_duid_topic)
                     if migrated and (
                         len(migrated) != 1
                         or not device_credentials_verified
                         or authenticated_username != username
                         or did_taken
-                        or (migrated[0].get("did") and migrated[0].get("did") != did)
+                        or prior_did_conflicts
                     ):
                         _LOGGER.warning(
                             "Q7 migration topic link refused candidate_count=%d connect_verified=%s "
                             "connect_username_matches=%s topic_taken=%s prior_did_conflicts=%s",
                             len(migrated), device_credentials_verified,
                             authenticated_username == username, did_taken,
-                            bool(migrated[0].get("did") and migrated[0].get("did") != did)
-                            if len(migrated) == 1 else False,
+                            prior_did_conflicts,
                         )
                         return
                     if len(migrated) == 1:
                         if stale_topic_row is not None:
                             self._devices.remove(stale_topic_row)
+                        # Older dashboard reads could downgrade the saved
+                        # provenance to plain "inventory". The migration
+                        # marker plus an authenticated publish on the
+                        # reserved credentials recovers that exact record.
+                        migrated[0]["local_key_source"] = "inventory_cloud"
+                        if prior_did and prior_did != did:
+                            _LOGGER.info(
+                                "Q7 migration topic ID rebound to its cloud DUID from authenticated publish"
+                            )
                         migrated[0]["did"] = did
                         migrated[0]["migration_did_verified"] = "1"
                         migrated[0]["last_mqtt_seen_at"] = now

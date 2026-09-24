@@ -1,9 +1,12 @@
 # Q7 sc05 03.01.80 no-dump compatibility check
 
 The captured official `03.01.80` OTA can be decrypted with the same
-firmware-wide OTA AES key used by the physically tested `03.01.74` script-only
-packages. This is an offline compatibility finding, not a physical migration
-test on `03.01.80`.
+firmware-wide OTA AES key used by the `03.01.74` script-only packages. On
+2026-09-24, one physical Q7 completed the official update to `03.01.80`, a
+return to vendor cloud, and a no-dump migration back to the local server using
+the version-specific profile. It announced `03.01.80` after each reboot and
+answered authenticated local owner RPC after re-entry. This is a result on
+one owner's device, not an independent second-device validation.
 
 The decrypted package is SStarOta v0.3 with five payload records. Each record
 has a 276-byte header whose first word is its data length. Parsing all five
@@ -31,9 +34,10 @@ captured `03.01.80` OTA needs no hardware key for offline filesystem analysis.
 The normal `rriot_client` binary is byte-identical across the two versions.
 The new `systemApp` differs, but contains the same OTA AES key, and the
 bounded `signed:false` verification-branch test passed on both binaries.
-This supports a script-only package for an already-onboarded `03.01.80` Q7.
-It does not establish that a physical `03.01.80` unit accepts the package or
-successfully returns from recovery.
+The physical Q7 then accepted both the 752-byte restore package and the
+2,336-byte migration package with `signed:false`, reported OTA installation,
+rebooted, and resumed owner communications. Neither custom package contained
+a kernel or rootfs payload.
 
 The `03.01.74` portable profile must **not** be sent to `03.01.80`: its
 return script pins the old normal-rootfs size. The vendor `03.01.80` end
@@ -43,11 +47,31 @@ the authenticated normal boot command dynamically. An experimental four-file
 key, and the physically tested v2 IoT editor. It is kept outside Git because
 the OTA key is sensitive. The builder, stage validator, and owner senders now
 carry an exact target-firmware version and refuse a mismatched cloud inventory
-version. The offline builder produced a 2,336-byte migration package and a
-752-byte restore package; both passed local hash/size validation. No package
-was sent to a `03.01.80` Q7.
+version. The offline builder produced a 2,336-byte migration package (SHA-256
+`2ed35d7e70c245062e35c2606603c5a9bc4ed274e8e87fd888aad5fce1abc76f`)
+and a 752-byte restore package (SHA-256
+`08ed018d3c3578aebb49529bbb79d431967979e4845dced966bec63def5d12bf`).
+Both were verified against their hosted LAN bytes before sending.
 
-Before this version can be presented as a tested user procedure, a charging,
-cloud-online `03.01.80` Q7 should complete a return-only physical OTA, then
-the migration/restore round trip with current account data. The current
-physical test unit remains on `03.01.74` and on the custom local server.
+The official vendor update itself was delivered to the same Q7 through the
+local owner MQTT route with `signed:true`; its embedded vendor signature
+verified offline. The Q7 installed it and reconnected to the local server at
+`03.01.80`. The version-specific restore package then returned the Q7 to its
+current Roborock account, which listed it online at `03.01.80`. The generic
+owner-cloud sender delivered the version-specific migration package; after
+reboot, the Q7 connected to the local server, announced `03.01.80`, and
+answered `prop.get` and `ota.progress.get` with charging status 4 and OTA
+`idle`. These observations establish the complete `03.01.80` round trip on
+the same physical unit. A fresh account login and a second owner/device are
+still untested.
+
+The live add-on also exposed a routing defect during this test: a read of the
+admin vacuum list downgraded the saved Q7 key origin from `inventory_cloud`
+to `inventory`, causing the bridge to ignore the reserved migration identity.
+The fix preserves that origin during inventory reads and restores it from an
+authenticated publish using the reserved credentials. A regression test
+covers both the admin read and an already-affected record. The Q7's observed
+device topic used its current cloud DUID, not the old numeric factory DID. On
+the rebuilt live add-on, refreshing the admin vacuum list still showed Q7
+MQTT connected, and a subsequent local owner query returned charging status
+4 and OTA `idle`.
