@@ -98,6 +98,29 @@ tested after an OTA-edited `iot.json`. Until then, stage any first edit so the
 vendor MQTT address and credentials remain unchanged, verify another owner
 query and OTA delivery, then separately consider the MQTT cutover.
 
+An offline two-package first stage is now available in
+`scripts/q7_api_only_ota_builder.py`. It uses the exact vendor recovery return
+script that worked in the 528-byte hardware probe, but its begin script calls
+`scripts/q7_api_only_edit.sh` to edit **only** `api_url` and retain a byte-exact
+rollback copy. The companion restore package copies that saved file back.
+The builder requires the pinned captured 03.01.80 package and firmware-wide
+OTA key; neither depends on the next owner's device dump. For the owner's
+current target origin it built encrypted packages of 1,728 and 1,696 bytes.
+No package was hosted or sent to the Q7.
+
+The two encrypted packages were decrypted and passed to the recovered Q7
+`otaunpack` in an isolated QEMU recovery chroot, with boot-ENV commands and
+reboot stubbed out. On synthetic 12-field `iot.json`, the set package changed
+only the API URL, kept all MQTT values and other lines byte-identical, and
+saved the original file. The restore package returned it byte-for-byte.
+Both runs executed the exact vendor end script's normal-boot ENV sequence.
+An existing rollback copy, missing API field, or minified JSON caused the edit
+to leave the source unchanged. `otaunpack` can still report success after a
+begin-script failure, so a real test must verify the resulting behavior rather
+than trust the install status alone. This first stage remains **hardware
+untested** and does not prove the Q7 will stay connected to vendor MQTT after
+the edit.
+
 Earlier transport evidence:
 
 1. A single owner-authenticated
