@@ -25,6 +25,24 @@ firmware. Its script preserves the device identity, account, local
 key, Wi-Fi and certificate files while editing five saved IoT fields: API URL,
 MQTT URL, MQTT client ID, username and password. The firmware-wide profile
 contains a sensitive OTA key and is not distributed with this repository.
+The repository now has `scripts/q7_migration_ota_builder.py`, which takes that
+portable profile and a new owner's five-field manifest without accessing their
+device dump. With the inspected profile and the original test manifest, its
+encrypted output was byte-identical to the 2,688-byte package accepted by the
+physical Q7 (SHA-256
+`04defa005b2f06c26585240ea21e7106aa164a98121a9daa4e836cf4271a0256`).
+That comparison validates the builder, not a second device or firmware build.
+From the source checkout, after obtaining the profile privately:
+
+```text
+uv run --no-sync python scripts/q7_migration_ota_builder.py --config ../private/q7-five-fields.json --profile ../private/q7_ota_profile_sc05_030174 --out ../private/q7-candidate
+uv run --no-sync python scripts/q7_stage_ota.py --artifact-dir ../private/q7-candidate
+```
+
+The first command builds only local files; the second validates the encrypted
+file without hosting it. The package embeds the local server's reserved MQTT
+credentials. A new-owner delivery tool and a second physical Q7 test remain
+before this is a complete general-user procedure.
 
 The server also provides an admin-only `POST /admin/api/q7/ota-package` to
 stage at most two AES-aligned encrypted packages, each at most 4 MiB, after
