@@ -25,6 +25,11 @@ firmware. Its script preserves the device identity, account, local
 key, Wi-Fi and certificate files while editing five saved IoT fields: API URL,
 MQTT URL, MQTT client ID, username and password. The firmware-wide profile
 contains a sensitive OTA key and is not distributed with this repository.
+The transferable profile consists only of `manifest.json`, `ota-key.bin`,
+`editor.sh`, and `return.sh`; it carries no Q7 DID, HMAC bootstrap secret,
+cloud DUID, local key, or owner account token. Treat its OTA key as private and
+check the manifest hashes after transfer. The inspected profile has been saved
+as a four-file archive in the owner's private workspace, outside Git.
 The repository now has `scripts/q7_migration_ota_builder.py`, which takes that
 portable profile and a new owner's five-field manifest without accessing their
 device dump. With the inspected profile and the original test manifest, its
@@ -41,8 +46,33 @@ uv run --no-sync python scripts/q7_stage_ota.py --artifact-dir ../private/q7-can
 
 The first command builds only local files; the second validates the encrypted
 file without hosting it. The package embeds the local server's reserved MQTT
-credentials. A new-owner delivery tool and a second physical Q7 test remain
-before this is a complete general-user procedure.
+credentials. `scripts/q7_owner_ota.py` now provides a generic owner-side sender
+without hard-coded account or device identity. It supports a Roborock email-code
+login or a private JSON account export with `username`, `base_url`, and
+`user_data` fields. `--list` reads current cloud Q7 DUIDs and firmware versions
+without contacting a vacuum. A new owner can use that DUID in
+`q7_prepare_migration.py`; the local server still needs a current cloud import
+of the same account to know the actual local key.
+
+After hosting the exact encrypted file at an HTTP(S) URL reachable by the Q7,
+the owner can run the sender without `--live` to verify the hosted bytes, current
+cloud identity, charging state, and idle OTA state. `--live` repeats those gates
+and sends one `ota.upgrade.set` request. For example:
+
+```text
+uv run --no-sync python scripts/q7_owner_ota.py --email owner@example.com --list
+uv run --no-sync python scripts/q7_owner_ota.py --email owner@example.com --duid CURRENT_CLOUD_DUID --artifact-dir ../private/q7-candidate --url http://LAN-HOST/q7-migration-v03.bin.gz.aes
+uv run --no-sync python scripts/q7_owner_ota.py --email owner@example.com --duid CURRENT_CLOUD_DUID --artifact-dir ../private/q7-candidate --url http://LAN-HOST/q7-migration-v03.bin.gz.aes --live
+```
+
+Each `--email` invocation requests a fresh email code; an existing account
+export avoids repeated login. The sender checks that the URL serves the exact
+encrypted artifact immediately before it could send the command. The physical
+test used a LAN HTTP URL. The server's short-lived HTTPS staging endpoint is
+also available, but the stock Q7's trust of an arbitrary local HTTPS
+certificate was not established by the physical test. A second physical Q7,
+generic sender, and return path have not been tested end-to-end; this remains
+an experimental procedure rather than a release-ready instruction.
 
 The server also provides an admin-only `POST /admin/api/q7/ota-package` to
 stage at most two AES-aligned encrypted packages, each at most 4 MiB, after
