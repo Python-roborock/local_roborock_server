@@ -179,10 +179,18 @@ def test_relay_forwards_chunk_before_slow_packet_tracing_finishes(tmp_path, monk
         frame_buf.clear()
         return [data]
 
-    def slow_trace_packet(conn_id: str, direction: str, packet: bytes) -> None:
+    def slow_trace_packet(
+        conn_id: str,
+        direction: str,
+        packet: bytes,
+        authenticated_username: str = "",
+        device_credentials_verified: bool = False,
+    ) -> None:
         assert conn_id == "1"
         assert direction == "c2b"
         assert packet == b"packet-bytes"
+        assert authenticated_username == ""
+        assert device_credentials_verified is False
         trace_started.set()
         time.sleep(0.25)
         trace_finished.set()

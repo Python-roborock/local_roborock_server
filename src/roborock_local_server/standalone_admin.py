@@ -401,6 +401,36 @@ def register_standalone_admin_routes(
         supervisor._require_admin(request)
         return JSONResponse(supervisor._onboarding_devices_payload())
 
+    @app.post("/admin/api/q7/migration-credentials")
+    async def admin_q7_migration_credentials(request: Request) -> JSONResponse:
+        """Reserve local MQTT credentials without requiring a Q7 flash dump."""
+        supervisor._require_admin(request)
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
+        did = str(body.get("did") or "").strip()
+        duid = str(body.get("duid") or "").strip()
+        try:
+            credentials = supervisor.runtime_credentials.prepare_q7_migration_credentials(
+                did=did,
+                duid=duid,
+            )
+        except KeyError:
+            return JSONResponse({"error": "Q7 device was not found"}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(
+            {
+                **credentials,
+                "hardware_tested": False,
+                "warning": "Experimental Q7 migration preparation only; no OTA or device command was sent",
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.post("/admin/api/onboarding/sessions")
     async def admin_onboarding_start(request: Request) -> JSONResponse:
         supervisor._require_admin(request)

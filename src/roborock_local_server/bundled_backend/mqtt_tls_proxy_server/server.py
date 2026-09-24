@@ -68,9 +68,10 @@ class MqttTlsProxy:
         self._counter = 0
         self._lock = threading.Lock()
         self._conn_protocol_levels: dict[str, int] = {}
+        self._conn_auth: dict[str, tuple[str, bool]] = {}
         self._conn_endpoints: dict[str, tuple[socket.socket, socket.socket]] = {}
         self._pending_onboarding_auth: dict[str, dict[str, str]] = {}
-        self._trace_queue: queue.Queue[tuple[str, str, bytes] | None] = queue.Queue()
+        self._trace_queue: queue.Queue[tuple[str, str, bytes, str, bool] | None] = queue.Queue()
         self._trace_thread: threading.Thread | None = None
         self._protocol_auth = (
             ProtocolAuthStore(
@@ -513,7 +514,14 @@ class MqttTlsProxy:
             parsed["error"] = rpc_obj.get("error")
         return parsed
 
-    def _trace_packet(self, conn_id: str, direction: str, packet: bytes) -> None:
+    def _trace_packet(
+        self,
+        conn_id: str,
+        direction: str,
+        packet: bytes,
+        authenticated_username: str = "",
+        device_credentials_verified: bool = False,
+    ) -> None:
         packet_type = packet[0] >> 4
         if packet_type in (12, 13):  # PINGREQ, PINGRESP
             return
@@ -548,7 +556,12 @@ class MqttTlsProxy:
                 payload_preview=payload_preview(payload),
             )
         if self.runtime_credentials is not None:
-            self.runtime_credentials.record_mqtt_topic(topic=topic)
+            self.runtime_credentials.record_mqtt_topic(
+                topic=topic,
+                direction=direction,
+                authenticated_username=authenticated_username,
+                device_credentials_verified=device_credentials_verified,
+            )
 
         messages, variant, decode_error, decode_key_source = self._decode_mqtt_payload(topic, payload)
         entry: dict[str, Any] = {
@@ -677,9 +690,15 @@ class MqttTlsProxy:
             item = self._trace_queue.get()
             if item is None:
                 return
-            conn_id, direction, packet = item
+            conn_id, direction, packet, authenticated_username, device_credentials_verified = item
             try:
-                self._trace_packet(conn_id, direction, packet)
+                self._trace_packet(
+                    conn_id,
+                    direction,
+                    packet,
+                    authenticated_username,
+                    device_credentials_verified,
+                )
             except Exception:
                 self.logger.exception(
                     "[conn %s %s] tracing failed",
@@ -700,7 +719,11 @@ class MqttTlsProxy:
 
     def _queue_trace_packet(self, conn_id: str, direction: str, packet: bytes) -> None:
         self._ensure_trace_worker()
-        self._trace_queue.put((conn_id, direction, packet))
+        with self._lock:
+            authenticated_username, device_credentials_verified = self._conn_auth.get(conn_id, ("", False))
+        self._trace_queue.put((
+            conn_id, direction, packet, authenticated_username, device_credentials_verified,
+        ))
 
     def _relay(self, src: socket.socket, dst: socket.socket, conn_id: str, direction: str, frame_buf: bytearray) -> None:
         try:
@@ -770,6 +793,12 @@ class MqttTlsProxy:
                         self._queue_trace_packet(conn_id, "b2c", reject_packet)
                 return
 
+            with self._lock:
+                self._conn_auth[conn_id] = (
+                    str((connect_info or {}).get("username") or "").strip(),
+                    auth_reason == "device_mqtt_user",
+                )
+
             backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             backend.connect((self.backend_host, self.backend_port))
             self._register_conn_endpoints(conn_id, tls_conn, backend)
@@ -807,6 +836,7 @@ class MqttTlsProxy:
                 self.runtime_state.record_mqtt_disconnect(conn_id=conn_id)
             with self._lock:
                 self._conn_protocol_levels.pop(conn_id, None)
+                self._conn_auth.pop(conn_id, None)
             self.logger.info("[conn %s] closed", conn_id)
 
     def start(self) -> threading.Thread:

@@ -1713,6 +1713,7 @@ class ReleaseSupervisor:
                 port=self.config.broker.port,
                 logger=self.loggers["mqtt"],
                 runtime_state=self.runtime_state,
+                runtime_credentials=self.runtime_credentials,
                 inventory_path=self.paths.inventory_path,
             )
             await self._topic_bridge.start()

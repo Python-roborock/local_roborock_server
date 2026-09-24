@@ -4,6 +4,15 @@ from pathlib import Path
 from roborock_local_server.bundled_backend.shared.runtime_credentials import RuntimeCredentialsStore
 
 
+def test_device_topic_tracking_keeps_existing_inbound_behavior(tmp_path: Path) -> None:
+    store = RuntimeCredentialsStore(tmp_path / "runtime_credentials.json")
+    store.record_mqtt_topic(topic="rr/d/i/123456789/device-user", direction="c2b")
+    device = store.resolve_device(did="123456789")
+    assert device is not None and device["device_mqtt_usr"] == "device-user"
+    store.record_mqtt_topic(topic="rr/d/o/other-id/other-user", direction="b2c")
+    assert len(store.devices()) == 1
+
+
 def test_ensure_device_merges_split_did_and_duid_records(tmp_path: Path) -> None:
     credentials_path = tmp_path / "runtime_credentials.json"
     credentials_path.write_text(
