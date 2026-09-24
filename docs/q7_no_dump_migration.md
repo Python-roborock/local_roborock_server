@@ -2,8 +2,8 @@
 
 This is an experimental path for an owner of a stock `roborock.vacuum.sc05`
 running `03.01.74`. It is **not yet a device test procedure**. The local-server
-pieces below have synthetic tests. A failed-download transport probe was sent
-to the owner's Q7; no OTA package was delivered or installed.
+pieces below have synthetic tests. The owner's Q7 fetched a deliberately
+invalid 16-byte test object; no valid OTA package was delivered or installed.
 
 The intended input is a normal Roborock account import containing the cloud
 DUID and the device's 16-byte local key. The native numeric DID and the
@@ -60,9 +60,14 @@ Hardware gates still open:
    failed download invokes neither package verification, install nor reboot;
    a synthetic success reaches those callbacks. The live failure event agrees
    with the worker's failed-download branch.
-2. Verify that the robot can fetch an artifact over the chosen HTTPS origin.
-   The staging route is tested locally, but the running add-on does not yet
-   include it.
+2. Verify the production staging route and HTTPS origin. On 2026-09-23 the
+   owner's Q7 fetched a 16-byte invalid object from a reachable Home Assistant
+   HTTP URL. The device published `DOWNLOADING`, then `DOWNLOADED`, then
+   `FAILED/UNKNOWN`, and returned to charging/idle without a reboot. This
+   proves basic owner-command delivery and LAN HTTP download. It does not
+   prove that the Q7 can fetch the encrypted artifact from the chosen HTTPS
+   origin. The staging route is tested locally, but the running add-on does not
+   yet include it.
 3. Establish a physically tested return from recovery. The stock updater
    changes persistent boot variables and reboots to recovery. A captured
    vendor 03.01.80 package contains an end script that restores normal
@@ -87,6 +92,36 @@ The controlled probe source is `scripts/q7_ota_transport_probe.py`. It is a
 dry run unless `--live` is passed and checks for charging plus idle OTA state
 before sending one deliberately unfetchable request. It is research evidence,
 not a step in the user migration flow.
+
+## Owner MQTT through the vendor broker
+
+The vendor web upgrade trigger chooses a vendor package, but the owner's MQTT
+connection offers a separate route. On 2026-09-23, the current owner account's
+`RRiot` MQTT credentials connected to the vendor broker. An owner publish to
+`rr/m/i/{owner}/{mqtt_username}/{duid}` targeting the cloud-registered Q7
+stand-in was delivered to that stand-in's
+`rr/d/o/{cloud_duid}/{device_mqtt_username}` subscription. The stand-in was
+registered for this owner using the inspected unit's identity; the physical
+Q7 remained on the local server throughout the test.
+
+Two harmless broker tests were captured and decoded with the stand-in's
+current 16-byte local key. The first 199-byte downlink contained `prop.get`
+for `status`. The second 343-byte downlink contained `ota.upgrade.set` with
+the exact owner-chosen loopback URL, impossible MD5, `packageSize: "16"`,
+`signed: false`, and `packageType: "robot"`. The broker thus forwarded an
+owner-authored OTA command and did not replace it with a vendor-selected
+package. The stand-in had no robot updater and did not download anything.
+
+This establishes a **potential no-dump entry path** for a stock Q7 normally
+paired to the owner account: import the current cloud DUID/local key, use the
+owner MQTT credentials to deliver a controlled custom OTA, and let that OTA
+change only persisted server URLs and MQTT credentials. The broker tests do
+not show whether a physical cloud-paired Q7 will accept this method, download
+the package, skip signature verification, execute it in recovery, or reconnect
+to the custom region. Those are still hardware gates. The stand-in's device
+bootstrap did use the inspected unit's secret to obtain a reference identity;
+ordinary cloud pairing of a physical Q7 does not require the owner to know
+that secret.
 
 ## Capturing a vendor OTA for reference
 
@@ -148,6 +183,10 @@ decryption, `signed:false` handling, recovery execution, and return to normal
 boot without modifying partitions. The existing no-dump migration design for
 future owners still starts from an ordinary account import; this vendor
 capture used the inspected unit's secret solely to obtain a reference OTA.
+`scripts/q7_return_probe_builder.py` constructs a zero-block encrypted
+container using the exact vendor begin/end scripts and the pinned
+firmware-wide OTA key. Its output has no user credentials or rootfs payload.
+It is an offline candidate; no physical Q7 has executed it yet.
 
 Static inspection of the 03.01.80 rootfs found its `/oem/bin/rriot_client`
 byte-for-byte identical to the 03.01.74 binary carved from the inspected
