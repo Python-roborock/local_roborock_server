@@ -102,3 +102,10 @@ synthetic `iot.json` byte-for-byte, re-entry worked with a matching backup,
 and a mismatched backup left the source unchanged. Boot environment writes
 and reboot were stubbed. This checks package portability offline; it is not
 a second physical-vacuum test.
+
+The trial kit was also unpacked in a fresh clone of the research branch with
+`uv sync --extra dev --locked`. The public builder and stage validator built
+both `03.01.80` packages from synthetic, different-owner MQTT credentials
+without accessing a device, account, or dump. This checked the handoff kit
+and clean-checkout instructions, not the remaining second-device hardware
+question.
