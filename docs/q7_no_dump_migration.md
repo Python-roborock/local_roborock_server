@@ -55,22 +55,44 @@ this package. This proves the physical Q7 accepts this script-only unsigned
 OTA and resumes normal owner RPC while paired to the local server. Recovery
 execution and boot-variable restoration follow from the inspected firmware
 flow and the observed reboot/reconnect; no direct boot-ENV read was available.
-This does not show a custom-region edit or vendor-cloud delivery to the real
-Q7.
+This does not show a custom-region edit. Vendor-cloud delivery to the real Q7
+was subsequently tested as described below.
 
 Hardware gates still open:
 
-1. Deliver the same owner-authored OTA method to a **real Q7 paired to the
-   vendor cloud**. The vendor broker delivered it to a cloud stand-in, and the
-   physical Q7 accepted it on the local broker, but the combination has not
-   been tested. Normal stock pairing should provide the current cloud DUID
-   and local key without a dump.
-2. Deploy and verify the production HTTPS staging origin. LAN HTTP delivery
+1. Deploy and verify the production HTTPS staging origin. LAN HTTP delivery
    and full-package acceptance succeeded, but the running add-on does not yet
    include the expiring staging route.
-3. Execute the five-field IoT edit on hardware and verify that it survives
+2. Execute the five-field IoT edit on hardware and verify that it survives
    reboot and that B01 region/NC does not overwrite the values. Then confirm
    the custom server accepts the new MQTT credentials and routes owner RPCs.
+3. Establish a tested recovery path before the MQTT cutover. The stock client
+   appears to delete saved `iot.json` on `local.wifi_reset_done`, but this has
+   not been tested after a custom URL edit. A backup file alone does not restore
+   cloud command delivery if the new MQTT connection fails.
+
+After ordinary re-pairing to the owner's Roborock account, the physical Q7
+appeared online with a current 16-byte local key. Through the vendor owner
+MQTT route, it accepted the **same 528-byte return-only package** via
+`ota.upgrade.set` even though the available vendor update was not installed
+and the Q7 still reported firmware `03.01.74`. The device reported installation,
+rebooted, and later answered owner queries again with work status 4 (charging)
+and OTA `idle`. A repeat query confirmed it remained online. This proves that
+the owner-authored OTA path can deliver a package to a stock, cloud-paired Q7
+without a per-device firmware dump or a vendor version update. It does not
+prove that another OTA can be delivered after changing the saved MQTT URL.
+The temporary hosted copy was removed after confirmation.
+
+The rollback concern is about transport, not firmware version. In the
+recovered 03.01.74 `rriot_client`, the `local.wifi_reset_done` handler calls
+the saved-IoT-profile deletion routine (`0x1f9b8` calls `0x212e8`), which
+constructs the configured `iot.json` path and calls `unlink` at `0x21354`.
+That supports physical Wi-Fi reset and re-pairing as a fallback if a custom
+MQTT address becomes unreachable. This owner has re-paired the unmodified Q7
+from the local server back to Roborock cloud, but the fallback has not been
+tested after an OTA-edited `iot.json`. Until then, stage any first edit so the
+vendor MQTT address and credentials remain unchanged, verify another owner
+query and OTA delivery, then separately consider the MQTT cutover.
 
 Earlier transport evidence:
 
@@ -136,16 +158,14 @@ the exact owner-chosen loopback URL, impossible MD5, `packageSize: "16"`,
 owner-authored OTA command and did not replace it with a vendor-selected
 package. The stand-in had no robot updater and did not download anything.
 
-This establishes a **potential no-dump entry path** for a stock Q7 normally
-paired to the owner account: import the current cloud DUID/local key, use the
-owner MQTT credentials to deliver a controlled custom OTA, and let that OTA
-change only persisted server URLs and MQTT credentials. The broker tests do
-not show whether a physical cloud-paired Q7 will accept this method, download
-the package, skip signature verification, execute it in recovery, or reconnect
-to the custom region. Those are still hardware gates. The stand-in's device
-bootstrap did use the inspected unit's secret to obtain a reference identity;
-ordinary cloud pairing of a physical Q7 does not require the owner to know
-that secret.
+This establishes a **no-dump OTA entry path** for a stock Q7 normally paired
+to the owner account: import the current cloud DUID/local key and use owner
+MQTT credentials to deliver an owner-chosen package. The later physical test
+confirmed package download, unsigned installation, reboot and return to vendor
+owner RPC. The actual saved-config edit and custom-region reconnect remain
+untested. The stand-in's device bootstrap used the inspected unit's secret to
+obtain a reference identity; ordinary cloud pairing of the physical Q7 did
+not require the owner to know that secret.
 
 ## Capturing a vendor OTA for reference
 
