@@ -26,7 +26,12 @@ reach this one device through the local broker's DID route, so command delivery
 alone is not proof that a DUID or local key is current.
 An admin endpoint reserves an idempotent MQTT client ID, username and password
 for that DUID. `scripts/q7_prepare_migration.py` puts those values and the
-chosen HTTPS/MQTT origins in a private five-field manifest. Neither action
+chosen HTTPS/MQTT origins in a private manifest containing the five IoT fields
+and SHA-256 fingerprints of the cloud DUID and server-imported local key. The
+builder keeps the fingerprints in package metadata, outside the OTA script.
+The owner sender rejects a package if its fingerprints do not match the
+current Roborock account, preventing a stale server import from being used
+after re-pairing. Neither preparation action
 contacts the vacuum.
 
 An offline firmware-specific builder encrypted a small migration package
@@ -41,7 +46,7 @@ cloud DUID, local key, or owner account token. Treat its OTA key as private and
 check the manifest hashes after transfer. The inspected profile has been saved
 as a four-file archive in the owner's private workspace, outside Git.
 The repository now has `scripts/q7_migration_ota_builder.py`, which takes that
-portable profile and a new owner's five-field manifest without accessing their
+portable profile and a new owner's five IoT fields without accessing their
 device dump. It builds both migration and companion restore packages. With the
 inspected profile and the original test manifest, its encrypted migration
 output was byte-identical to the 2,688-byte package accepted by the
@@ -76,7 +81,7 @@ uv run --no-sync python scripts/q7_stage_ota.py --artifact-dir ../private/q7-can
 
 For a cloud-online `03.01.80` Q7, substitute
 `../private/q7_ota_profile_sc05_030180_experimental` for the `--profile`
-directory; keep the five-field manifest and both output packages private.
+directory; keep the private manifest and both output packages private.
 The owner sender checks that the cloud inventory firmware equals the profile's
 target before it can send anything. The `03.01.80` physical round trip used
 this version-specific profile, including its companion restore.

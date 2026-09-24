@@ -1,6 +1,7 @@
 """Admin-only, dump-free Q7 MQTT credential preparation."""
 
 import json
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -77,6 +78,7 @@ def test_q7_migration_credentials_are_admin_only_idempotent_and_persisted(tmp_pa
     assert body["did"] == "" and body["duid"] == request["duid"]
     assert body["hardware_tested"] is False
     assert "localkey" not in body
+    assert body["local_key_sha256"] == hashlib.sha256(b"0123456789abcdef").hexdigest()
     for key, size in (("mqtt_clientid", 16), ("mqtt_usr", 16), ("mqtt_passwd", 32)):
         assert re.fullmatch(rf"[0-9a-f]{{{size}}}", body[key])
 

@@ -1,8 +1,9 @@
 """Build a Q7 custom-region OTA from a pinned firmware-wide profile.
 
 The profile is firmware-wide, not a dump of the next owner's vacuum. Its OTA
-key and the output package are private. This command only builds files; it
-does not host an update or contact a device.
+key and the output package are private. Cloud-identity fingerprints remain in
+metadata and are not embedded in the OTA script. This command only builds
+files; it does not host an update or contact a device.
 """
 
 from __future__ import annotations
@@ -129,7 +130,16 @@ def _profile(path: Path) -> tuple[bytes, bytes, bytes, str, str]:
 
 
 def build(config: object, profile: Path, out: Path) -> dict[str, object]:
-    values = _fields(config)
+    if not isinstance(config, dict):
+        raise ValueError("Migration config must be an object")
+    preflight = config.get("_preflight")
+    if preflight is not None:
+        if (not isinstance(preflight, dict)
+                or set(preflight) != {"duid_sha256", "local_key_sha256"}
+                or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                       for value in preflight.values())):
+            raise ValueError("Migration preflight fingerprints are malformed")
+    values = _fields({name: value for name, value in config.items() if name != "_preflight"})
     config_sha256 = _sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode("ascii"))
     if out.exists():
         raise FileExistsError(f"Refusing to overwrite {out}")
@@ -170,6 +180,7 @@ def build(config: object, profile: Path, out: Path) -> dict[str, object]:
         "secrets_in_package": True,
         "config_field_names": list(FIELDS),
         "config_sha256": config_sha256,
+        "preflight": preflight,
         "restore_package": {
             "package": RESTORE_NAME,
             "encrypted_size_bytes": len(restore_encrypted),
@@ -186,7 +197,7 @@ def build(config: object, profile: Path, out: Path) -> dict[str, object]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, required=True, help="private five-field JSON manifest")
+    parser.add_argument("--config", type=Path, required=True, help="private JSON manifest with five IoT fields and cloud-key preflight fingerprints")
     parser.add_argument("--profile", type=Path, required=True, help="private firmware-wide OTA profile")
     parser.add_argument("--out", type=Path, required=True, help="new private artifact directory")
     args = parser.parse_args()

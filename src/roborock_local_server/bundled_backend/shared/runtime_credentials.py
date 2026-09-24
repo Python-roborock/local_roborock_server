@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -530,6 +531,7 @@ class RuntimeCredentialsStore:
                 localkey_bytes = b""
             if len(localkey_bytes) != 16:
                 raise ValueError("A 16-byte cloud-imported local key is required")
+            local_key_sha256 = hashlib.sha256(localkey_bytes).hexdigest()
             stored_did = _clean_str(device.get("did"))
             if normalized_did and stored_did and stored_did != normalized_did:
                 raise ValueError("DID conflicts with the cloud device")
@@ -556,6 +558,7 @@ class RuntimeCredentialsStore:
                 return {
                     "did": stored_did or normalized_did,
                     "duid": normalized_duid,
+                    "local_key_sha256": local_key_sha256,
                     "mqtt_clientid": clientid,
                     "mqtt_usr": username,
                     "mqtt_passwd": password,
@@ -576,6 +579,7 @@ class RuntimeCredentialsStore:
             return {
                 "did": stored_did or normalized_did,
                 "duid": normalized_duid,
+                "local_key_sha256": local_key_sha256,
                 "mqtt_clientid": clientid,
                 "mqtt_usr": username,
                 "mqtt_passwd": password,

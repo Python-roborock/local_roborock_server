@@ -99,6 +99,7 @@ def inspect(artifact_dir: Path, *, package_kind: str = "") -> tuple[bytes, dict[
         "encrypted_md5": digest_md5,
         "hardware_tested": False,
         "target_firmware": metadata.get("target_firmware", "03.01.74"),
+        "preflight": metadata.get("preflight"),
     }
 
 

@@ -1,6 +1,7 @@
 """The Q7 migration manifest preparer never contacts a robot."""
 
 import json
+import hashlib
 from pathlib import Path
 
 import httpx
@@ -39,7 +40,7 @@ def test_bad_target_urls_are_rejected_before_server_contact(tmp_path: Path, monk
         _prepare(tmp_path, server="https://local.example:bad")
 
 
-def test_preparer_writes_private_five_field_manifest_without_printing_credentials(
+def test_preparer_writes_private_manifest_with_cloud_key_pin_without_printing_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     requests: list[tuple[str, object]] = []
@@ -56,6 +57,7 @@ def test_preparer_writes_private_five_field_manifest_without_printing_credential
             "mqtt_clientid": "1" * 16,
             "mqtt_usr": "2" * 16,
             "mqtt_passwd": "3" * 32,
+            "local_key_sha256": hashlib.sha256(b"0123456789abcdef").hexdigest(),
         })
 
     original_client = httpx.Client
@@ -72,6 +74,10 @@ def test_preparer_writes_private_five_field_manifest_without_printing_credential
         "mqtt_clientid": "1" * 16,
         "mqtt_usr": "2" * 16,
         "mqtt_passwd": "3" * 32,
+        "_preflight": {
+            "duid_sha256": hashlib.sha256(b"synthetic-duid").hexdigest(),
+            "local_key_sha256": hashlib.sha256(b"0123456789abcdef").hexdigest(),
+        },
     }
     assert requests == [
         ("/admin/api/login", {"password": "synthetic-admin-password"}),
@@ -81,3 +87,26 @@ def test_preparer_writes_private_five_field_manifest_without_printing_credential
     with pytest.raises(FileExistsError):
         _prepare(tmp_path)
     assert len(requests) == 2
+
+
+def test_preparer_refuses_server_without_key_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/admin/api/login":
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(200, json={
+            "duid": "synthetic-duid",
+            "mqtt_clientid": "1" * 16,
+            "mqtt_usr": "2" * 16,
+            "mqtt_passwd": "3" * 32,
+        })
+
+    original_client = httpx.Client
+    monkeypatch.setattr(
+        prep.httpx, "Client",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    with pytest.raises(ValueError, match="fingerprint"):
+        _prepare(tmp_path)
+    assert not (tmp_path / "private" / "migration.json").exists()

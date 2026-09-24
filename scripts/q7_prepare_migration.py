@@ -2,7 +2,7 @@
 
 Requires the local server's new admin endpoint and an existing cloud import
 with the Q7 cloud DUID and true local key. A numeric DID is not required.
-Writes a private five-field JSON input
+Writes a private JSON input with five IoT fields and cloud-identity fingerprints
 for the offline OTA builder. This sends no command or package to the vacuum.
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from getpass import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -69,12 +70,19 @@ def prepare(*, server: str, duid: str, api_url: str,
         payload = response.json()
     if payload.get("duid") != duid.strip() or (did.strip() and payload.get("did") != did.strip()):
         raise ValueError("Server response does not match the requested Q7 identity")
+    local_key_sha256 = payload.get("local_key_sha256")
+    if not isinstance(local_key_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", local_key_sha256):
+        raise ValueError("Server did not provide a valid cloud-imported local-key fingerprint")
     fields = {
         "api_url": api_url,
         "mqtt_url": mqtt_url,
         "mqtt_clientid": str(payload["mqtt_clientid"]),
         "mqtt_usr": str(payload["mqtt_usr"]),
         "mqtt_passwd": str(payload["mqtt_passwd"]),
+        "_preflight": {
+            "duid_sha256": hashlib.sha256(duid.strip().encode("utf-8")).hexdigest(),
+            "local_key_sha256": local_key_sha256,
+        },
     }
     out.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL

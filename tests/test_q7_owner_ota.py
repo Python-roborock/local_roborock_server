@@ -49,3 +49,19 @@ def test_owner_request_rejects_wrong_hosted_bytes(
         q7_owner_ota.package_request(artifact, "http://192.0.2.1/update")
     with pytest.raises(ValueError, match="loopback"):
         q7_owner_ota.package_request(artifact, "http://127.0.0.1/update")
+
+
+def test_cloud_key_preflight_rejects_stale_server_import() -> None:
+    duid = "current-cloud-duid"
+    key = "0123456789abcdef"
+    pinned = {
+        "duid_sha256": hashlib.sha256(duid.encode()).hexdigest(),
+        "local_key_sha256": hashlib.sha256(key.encode()).hexdigest(),
+    }
+    assert q7_owner_ota.cloud_key_matches_server_import(pinned, duid=duid, local_key=key)
+    assert not q7_owner_ota.cloud_key_matches_server_import(pinned, duid=duid, local_key="fedcba9876543210")
+    assert not q7_owner_ota.cloud_key_matches_server_import(pinned, duid="different-duid", local_key=key)
+    assert not q7_owner_ota.cloud_key_matches_server_import(None, duid=duid, local_key=key)
+    assert not q7_owner_ota.cloud_key_matches_server_import(
+        {**pinned, "local_key_sha256": "é" * 64}, duid=duid, local_key=key
+    )

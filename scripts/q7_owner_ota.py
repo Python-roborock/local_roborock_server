@@ -10,8 +10,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import hmac
 import json
 from pathlib import Path
+import re
 import sys
 from urllib.parse import urlsplit
 from urllib.request import urlopen
@@ -49,6 +51,23 @@ def package_request(artifact_dir: Path, url: str, *, package_kind: str = "") -> 
         "signed": False,
         "packageType": "robot",
     }
+
+
+def cloud_key_matches_server_import(preflight: object, *, duid: str, local_key: str) -> bool:
+    """Compare the current cloud identity with the server import pinned at build time."""
+    if not isinstance(preflight, dict) or set(preflight) != {"duid_sha256", "local_key_sha256"}:
+        return False
+    try:
+        local_key_bytes = local_key.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    actual = {
+        "duid_sha256": hashlib.sha256(duid.encode("utf-8")).hexdigest(),
+        "local_key_sha256": hashlib.sha256(local_key_bytes).hexdigest(),
+    }
+    return all(isinstance(preflight[name], str)
+               and re.fullmatch(r"[0-9a-f]{64}", preflight[name])
+               and hmac.compare_digest(actual[name], preflight[name]) for name in actual)
 
 
 async def _account(args: argparse.Namespace, web_session: aiohttp.ClientSession) -> tuple[RoborockApiClient, UserData]:
@@ -103,6 +122,11 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     }
     if device.online is not True or device.fv != target_firmware or len(device.local_key or "") != 16:
         report["aborted"] = f"Q7 must be cloud-online on {target_firmware} with a current 16-byte local key"
+        return report
+    if not cloud_key_matches_server_import(
+        package.get("preflight"), duid=device.duid, local_key=device.local_key
+    ):
+        report["aborted"] = "Current cloud identity differs from the local server import; refresh the server import and rebuild both packages"
         return report
     mqtt_params = create_mqtt_params(owner.rriot)
     session = await create_mqtt_session(mqtt_params)

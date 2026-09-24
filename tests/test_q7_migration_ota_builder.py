@@ -92,6 +92,30 @@ def test_portable_package_is_stagable_and_contains_only_scripts(
     assert restore_container[28 + restore_begin_size : 28 + restore_begin_size + restore_end_size] == end
 
 
+def test_portable_package_pins_cloud_key_without_embedding_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = tmp_path / "profile"
+    key = _fixture_profile(profile, monkeypatch)
+    fingerprint = {
+        "duid_sha256": "1" * 64,
+        "local_key_sha256": "2" * 64,
+    }
+    out = tmp_path / "candidate"
+    metadata = builder.build({**FIELDS, "_preflight": fingerprint}, profile, out)
+    assert metadata["preflight"] == fingerprint
+    assert inspect(out)[1]["preflight"] == fingerprint
+    payload = inspect(out)[0]
+    legacy = tmp_path / "legacy"
+    builder.build(FIELDS, profile, legacy)
+    assert payload == inspect(legacy)[0]
+    padded = Cipher(algorithms.AES(key), modes.ECB()).decryptor().update(payload)
+    container = gzip.decompress(padded[:-padded[-1]])
+    assert b"duid_sha256" not in container and b"local_key_sha256" not in container
+    with pytest.raises(ValueError, match="preflight"):
+        builder.build({**FIELDS, "_preflight": {"local_key_sha256": "2" * 64}}, profile, tmp_path / "bad")
+
+
 def test_refuses_unsafe_values_and_tampered_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

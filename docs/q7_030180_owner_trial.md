@@ -50,7 +50,9 @@ Each `--email` invocation requests a new Roborock login code; a private
    ```
 
 2. Reserve this Q7's local MQTT credentials and build both packages. This
-   stage contacts only the local server and writes private files:
+   stage contacts only the local server and writes private files. The
+   preparer records hashes of the imported cloud DUID and local key;
+   the builder keeps those hashes in package metadata, outside the OTA bytes:
 
    ```text
    uv run --no-sync python scripts/q7_prepare_migration.py --server https://api-your-domain.example:555 --duid CURRENT_CLOUD_DUID --api-url https://api-your-domain.example:555 --mqtt-url ssl://api-your-domain.example:8881 --out ../private/q7-five-fields.json
@@ -70,7 +72,8 @@ Each `--email` invocation requests a new Roborock login code; a private
 
 4. While the Q7 is charging and still cloud-online, run the owner sender
    without `--live` first. It checks the current account identity, firmware,
-   charging state, idle OTA state, and exact hosted bytes. If those pass,
+   charging state, idle OTA state, exact hosted bytes, and that the current
+   cloud local key matches the server import used to build the package. If those pass,
    repeat with `--live` to send one migration OTA:
 
    ```text
@@ -98,3 +101,6 @@ successful migration. Verify the post-reboot MQTT connection and owner RPC.
 The rollback copy is created from the Q7's current IoT profile, so old
 identity values from the original research dump are not used. A failed
 first migration should be investigated before sending another package.
+If the Q7 was re-paired after the server imported it, refresh the same account
+in the server, prepare a new manifest, and rebuild both packages. Older
+artifacts lacking the key fingerprint now fail the owner preflight.
