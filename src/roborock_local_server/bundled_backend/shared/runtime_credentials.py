@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 import re
 import secrets
@@ -13,6 +14,9 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from .data_helpers import utcnow_iso
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _clean_str(value: Any) -> str:
@@ -476,6 +480,15 @@ class RuntimeCredentialsStore:
             if normalized_localkey and device.get("localkey") != normalized_localkey:
                 device["localkey"] = normalized_localkey
                 changed = True
+            # Inventory seeding is only a fallback provenance. A cloud-imported
+            # Q7 keeps its verified key origin and migration marker across the
+            # server's startup seed pass.
+            if (
+                normalized_source == "inventory_seed"
+                and device.get("local_key_source") == "inventory_cloud"
+                and device.get("migration_mqtt_clientid")
+            ):
+                normalized_source = ""
             if normalized_source and device.get("local_key_source") != normalized_source:
                 device["local_key_source"] = normalized_source
                 changed = True
@@ -759,11 +772,32 @@ class RuntimeCredentialsStore:
                         and item.get("device_mqtt_usr") == username
                         and item.get("device_mqtt_pass")
                     ]
-                    did_taken = any(
-                        item.get("did") == did
+                    if not migrated and device_credentials_verified and authenticated_username == username:
+                        _LOGGER.warning("Authenticated rr/d/i publish has no reserved Q7 migration record")
+                    occupants = [
+                        item for item in self._devices
+                        if item.get("did") == did
                         and all(item is not candidate for candidate in migrated)
-                        for item in self._devices
+                    ]
+                    # Older startup code could observe the authenticated Q7
+                    # topic before recognizing the reserved migration record,
+                    # leaving a topic-only row for the same MQTT credentials.
+                    # Merge only that exact anonymous duplicate; a real device
+                    # identity or different credentials remain a conflict.
+                    stale_topic_row = (
+                        occupants[0]
+                        if len(migrated) == 1 and len(occupants) == 1
+                        and not occupants[0].get("duid")
+                        and not occupants[0].get("model")
+                        and not occupants[0].get("localkey")
+                        and not occupants[0].get("local_key_source")
+                        and occupants[0].get("device_mqtt_usr") == username
+                        and occupants[0].get("device_mqtt_pass") in (
+                            "", migrated[0].get("device_mqtt_pass"),
+                        )
+                        else None
                     )
+                    did_taken = bool(occupants) and stale_topic_row is None
                     if migrated and (
                         len(migrated) != 1
                         or not device_credentials_verified
@@ -771,13 +805,27 @@ class RuntimeCredentialsStore:
                         or did_taken
                         or (migrated[0].get("did") and migrated[0].get("did") != did)
                     ):
+                        _LOGGER.warning(
+                            "Q7 migration topic link refused candidate_count=%d connect_verified=%s "
+                            "connect_username_matches=%s topic_taken=%s prior_did_conflicts=%s",
+                            len(migrated), device_credentials_verified,
+                            authenticated_username == username, did_taken,
+                            bool(migrated[0].get("did") and migrated[0].get("did") != did)
+                            if len(migrated) == 1 else False,
+                        )
                         return
                     if len(migrated) == 1:
+                        if stale_topic_row is not None:
+                            self._devices.remove(stale_topic_row)
                         migrated[0]["did"] = did
                         migrated[0]["migration_did_verified"] = "1"
                         migrated[0]["last_mqtt_seen_at"] = now
                         migrated[0]["updated_at"] = now
                         self._save_locked()
+                        _LOGGER.info(
+                            "Q7 migration topic linked from authenticated device publish "
+                            "(merged_stale_topic=%s)", stale_topic_row is not None,
+                        )
                         return
                 self.ensure_device(
                     did=did,
@@ -970,7 +1018,9 @@ class RuntimeCredentialsStore:
                         changed = True
                         device_changed = True
 
-                inventory_localkey = _clean_str(item.get("localkey"))
+                inventory_localkey = _clean_str(
+                    item.get("localkey") or item.get("local_key") or item.get("localKey")
+                )
                 if inventory_localkey:
                     if device.get("localkey") != inventory_localkey:
                         device["localkey"] = inventory_localkey
@@ -986,6 +1036,14 @@ class RuntimeCredentialsStore:
                     normalized_model
                     and inventory_model_counts.get(normalized_model, 0) == 1
                     and did_model_counts.get(normalized_model, 0) == 1
+                    # A cloud-imported Q7 being migrated must learn its DID
+                    # from an authenticated device publish. Historical local
+                    # key state can belong to an earlier account pairing.
+                    and not (
+                        normalized_model == "roborock.vacuum.sc05"
+                        and device.get("local_key_source") == "inventory_cloud"
+                        and device.get("migration_mqtt_clientid")
+                    )
                 ):
                     did = next(
                         (

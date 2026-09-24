@@ -1,10 +1,9 @@
 # Q7 sc05 custom-region migration without a firmware dump
 
 This is an experimental path for an owner of a stock `roborock.vacuum.sc05`
-running `03.01.74`. It is **not yet a device test procedure**. The local-server
-pieces below have synthetic tests. The owner's Q7 has now installed a
-return-only, zero-block unsigned OTA package and resumed normal operation; the
-actual five-field migration remains untested on hardware.
+running `03.01.74`. One physical Q7 has completed the five-field migration to
+the live FDS add-on and answered a read-only owner RPC through its normal MQTT
+topic. This is a single-device result, not yet a general device test procedure.
 
 The intended input is a normal Roborock account import containing the cloud
 DUID and the device's 16-byte local key. The native numeric DID and the
@@ -20,9 +19,9 @@ for that DUID. `scripts/q7_prepare_migration.py` puts those values and the
 chosen HTTPS/MQTT origins in a private five-field manifest. Neither action
 contacts the vacuum.
 
-An offline firmware-specific builder can encrypt a small migration package
+An offline firmware-specific builder encrypted a small migration package
 from that manifest and a private profile exported from the analyzed 03.01.74
-firmware. Its proposed script preserves the device identity, account, local
+firmware. Its script preserves the device identity, account, local
 key, Wi-Fi and certificate files while editing five saved IoT fields: API URL,
 MQTT URL, MQTT client ID, username and password. The firmware-wide profile
 contains a sensitive OTA key and is not distributed with this repository.
@@ -35,10 +34,11 @@ artifact and can stage it explicitly with `--stage`. Staging does not send an
 upgrade command. These scripts run from a source checkout with development
 dependencies; they are not included in the Python wheel.
 
-After a successful migration, the server accepts the reserved device MQTT
-credentials. It records the native DID only when an inbound `rr/d/i` publish
-has a topic username matching the authenticated MQTT CONNECT username. Until
-that happens, the topic bridge does not guess a target DID from the model.
+After migration, the server accepts the reserved device MQTT credentials. It
+learns the actual device-topic identifier only from an inbound `rr/d/i` publish
+whose username matches an authenticated MQTT CONNECT. On this Q7, that topic
+identifier was the current cloud DUID, **not** the old numeric factory DID.
+The bridge does not guess a target from the model while this link is unverified.
 
 The return-only hardware gate was crossed on 2026-09-23. While the inspected
 Q7 was charging and reported OTA `idle`, an owner-authenticated local-broker
@@ -55,25 +55,35 @@ this package. This proves the physical Q7 accepts this script-only unsigned
 OTA and resumes normal owner RPC while paired to the local server. Recovery
 execution and boot-variable restoration follow from the inspected firmware
 flow and the observed reboot/reconnect; no direct boot-ENV read was available.
-This does not show a custom-region edit. Vendor-cloud delivery to the real Q7
-was subsequently tested as described below.
+This return-only probe did not edit the region. Vendor-cloud delivery and the
+five-field cutover were subsequently tested as described below.
 
-Hardware gates still open:
+## Physical five-field cutover on the live FDS add-on
 
-1. Verify that the production HTTPS staging origin serves and expires an
-   artifact in a controlled test. The live FDS add-on now has the staging and
-   migration-credential routes; both returned 401 without admin authentication.
-   The target hostname resolved to `192.168.20.199`; TCP ports 555 and 8881
-   accepted TLS with a certificate valid for that hostname. No package has yet
-   been staged on this live add-on, and its acceptance of reserved Q7 MQTT
-   credentials has not been tested on hardware.
-2. Execute the five-field IoT edit on hardware and verify that it survives
-   reboot and that B01 region/NC does not overwrite the values. Then confirm
-   the custom server accepts the new MQTT credentials and routes owner RPCs.
-3. Establish a tested recovery path before the MQTT cutover. The stock client
-   appears to delete saved `iot.json` on `local.wifi_reset_done`, but this has
-   not been tested after a custom URL edit. A backup file alone does not restore
-   cloud command delivery if the new MQTT connection fails.
+On 2026-09-23, the Q7 accepted an owner-cloud `ota.upgrade.set` with
+`signed:false` for a 2,688-byte encrypted SStarOta v0.3 package. It contained
+zero firmware payload blocks. Its begin script edited the existing
+`/userdata/rriot/data_dir/iot.json` in recovery, setting the HTTPS and MQTT
+URLs plus three MQTT login fields; it did not deliver a separate JSON file or
+replace the kernel or root filesystem. The encrypted package SHA-256 was
+`04defa005b2f06c26585240ea21e7106aa164a98121a9daa4e836cf4271a0256`.
+
+After reboot, the physical Q7 authenticated to the live **Roborock Local Server
+FDS** add-on on MQTT port 8881, published B01 telemetry, and called local
+`/time/now` and `/location` on HTTPS port 555. A direct read-only `prop.get`
+returned charging status 4. The first owner-topic probe failed because startup
+inventory seeding had overwritten the migration key provenance and an earlier
+topic observation had created an anonymous duplicate record. The add-on now
+preserves the cloud-imported Q7 provenance and merges only an anonymous row
+with the same authenticated MQTT credentials. After rebuilding the live add-on,
+the normal `rr/m/i` owner-topic probe returned charging status 4 and OTA state
+`idle`. Other device identities were left intact.
+
+The return package remains temporarily hosted for recovery. Its byte-identical
+restore behavior was tested with the recovered updater in isolated QEMU, but
+the restore has **not** been sent to the physical Q7. Physical Wi-Fi reset after
+this custom URL edit, Roborock app behavior, a second Q7, and complete firmware
+payload replacement are still untested.
 
 After ordinary re-pairing to the owner's Roborock account, the physical Q7
 appeared online with a current 16-byte local key. Through the vendor owner
@@ -92,11 +102,10 @@ recovered 03.01.74 `rriot_client`, the `local.wifi_reset_done` handler calls
 the saved-IoT-profile deletion routine (`0x1f9b8` calls `0x212e8`), which
 constructs the configured `iot.json` path and calls `unlink` at `0x21354`.
 That supports physical Wi-Fi reset and re-pairing as a fallback if a custom
-MQTT address becomes unreachable. This owner has re-paired the unmodified Q7
-from the local server back to Roborock cloud, but the fallback has not been
-tested after an OTA-edited `iot.json`. Until then, stage any first edit so the
-vendor MQTT address and credentials remain unchanged, verify another owner
-query and OTA delivery, then separately consider the MQTT cutover.
+MQTT address becomes unreachable. Before the five-field cutover, this owner
+re-paired the unmodified Q7 from the local server back to Roborock cloud.
+The fallback has not been tested after an OTA-edited `iot.json`; the Q7 is
+currently connected to the local server.
 
 An offline two-package first stage is now available in
 `scripts/q7_api_only_ota_builder.py`. It uses the exact vendor recovery return
@@ -203,10 +212,10 @@ This establishes a **no-dump OTA entry path** for a stock Q7 normally paired
 to the owner account: import the current cloud DUID/local key and use owner
 MQTT credentials to deliver an owner-chosen package. The later physical test
 confirmed package download, unsigned installation, reboot and return to vendor
-owner RPC. The actual saved-config edit and custom-region reconnect remain
-untested. The stand-in's device bootstrap used the inspected unit's secret to
-obtain a reference identity; ordinary cloud pairing of the physical Q7 did
-not require the owner to know that secret.
+owner RPC. The later live FDS test above confirmed the saved-config edit and
+custom-region reconnect on one Q7. The stand-in's device bootstrap used the
+inspected unit's secret to obtain a reference identity; ordinary cloud pairing
+of the physical Q7 did not require the owner to know that secret.
 
 ## Capturing a vendor OTA for reference
 
