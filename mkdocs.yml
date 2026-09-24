@@ -59,7 +59,8 @@ nav:
   - Reference:
     - Known Limitations: known_limitations.md
     - Tested Vacuums: tested_vacuums.md
-    - Experimental Q7 sc05 Owner Trial: q7_030180_owner_trial.md
+    - Experimental Q7 sc05 03.01.74 Owner Trial: q7_030174_owner_trial.md
+    - Experimental Q7 sc05 03.01.80 Owner Trial: q7_030180_owner_trial.md
     - Reverse Proxy: reverse_proxy.md
     - Custom MQTT: custom_mqtt.md
     - Custom Certificate Management: custom_cert_management.md

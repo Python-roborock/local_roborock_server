@@ -9,8 +9,10 @@ installing the official update. This remains a single-device result, not yet
 a second-device validation. See `docs/q7_030180_compatibility.md` for the
 `03.01.80` firmware analysis and physical test evidence. The older detailed
 package sizes below describe the `03.01.74` trial unless noted otherwise.
-For a concise `03.01.80` tester procedure, use
-`docs/q7_030180_owner_trial.md`.
+For a concise tester procedure, select the guide matching the cloud inventory
+firmware: [`03.01.74`](q7_030174_owner_trial.md) or
+[`03.01.80`](q7_030180_owner_trial.md). Their private profiles are different
+and must not be interchanged.
 The `03.01.80` cycle was repeated using the public generic restore and owner
 sender scripts in both directions, with the same physical Q7 and a private
 account export.
