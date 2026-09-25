@@ -694,7 +694,7 @@ if __name__ == "__main__":
         args.local_api,
         fallback_port=DEFAULT_LOCAL_API_PORT,
     )
-    local_api = _format_authority(local_api_host, local_api_port, default_port=443)
+    local_api = _format_authority(local_api_host, local_api_port)
     local_mqtt_host, local_mqtt_port = _parse_endpoint(
         args.local_mqtt or "",
         fallback_host=local_api_host,
