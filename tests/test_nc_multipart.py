@@ -126,3 +126,19 @@ def test_nc_multipart_rejects_file_parts(supervisor):
         response = client.post("/nc", files={"d": ("device.txt", DID)})
     assert response.status_code == 400
     assert not any(event.get("route") == "nc_prepare" for event in supervisor.runtime_state.recent_events())
+
+
+def test_x_forwarded_for_header_sets_client_remote_ip(supervisor):
+    with TestClient(supervisor.app) as client:
+        response = client.get(
+            "/region",
+            params={"d": DID, "m": MODEL},
+            headers={"v": "v2", "x-forwarded-for": "10.1.6.170, 10.42.222.1"},
+        )
+        assert response.status_code == 200
+
+    recent = supervisor.runtime_state.recent_events()
+    region_event = next(e for e in recent if e.get("route") == "region")
+    assert region_event["remote"].startswith("10.1.6.170:")
+    pairing = supervisor.runtime_state.pairing_snapshot()
+    assert pairing["target"]["last_ip"] == "10.1.6.170"

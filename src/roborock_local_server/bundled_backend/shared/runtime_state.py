@@ -6,6 +6,7 @@ import base64
 from collections import deque
 from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 import re
 import secrets
@@ -33,14 +34,18 @@ PAIRING_STEP_LABELS = {
 _TRACKED_ONBOARDING_STEPS = set(ONBOARDING_STEP_LABELS.keys())
 _D_TOPIC_RE = re.compile(r"^rr/d/[io]/([^/]+)/([^/]+)$")
 _M_TOPIC_RE = re.compile(r"^rr/m/[io]/[^/]+/[^/]+/([^/]+)$")
+logger = logging.getLogger(__name__)
 
 
 def _extract_ip(remote: str | None) -> str:
     if not remote:
         return ""
-    if remote.count(":") == 1:
-        return remote.split(":", 1)[0].strip()
-    return remote.strip()
+    stripped = remote.strip()
+    if stripped.startswith("[") and "]" in stripped:
+        return stripped[1 : stripped.index("]")].strip()
+    if stripped.count(":") == 1:
+        return stripped.split(":", 1)[0].strip()
+    return stripped
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -444,8 +449,6 @@ class RuntimeState:
             if not str(session.get("region_at") or "").strip() or not str(session.get("nc_at") or "").strip():
                 return None
             target_ip = str(session.get("target_ip") or "").strip()
-            if not target_ip or target_ip != normalized_ip:
-                return None
             target_did = str(session.get("target_did") or "").strip()
             target_duid = str(session.get("target_duid") or "").strip()
             if not target_did:
@@ -453,6 +456,13 @@ class RuntimeState:
             key_state = self._session_key_state_locked(target_did, target_duid)
             if not bool(key_state.get("has_modulus")):
                 return None
+            if target_ip and target_ip != normalized_ip:
+                logger.info(
+                    "Onboarding MQTT client IP %s differs from HTTP target_ip %s (reverse proxy / NAT); accepting candidate did=%s",
+                    normalized_ip,
+                    target_ip,
+                    target_did,
+                )
             return {
                 "did": target_did,
                 "duid": target_duid,
@@ -1052,12 +1062,19 @@ class RuntimeState:
 
         normalized_ip = client_ip.strip()
         target_ip = str(session.get("target_ip") or "").strip()
-        if target_ip and normalized_ip and target_ip != normalized_ip:
-            return
-
-        changed = False
         normalized_did = did.strip()
         normalized_duid = duid.strip()
+        target_did = str(session.get("target_did") or "").strip()
+        target_duid = str(session.get("target_duid") or "").strip()
+        if target_ip and normalized_ip and target_ip != normalized_ip:
+            matches_target = bool(
+                (target_did and normalized_did == target_did)
+                or (target_duid and normalized_duid == target_duid)
+            )
+            if not matches_target:
+                return
+
+        changed = False
         if normalized_did:
             changed = self._adopt_pairing_did_locked(
                 session=session,
@@ -1070,9 +1087,6 @@ class RuntimeState:
         if normalized_ip and not session.get("target_ip"):
             session["target_ip"] = normalized_ip
             changed = True
-
-        target_did = str(session.get("target_did") or "").strip()
-        target_duid = str(session.get("target_duid") or "").strip()
         if not session.get("identity_conflict") and (
             (normalized_did and normalized_did == target_did)
             or (normalized_duid and normalized_duid == target_duid)

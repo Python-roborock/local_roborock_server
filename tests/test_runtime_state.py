@@ -245,7 +245,7 @@ def test_runtime_state_merge_rewrites_active_mqtt_connection_mapping(tmp_path: P
     assert state._vacuums["cloud-q7-a"]["connected"] is False
 
 
-def test_runtime_state_onboarding_device_mqtt_candidate_requires_matching_ip_and_public_key(tmp_path: Path) -> None:
+def test_runtime_state_onboarding_device_mqtt_candidate_allows_proxy_ip_and_requires_public_key(tmp_path: Path) -> None:
     credentials_path = tmp_path / "runtime_credentials.json"
     credentials_path.write_text(
         json.dumps(
@@ -311,7 +311,11 @@ def test_runtime_state_onboarding_device_mqtt_candidate_requires_matching_ip_and
     assert candidate is not None
     assert candidate["did"] == "1103821560705"
     assert candidate["duid"] == "cloud-q7-a"
-    assert state.onboarding_device_mqtt_candidate(client_ip="192.168.8.11") is None
+    candidate_alt_ip = state.onboarding_device_mqtt_candidate(client_ip="192.168.8.11")
+    assert candidate_alt_ip is not None
+    assert candidate_alt_ip["did"] == "1103821560705"
+    assert candidate_alt_ip["duid"] == "cloud-q7-a"
+    assert state.onboarding_device_mqtt_candidate(client_ip="") is None
 
 
 def test_runtime_state_completes_region_v2_onboarding(tmp_path: Path) -> None:

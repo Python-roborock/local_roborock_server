@@ -516,6 +516,16 @@ def test_authorize_connect_accepts_unknown_device_credentials_only_for_matching_
     assert persisted["device_mqtt_usr"] == ""
     assert persisted["device_mqtt_pass"] == ""
 
+    alt_authorized, alt_reason, _info, alt_candidate = proxy._authorize_connect_packet_for_client(
+        packet,
+        client_ip="192.168.8.11",
+    )
+    assert alt_authorized is True
+    assert alt_reason == "device_mqtt_onboarding_pending"
+    assert alt_candidate is not None
+    assert alt_candidate["did"] == "1103821560705"
+
+    runtime_state.clear_onboarding_session()
     rejected, reject_reason, _info, rejected_candidate = proxy._authorize_connect_packet_for_client(
         packet,
         client_ip="192.168.8.11",
@@ -980,3 +990,263 @@ def test_handle_client_returns_mqtt5_not_authorized_connack_on_rejected_connect(
 
     assert tls_conn.sent == [b"\x20\x03\x00\x87\x00"]
     assert tls_conn.closed is True
+
+
+def test_onboarding_candidate_resolution_behind_reverse_proxy_mismatched_ip(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    key_state_path = tmp_path / "device_key_state.json"
+    _seed_key_state(key_state_path, did="1103821560705")
+    runtime_credentials_path = tmp_path / "runtime_credentials.json"
+    _write_json(
+        runtime_credentials_path,
+        {
+            "schema_version": 2,
+            "mqtt_usr": "bootstrap-user",
+            "mqtt_passwd": "bootstrap-pass",
+            "mqtt_clientid": "bootstrap-client",
+            "devices": [
+                {
+                    "did": "1103821560705",
+                    "duid": "6HL2zfniaoYYV01CkVuhkO",
+                    "name": "Roborock Qrevo MaxV 2",
+                    "model": "roborock.vacuum.a87",
+                    "product_id": "5gUei3OIJIXVD3eD85Balg",
+                    "localkey": "xPd5Dr8CGGqtdDlH",
+                    "local_key_source": "inventory",
+                    "device_mqtt_usr": "",
+                    "device_mqtt_pass": "",
+                    "updated_at": "2026-04-17T17:00:00+00:00",
+                    "last_nc_at": "",
+                    "last_mqtt_seen_at": "",
+                }
+            ],
+        },
+    )
+    runtime_credentials = RuntimeCredentialsStore(runtime_credentials_path)
+    runtime_state = RuntimeState(log_dir=tmp_path, key_state_file=key_state_path, runtime_credentials=runtime_credentials)
+    runtime_state.upsert_vacuum("6HL2zfniaoYYV01CkVuhkO", name="Roborock Qrevo MaxV 2", id_kind="duid")
+    runtime_state.start_onboarding_session(target_duid="6HL2zfniaoYYV01CkVuhkO", target_name="Roborock Qrevo MaxV 2")
+
+    # Robot hits HTTP /region and /nc through a reverse proxy (e.g., Traefik/Nginx at 10.42.222.161)
+    event_time = datetime.now(timezone.utc).isoformat()
+    proxy_http_ip = "10.42.222.161"
+    for route_name, path_name in (("region", "/region"), ("nc_prepare", "/nc")):
+        runtime_state.record_http_event(
+            event_time=event_time,
+            route_name=route_name,
+            clean_path=path_name,
+            raw_path=path_name,
+            method="GET",
+            host="api-roborock.example.com",
+            remote=f"{proxy_http_ip}:54321",
+            did="1103821560705",
+        )
+
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        runtime_state=runtime_state,
+        runtime_credentials=runtime_credentials,
+    )
+
+    # Robot connects to MQTT directly from its LAN IP (10.1.6.170), differing from proxy IP
+    robot_mqtt_ip = "10.1.6.170"
+    packet = _build_connect_packet(
+        client_id="a012391cb5f8bc97",
+        username="c25b14ceac358d2a",
+        password="ff8922d24a9a9af81f18f35dcee9a5a5",
+    )
+    authorized, reason, info, candidate = proxy._authorize_connect_packet_for_client(
+        packet,
+        client_ip=robot_mqtt_ip,
+    )
+
+    assert authorized is True
+    assert reason == "device_mqtt_onboarding_pending"
+    assert info is not None
+    assert candidate is not None
+    assert candidate["did"] == "1103821560705"
+    assert candidate["duid"] == "6HL2zfniaoYYV01CkVuhkO"
+    assert candidate["username"] == "c25b14ceac358d2a"
+    assert candidate["password"] == "ff8922d24a9a9af81f18f35dcee9a5a5"
+    assert candidate["client_ip"] == robot_mqtt_ip
+
+
+def test_provisional_auth_and_topic_confirmation_behind_reverse_proxy(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    runtime_credentials_path = tmp_path / "runtime_credentials.json"
+    _write_json(
+        runtime_credentials_path,
+        {
+            "schema_version": 2,
+            "devices": [
+                {
+                    "did": "1103821560705",
+                    "duid": "6HL2zfniaoYYV01CkVuhkO",
+                    "name": "Roborock Qrevo MaxV 2",
+                    "model": "roborock.vacuum.a87",
+                    "product_id": "5gUei3OIJIXVD3eD85Balg",
+                    "localkey": "xPd5Dr8CGGqtdDlH",
+                    "local_key_source": "inventory",
+                    "device_mqtt_usr": "",
+                    "device_mqtt_pass": "",
+                    "updated_at": "2026-04-17T17:00:00+00:00",
+                    "last_nc_at": "",
+                    "last_mqtt_seen_at": "",
+                }
+            ],
+        },
+    )
+    runtime_credentials = RuntimeCredentialsStore(runtime_credentials_path)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        runtime_credentials=runtime_credentials,
+    )
+
+    # 1. Reject provisional auth if published topic does not match expected topic
+    client_sock_bad = _FakeSourceSocket()
+    backend_sock_bad = _FakeBackendSocket()
+    proxy._set_pending_onboarding_auth(
+        "bad-conn",
+        {
+            "did": "1103821560705",
+            "duid": "6HL2zfniaoYYV01CkVuhkO",
+            "name": "Roborock Qrevo MaxV 2",
+            "username": "c25b14ceac358d2a",
+            "password": "ff8922d24a9a9af81f18f35dcee9a5a5",
+            "client_ip": "10.1.6.170",
+        },
+    )
+    proxy._register_conn_endpoints("bad-conn", client_sock_bad, backend_sock_bad)
+    # Publishing to wrong topic rr/d/i/1103821560705/wrong_user
+    proxy._trace_packet("bad-conn", "c2b", _build_publish_packet(topic="rr/d/i/1103821560705/wrong_user"))
+
+    device_unconfirmed = runtime_credentials.resolve_device(did="1103821560705")
+    assert device_unconfirmed is not None
+    assert device_unconfirmed["device_mqtt_usr"] == ""
+    assert device_unconfirmed["device_mqtt_pass"] == ""
+    assert client_sock_bad.closed is True
+    assert backend_sock_bad.closed is True
+    assert proxy._get_pending_onboarding_auth("bad-conn") is None
+
+    # 2. Confirm provisional auth when topic matches expected rr/d/i/{did}/{username}
+    client_sock_good = _FakeSourceSocket()
+    backend_sock_good = _FakeBackendSocket()
+    proxy._set_pending_onboarding_auth(
+        "good-conn",
+        {
+            "did": "1103821560705",
+            "duid": "6HL2zfniaoYYV01CkVuhkO",
+            "name": "Roborock Qrevo MaxV 2",
+            "username": "c25b14ceac358d2a",
+            "password": "ff8922d24a9a9af81f18f35dcee9a5a5",
+            "client_ip": "10.1.6.170",
+        },
+    )
+    proxy._register_conn_endpoints("good-conn", client_sock_good, backend_sock_good)
+    proxy._trace_packet("good-conn", "c2b", _build_publish_packet(topic="rr/d/i/1103821560705/c25b14ceac358d2a"))
+
+    device_confirmed = runtime_credentials.resolve_device(did="1103821560705")
+    assert device_confirmed is not None
+    assert device_confirmed["device_mqtt_usr"] == "c25b14ceac358d2a"
+    assert device_confirmed["device_mqtt_pass"] == "ff8922d24a9a9af81f18f35dcee9a5a5"
+    assert client_sock_good.closed is False
+    assert backend_sock_good.closed is False
+    assert proxy._get_pending_onboarding_auth("good-conn") is None
+
+
+def test_onboarding_candidate_resolution_behind_proxy_rejects_incomplete_session(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    key_state_path = tmp_path / "device_key_state.json"
+    _seed_key_state(key_state_path, did="1103821560705")
+    runtime_credentials_path = tmp_path / "runtime_credentials.json"
+    _write_json(
+        runtime_credentials_path,
+        {
+            "schema_version": 2,
+            "devices": [
+                {
+                    "did": "1103821560705",
+                    "duid": "6HL2zfniaoYYV01CkVuhkO",
+                    "name": "Roborock Qrevo MaxV 2",
+                    "model": "roborock.vacuum.a87",
+                    "product_id": "5gUei3OIJIXVD3eD85Balg",
+                    "localkey": "xPd5Dr8CGGqtdDlH",
+                    "local_key_source": "inventory",
+                    "device_mqtt_usr": "",
+                    "device_mqtt_pass": "",
+                    "updated_at": "2026-04-17T17:00:00+00:00",
+                    "last_nc_at": "",
+                    "last_mqtt_seen_at": "",
+                }
+            ],
+        },
+    )
+    runtime_credentials = RuntimeCredentialsStore(runtime_credentials_path)
+    runtime_state = RuntimeState(log_dir=tmp_path, key_state_file=key_state_path, runtime_credentials=runtime_credentials)
+    runtime_state.upsert_vacuum("6HL2zfniaoYYV01CkVuhkO", name="Roborock Qrevo MaxV 2", id_kind="duid")
+    runtime_state.start_onboarding_session(target_duid="6HL2zfniaoYYV01CkVuhkO", target_name="Roborock Qrevo MaxV 2")
+
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        runtime_state=runtime_state,
+        runtime_credentials=runtime_credentials,
+    )
+
+    packet = _build_connect_packet(
+        client_id="a012391cb5f8bc97",
+        username="c25b14ceac358d2a",
+        password="ff8922d24a9a9af81f18f35dcee9a5a5",
+    )
+
+    # 1. No HTTP events yet -> rejected
+    authorized, reason, _, candidate = proxy._authorize_connect_packet_for_client(packet, client_ip="10.1.6.170")
+    assert authorized is False
+    assert reason == "invalid_mqtt_credentials"
+    assert candidate is None
+
+    # 2. Only /region completed (nc missing) -> rejected
+    event_time = datetime.now(timezone.utc).isoformat()
+    runtime_state.record_http_event(
+        event_time=event_time,
+        route_name="region",
+        clean_path="/region",
+        raw_path="/region",
+        method="GET",
+        host="api-roborock.example.com",
+        remote="10.42.222.161:54321",
+        did="1103821560705",
+    )
+    authorized, reason, _, candidate = proxy._authorize_connect_packet_for_client(packet, client_ip="10.1.6.170")
+    assert authorized is False
+    assert reason == "invalid_mqtt_credentials"
+    assert candidate is None
