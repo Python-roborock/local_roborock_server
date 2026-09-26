@@ -173,7 +173,7 @@ During `JNI_OnLoad`, `librrcodec.so` calls a verification function that retrieve
 
 ### Why use LocalRock?
 - **Less likely to break:** Unlike the official Roborock app, LocalRock talks natively to the local server over HTTPS and MQTT. It does not require running a MITM proxy, installing custom root certificates, WireGuard redirection, or patching and re-signing native APK libraries (`librrcodec.so`). App updates will not break your setup.
-- **On-phone onboarding:** It supports provisioning new vacuums over Wi-Fi directly from your phone without needing a secondary machine.
+- **Alternative onboarding technique:** LocalRock includes an "Add vacuum" flow that provisions new vacuums over Wi-Fi directly from your phone. This serves as a convenient alternative to running the onboarding scripts (`start_onboarding.py` / `start_onboarding_gui.py`) from a second computer (see [Onboarding](onboarding.md#onboarding-via-localrock)).
 
 ### Trade-offs
 - **You may lose features:** Because LocalRock is an independent client reverse-engineered from the protocol, you may lose some advanced or proprietary features found in the official Roborock app (e.g. customized multi-floor/3D maps, complex routines, and camera live streaming is experimental/untested).
