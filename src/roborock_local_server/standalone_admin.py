@@ -9,6 +9,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from .backend import _load_inventory
+from .product_registry import export_inventory_device_profiles
 from .security import verify_password
 
 
@@ -352,6 +354,13 @@ def register_standalone_admin_routes(
         supervisor._require_admin(request)
         return JSONResponse(supervisor._vacuums_payload())
 
+    @app.get("/admin/api/product-registry/export")
+    async def admin_export_product_registry(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        inventory = _load_inventory(supervisor.paths.inventory_path)
+        profiles = export_inventory_device_profiles(inventory)
+        return JSONResponse({"profiles": profiles, "count": len(profiles)})
+
     @app.get("/admin/api/auth")
     async def admin_auth(request: Request) -> JSONResponse:
         supervisor._require_admin(request)
@@ -409,8 +418,16 @@ def register_standalone_admin_routes(
         except json.JSONDecodeError:
             body = {}
         duid = str((body or {}).get("duid") or "").strip()
+        new_vacuum = bool((body or {}).get("new_vacuum"))
+        name = str((body or {}).get("name") or "").strip()
+        model = str((body or {}).get("model") or "").strip()
         try:
-            payload = supervisor.start_onboarding_session(duid=duid)
+            payload = supervisor.start_onboarding_session(
+                duid=duid,
+                new_vacuum=new_vacuum,
+                name=name,
+                model=model,
+            )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except KeyError:

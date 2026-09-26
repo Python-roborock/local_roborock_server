@@ -588,15 +588,14 @@
 
     function renderDevices(devices) {
       const list = $("device-list");
-      if (!devices || !devices.length) {
-        list.innerHTML = `<div class="callout info">
-          <strong>No devices found</strong>
-          <div class="sub">Refresh after the server has discovered the vacuum.</div>
-        </div>`;
-        return;
-      }
+      const emptyNote = (!devices || !devices.length)
+        ? `<div class="callout info">
+          <strong>No imported vacuums</strong>
+          <div class="sub">Nothing was imported from the cloud. If this vacuum has never been on the cloud, choose "New vacuum" below.</div>
+        </div>`
+        : "";
 
-      list.innerHTML = devices.map((d) => {
+      const deviceButtons = (devices || []).map((d) => {
         const samples = d.query_samples || 0;
         const hasKey = d.has_public_key;
         const connected = d.connected;
@@ -610,6 +609,15 @@
           </span>
         </button>`;
       }).join("");
+
+      const newVacuumButton = `<button class="device" data-duid="__new__">
+          <span class="name">New vacuum</span>
+          <span class="meta">
+            <span class="tag">never on the cloud / not yet in inventory</span>
+          </span>
+        </button>`;
+
+      list.innerHTML = emptyNote + deviceButtons + newVacuumButton;
 
       list.querySelectorAll(".device").forEach((btn) => {
         btn.addEventListener("click", () => selectDevice(btn.dataset.duid));

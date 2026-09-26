@@ -22,6 +22,7 @@ class FakeApi:
         self.baseline_statuses = list(baseline_statuses)
         self.login_called = 0
         self.started_duids: list[str] = []
+        self.started_new_vacuum: list[bool] = []
         self.deleted_sessions: list[str] = []
         self.session_id = "sess-1"
 
@@ -31,13 +32,24 @@ class FakeApi:
     def list_devices(self) -> list[dict]:
         return list(self.devices)
 
-    def start_session(self, *, duid: str) -> dict:
+    def start_session(
+        self,
+        *,
+        duid: str = "",
+        new_vacuum: bool = False,
+        name: str = "",
+        model: str = "",
+        **kwargs: object,
+    ) -> dict:
         self.started_duids.append(duid)
+        self.started_new_vacuum.append(new_vacuum)
+        resolved_name = name or next((item["name"] for item in self.devices if item["duid"] == duid), duid)
         return {
             "session_id": self.session_id,
             "target": {
                 "duid": duid,
-                "name": next((item["name"] for item in self.devices if item["duid"] == duid), duid),
+                "name": resolved_name,
+                "model": model,
                 "did": "",
                 "connected": False,
                 "last_ip": "",
@@ -146,13 +158,76 @@ def test_guided_onboarding_happy_path(monkeypatch: pytest.MonkeyPatch, config: G
     assert "The vacuum is connected to the local server." in output.getvalue()
 
 
-def test_choose_device_empty_list_points_to_cloud_import() -> None:
+def test_choose_device_empty_list_offers_new_vacuum(monkeypatch: pytest.MonkeyPatch) -> None:
     output = StringIO()
+    answers = iter(["new"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
 
     selected = choose_device([], output=output)
 
-    assert selected is None
-    assert "Finish the cloud import/fetch-data step first" in output.getvalue()
+    assert selected is not None
+    assert selected.get("new_vacuum") is True
+    assert "New vacuum" in output.getvalue()
+
+
+def test_choose_device_new_vacuum_by_number(monkeypatch: pytest.MonkeyPatch) -> None:
+    output = StringIO()
+    devices = [{"duid": "cloud-q7-a", "name": "Q7 Upstairs", "onboarding": {}}]
+    # The "new vacuum" option is numbered one past the listed devices.
+    answers = iter(["2"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+
+    selected = choose_device(devices, output=output)
+
+    assert selected is not None
+    assert selected.get("new_vacuum") is True
+
+
+def test_guided_onboarding_new_vacuum(
+    monkeypatch: pytest.MonkeyPatch, config: GuidedOnboardingConfig
+) -> None:
+    api = FakeApi(
+        devices=[],
+        baseline_statuses=[
+            {"session_id": "sess-1", "query_samples": 0, "has_public_key": False, "connected": False},
+        ],
+    )
+    output = StringIO()
+    poll_results = iter(
+        [
+            (
+                "connected",
+                {
+                    "session_id": "sess-1",
+                    "query_samples": 1,
+                    "has_public_key": True,
+                    "connected": True,
+                    "guidance": "Device paired and connected.",
+                    "target": {"name": "New vacuum", "duid": "1103835404427", "did": "1103835404427"},
+                },
+            )
+        ]
+    )
+    # Select "new" vacuum, then press Enter to send the onboarding packet.
+    answers = iter(["new", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(
+        "start_onboarding.poll_session_until_progress",
+        lambda *args, **kwargs: next(poll_results),
+    )
+
+    result = run_guided_onboarding(
+        config=config,
+        api=api,
+        send_onboarding=lambda cfg, out: True,
+        output=output,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert result == 0
+    assert api.started_new_vacuum == [True]
+    assert api.started_duids == [""]
+    assert api.deleted_sessions == ["sess-1"]
 
 
 def test_guided_onboarding_handles_extra_cycles(monkeypatch: pytest.MonkeyPatch, config: GuidedOnboardingConfig) -> None:

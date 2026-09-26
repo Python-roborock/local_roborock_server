@@ -9,7 +9,7 @@ from typing import Any, Sequence
 
 from roborock_local_server.inventory import _extract_inventory_vacuums
 from roborock_local_server.inventory import _merge_vacuum_state
-from shared.constants import DEFAULT_TIMEZONE
+from shared.constants import DEFAULT_PRODUCT_SCHEMA, DEFAULT_TIMEZONE
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, as_int, default_product_name, get_value
 from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory
@@ -134,8 +134,10 @@ def _product_from_device_record(raw_item: dict[str, Any]) -> dict[str, Any]:
     if capability is not None:
         product["capability"] = capability
     schema = get_value(raw_item, "schema")
-    if isinstance(schema, list):
+    if isinstance(schema, list) and schema:
         product["schema"] = schema
+    elif get_value(raw_item, "source") == "onboarding":
+        product["schema"] = DEFAULT_PRODUCT_SCHEMA
     return {key: value for key, value in product.items() if value is not None and value != ""}
 
 
@@ -228,8 +230,10 @@ def _normalize_devices(
             if capability is not None:
                 product["capability"] = capability
             schema = get_value(raw_item, "schema")
-            if isinstance(schema, list):
+            if isinstance(schema, list) and schema:
                 product["schema"] = schema
+            elif get_value(raw_item, "source") == "onboarding":
+                product["schema"] = DEFAULT_PRODUCT_SCHEMA
             products_by_id[product_id] = product
     return devices, list(products_by_id.values())
 
@@ -507,8 +511,10 @@ def device_detail_payload(ctx: ServerContext, device_id: str) -> dict[str, Any]:
         if capability is not None:
             product_payload["capability"] = capability
         schema = get_value(raw_product, "schema", default=get_value(normalized_product, "schema"))
-        if isinstance(schema, list):
+        if isinstance(schema, list) and schema:
             product_payload["schema"] = schema
+        else:
+            product_payload["schema"] = DEFAULT_PRODUCT_SCHEMA
 
     payload: dict[str, Any] = {
         "duid": str(

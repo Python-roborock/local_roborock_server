@@ -23,7 +23,9 @@ import uvicorn
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .certs import CertificateManager
+from .bundled_backend.shared.constants import DEFAULT_PRODUCT_SCHEMA
 from .bundled_backend.shared.data_helpers import utcnow_iso
+from .product_registry import resolve_product_metadata
 from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIRED_ONBOARDING_STEPS
 from .cloud import CloudImportManager
 from .config import AppConfig, AppPaths, load_config, resolve_paths
@@ -169,6 +171,18 @@ def _extract_explicit_pid(
     body_params: dict[str, list[str]],
 ) -> str:
     for key in ("pid", "m", "model"):
+        for value in query_params.get(key, []) + body_params.get(key, []):
+            candidate = str(value).strip()
+            if candidate:
+                return candidate
+    return ""
+
+
+def _extract_explicit_model(
+    query_params: dict[str, list[str]],
+    body_params: dict[str, list[str]],
+) -> str:
+    for key in ("m", "model"):
         for value in query_params.get(key, []) + body_params.get(key, []):
             candidate = str(value).strip()
             if candidate:
@@ -952,6 +966,9 @@ class ReleaseSupervisor:
 
         explicit_did = self.context.extract_explicit_did(query_params, body_params)
         explicit_pid = _extract_explicit_pid(query_params, body_params)
+        explicit_model = _extract_explicit_model(query_params, body_params) or (
+            explicit_pid if explicit_pid.startswith("roborock.") else ""
+        )
         key_capture_did = explicit_did
         if not key_capture_did and self._allows_onboarding_key_capture_fallback(clean_path, request.url.query):
             key_capture_did = self.runtime_state.active_onboarding_target_did()
@@ -1058,6 +1075,7 @@ class ReleaseSupervisor:
                     remote=str(entry["remote"]),
                     did=explicit_did or None,
                     pid=explicit_pid or None,
+                    model=explicit_model or None,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("runtime_state record_http_event failed: %s", exc)
@@ -1094,6 +1112,7 @@ class ReleaseSupervisor:
                     remote=str(entry["remote"]),
                     did=explicit_did or None,
                     pid=explicit_pid or None,
+                    model=explicit_model or None,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("runtime_state record_http_event failed: %s", exc)
@@ -1129,6 +1148,7 @@ class ReleaseSupervisor:
                     remote=str(entry["remote"]),
                     did=explicit_did or None,
                     pid=explicit_pid or None,
+                    model=explicit_model or None,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("runtime_state record_http_event failed: %s", exc)
@@ -1163,6 +1183,7 @@ class ReleaseSupervisor:
                         remote=str(entry["remote"]),
                         did=explicit_did or None,
                         pid=explicit_pid or None,
+                        model=explicit_model or None,
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("runtime_state record_http_event failed: %s", exc)
@@ -1204,6 +1225,7 @@ class ReleaseSupervisor:
                         remote=str(entry["remote"]),
                         did=explicit_did or None,
                         pid=explicit_pid or None,
+                        model=explicit_model or None,
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("runtime_state record_http_event failed: %s", exc)
@@ -1248,6 +1270,7 @@ class ReleaseSupervisor:
                     remote=str(entry["remote"]),
                     did=explicit_did or None,
                     pid=explicit_pid or None,
+                    model=explicit_model or None,
                 )
             except Exception as record_exc:  # noqa: BLE001
                 logger.warning("runtime_state record_http_event failed: %s", record_exc)
@@ -1283,6 +1306,7 @@ class ReleaseSupervisor:
                     remote=str(entry["remote"]),
                     did=explicit_did or None,
                     pid=explicit_pid or None,
+                    model=explicit_model or None,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("runtime_state record_http_event failed: %s", exc)
@@ -1319,6 +1343,7 @@ class ReleaseSupervisor:
                 remote=str(entry["remote"]),
                 did=explicit_did or None,
                 pid=explicit_pid or None,
+                model=explicit_model or None,
                 region_version=region_version if route_name == "region" else None,
             )
         except Exception as exc:  # noqa: BLE001
@@ -1499,9 +1524,25 @@ class ReleaseSupervisor:
     def remove_protocol_session(self, *, hawk_id: str, hawk_session: str) -> bool:
         return self.protocol_auth.remove_session(hawk_id=hawk_id, hawk_session=hawk_session)
 
-    def start_onboarding_session(self, *, duid: str) -> dict[str, Any]:
+    def start_onboarding_session(
+        self,
+        *,
+        duid: str = "",
+        new_vacuum: bool = False,
+        name: str = "",
+        model: str = "",
+    ) -> dict[str, Any]:
         if not self.new_connections_enabled():
             raise ValueError("New connections are disabled.")
+        if new_vacuum:
+            # Blind session for a vacuum that has never been on the cloud and therefore
+            # has no inventory entry to select. The session adopts the did/duid from the
+            # vacuum's own /region + /nc traffic, and the device is auto-persisted to
+            # inventory once it registers (see _maybe_persist_onboarded_device).
+            return self.runtime_state.start_onboarding_session(
+                target_name=name,
+                target_model=model,
+            )
         normalized_duid = str(duid or "").strip()
         if not normalized_duid:
             raise ValueError("duid is required")
@@ -1509,10 +1550,13 @@ class ReleaseSupervisor:
         matched = next((item for item in devices if item["duid"] == normalized_duid), None)
         if matched is None:
             raise KeyError(normalized_duid)
+        target_name = name or str(matched.get("name") or normalized_duid).strip()
+        target_model = model or str(matched.get("model") or "").strip()
         return self.runtime_state.start_onboarding_session(
             target_duid=normalized_duid,
-            target_name=str(matched.get("name") or ""),
+            target_name=target_name,
             target_did=str(matched.get("did") or ""),
+            target_model=target_model,
         )
 
     def onboarding_session_snapshot(self, *, session_id: str) -> dict[str, Any]:
@@ -1522,7 +1566,152 @@ class ReleaseSupervisor:
             raise KeyError(normalized_session_id)
         if normalized_session_id and snapshot.get("session_id") != normalized_session_id:
             raise KeyError(normalized_session_id)
+        self._maybe_persist_onboarded_device(snapshot)
         return snapshot
+
+    def _maybe_persist_onboarded_device(self, snapshot: dict[str, Any]) -> None:
+        """Auto-persist a blind-onboarded ("new vacuum") device into inventory.
+
+        A vacuum that was never on the cloud has no inventory entry, so Home
+        Assistant's home_data would never list it. Once the device has reached
+        /nc (and therefore has a server-minted localKey in runtime_credentials),
+        write a matching inventory entry so HA can see and control it. Idempotent.
+        """
+        if not isinstance(snapshot, dict) or not snapshot.get("active"):
+            return
+        if str(snapshot.get("identity_conflict") or "").strip() or bool(snapshot.get("unsupported")):
+            return
+        target = snapshot.get("target") if isinstance(snapshot.get("target"), dict) else {}
+        did = str(target.get("did") or "").strip()
+        duid = str(target.get("duid") or "").strip()
+        if not (did or duid):
+            return
+        record = self.runtime_credentials.resolve_device(did=did, duid=duid)
+        if not record:
+            return
+        local_key = str(record.get("localkey") or "").strip()
+        if not local_key:
+            # No minted key yet means the device has not reached /nc; nothing durable to persist.
+            return
+        model = str(
+            target.get("model")
+            or record.get("model")
+            or self.runtime_state.key_models_by_did().get(did)
+            or ""
+        ).strip()
+        name = str(record.get("name") or target.get("name") or "").strip()
+        if name == duid or name == did:
+            name = ""
+        try:
+            self._persist_discovered_device_to_inventory(
+                did=did or str(record.get("did") or "").strip(),
+                duid=duid or str(record.get("duid") or "").strip(),
+                name=name,
+                model=model,
+                product_id=str(record.get("product_id") or target.get("product_id") or "").strip(),
+                local_key=local_key,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.root_logger.warning("auto-persist onboarded device failed: %s", exc)
+
+    def _persist_discovered_device_to_inventory(
+        self,
+        *,
+        did: str,
+        duid: str,
+        name: str,
+        model: str,
+        product_id: str,
+        local_key: str,
+    ) -> bool:
+        inventory_id = (duid or did).strip()
+        if not inventory_id:
+            return False
+        inventory = _load_inventory(self.paths.inventory_path)
+        devices = inventory.get("devices")
+        if not isinstance(devices, list):
+            devices = []
+        identifiers = {value for value in (inventory_id, did, duid) if value}
+        meta = resolve_product_metadata(
+            model=model,
+            custom_name=name,
+            custom_registry_path=self.paths.runtime_dir / "product_registry.custom.json",
+        )
+        resolved_name = meta["product_name"]
+        resolved_model = meta["model"]
+        resolved_category = meta["category"]
+        resolved_product_id = product_id or meta["product_id"]
+        resolved_schema = meta["schema"]
+
+        for existing in devices:
+            if not isinstance(existing, dict):
+                continue
+            existing_ids = {
+                str(existing.get(key) or "").strip()
+                for key in ("duid", "did", "device_id", "deviceId")
+            }
+            if identifiers & existing_ids:
+                changed = False
+                if name and (not existing.get("name") or existing.get("name") in identifiers):
+                    existing["name"] = resolved_name
+                    changed = True
+                if not existing.get("product_name"):
+                    existing["product_name"] = resolved_name
+                    changed = True
+                if model and not existing.get("model"):
+                    existing["model"] = resolved_model
+                    changed = True
+                if not existing.get("schema"):
+                    existing["schema"] = resolved_schema
+                    changed = True
+                if not existing.get("category"):
+                    existing["category"] = resolved_category
+                    changed = True
+                if changed:
+                    self.paths.inventory_path.write_text(
+                        json.dumps(inventory, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                return False
+        # Unify the runtime-credentials record so its duid matches the inventory id while
+        # keeping the already-minted localKey. sync_inventory matches on duid only, so an
+        # unset duid would otherwise make it create a duplicate device with a fresh key.
+        self.runtime_credentials.ensure_device(
+            did=did,
+            duid=inventory_id,
+            name=resolved_name,
+            model=resolved_model,
+            product_id=resolved_product_id,
+            assign_localkey=False,
+        )
+        devices.append(
+            {
+                "duid": inventory_id,
+                "did": did,
+                "name": resolved_name,
+                "product_name": resolved_name,
+                "model": resolved_model,
+                "category": resolved_category,
+                "product_id": resolved_product_id,
+                "local_key": local_key,
+                "source": "onboarding",
+                "schema": resolved_schema,
+            }
+        )
+        inventory["devices"] = devices
+        if not isinstance(inventory.get("home"), dict):
+            inventory["home"] = {"name": "Local Home", "rooms": [{"id": 1, "name": "Living Room"}]}
+        self.paths.inventory_path.write_text(
+            json.dumps(inventory, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.root_logger.info(
+            "persisted onboarded 'new vacuum' to inventory: id=%s did=%s model=%s",
+            inventory_id,
+            did or "-",
+            model or "unknown",
+        )
+        return True
 
     def clear_onboarding_session(self, *, session_id: str) -> dict[str, Any]:
         snapshot = self.runtime_state.onboarding_session_snapshot()
