@@ -121,25 +121,42 @@ If you are setting up the Roborock integration for the first time:
 
 ### Existing Roborock Integration (Repointing from Cloud)
 
-If your Roborock integration is already installed and connected to the official Roborock cloud, you can switch it to your local server:
+If your Roborock integration is already installed and connected to the official Roborock cloud, Home Assistant does not support reconfiguring the integration's server URL or region in the UI. You have two options:
 
-#### Option 1: Reconfigure Flow (Recommended)
+#### Option 1: Remove and Re-add (Easiest, Clean Slate)
 
-1. In Home Assistant, navigate to **Settings** > **Devices & services** > **Roborock**.
-2. Select the three dots menu on the Roborock integration entry and choose **Reconfigure**.
-3. In the region selection dropdown, select **Manual**.
-4. Enter your custom local server URL (e.g. `https://api-roborock.example.com:555`).
-5. Enter your configured `protocol_login_email`.
-6. Enter your 6-digit `protocol_login_pin` as the verification code.
-7. Submit the flow to complete re-authentication against the local stack.
+If you do not mind re-adding the integration:
 
-#### Option 2: Remove and Re-add Flow
+1. In Home Assistant, open **Settings** > **Devices & services**.
+2. Find the **Roborock** integration, click the three dots menu, and select **Delete**.
+3. Click **Add Integration** and search for **Roborock**.
+4. In the region dropdown, select **Manual**.
+5. Enter your local server URL (e.g. `https://api-roborock.example.com:555`).
+6. Enter `protocol_login_email` and your 6-digit `protocol_login_pin` code.
 
-If the **Reconfigure** option does not prompt for region selection in your version of Home Assistant, or if stale cloud tokens persist:
+> [!NOTE]
+> Deleting the integration entry removes its entities and devices from Home Assistant. When re-added, entity IDs may need to be matched to your previous dashboard cards or automations.
 
-1. Remove the existing Roborock integration entry from **Settings** > **Devices & services**.
-2. Click **Add Integration** and search for **Roborock**.
-3. Follow the [New Integration Setup](#new-integration-setup-first-time-setup) instructions above using **Manual** region, your local server URL, `protocol_login_email`, and `protocol_login_pin`.
+#### Option 2: Edit `core.config_entries` (Preserves Entity IDs, Dashboards & History)
+
+If you have existing automations, dashboards, and entity customizations that you want to preserve without deleting the integration, you must update the URLs in Home Assistant's configuration entries file:
+
+> [!WARNING]
+> Manually editing `.storage/core.config_entries` carries risk if edited incorrectly while Home Assistant is running. **Always take a backup of Home Assistant before modifying files in `.storage`.**
+
+1. Ensure the local stack is running and has completed a cloud import snapshot from the same Roborock account used by Home Assistant.
+2. Disable the Roborock integration in Home Assistant (or stop Home Assistant completely). Home Assistant writes to `.storage/core.config_entries` periodically while running, so ensure the integration is stopped before editing.
+3. Make a backup copy of `/config/.storage/core.config_entries`.
+4. Open `/config/.storage/core.config_entries` in a text editor and locate the Roborock entry (`"domain": "roborock"`).
+5. Update the endpoints to point to your local stack:
+   - `base_url` -> `https://api-roborock.example.com:555`
+   - `"a"` -> `https://api-roborock.example.com:555`
+   - `"l"` -> `https://api-roborock.example.com:555`
+   - `"m"` -> `ssl://api-roborock.example.com:8881`
+   - `username` -> configured `protocol_login_email`
+   *(If you customized `https_port` or `mqtt_tls_port`, use those port numbers instead.)*
+6. Save the file and restart Home Assistant.
+7. Re-enable the Roborock integration. If prompted to re-authenticate, enter your 6-digit `protocol_login_pin` as the code.
 
 ### Troubleshooting
 
@@ -153,27 +170,8 @@ rejected MQTT CONNECT reason=invalid_mqtt_credentials
 
 If you see this message:
 - Ensure the local server has a cloud import snapshot from the same Roborock account used in Home Assistant.
-- Re-run **Reconfigure** (or remove and re-add the integration) using `protocol_login_email` and `protocol_login_pin` so Home Assistant fetches updated MQTT credentials from your local server.
-
-#### Legacy Versions: Manual File Edit Fallback
-
-> [!WARNING]
-> Manually editing `.storage/core.config_entries` is dangerous and can corrupt your Home Assistant installation. Only use this fallback method if you are running an older Home Assistant version that lacks the native `Region: Manual` flow. **Always create a full backup of Home Assistant before modifying files in `.storage`.**
-
-On older versions of Home Assistant without `Region: Manual`:
-
-1. Disable the Roborock integration in Home Assistant.
-2. Ensure Home Assistant is stopped (or the integration is completely stopped), as Home Assistant rewrites `.storage/core.config_entries` while running.
-3. Make a backup copy of `/config/.storage/core.config_entries`.
-4. Open `/config/.storage/core.config_entries` and locate the Roborock entry. Replace the endpoint values with your local stack URLs:
-   - `username` -> configured `protocol_login_email`
-   - `base_url` -> `https://api-roborock.example.com:555`
-   - `"a"` -> `https://api-roborock.example.com:555`
-   - `"l"` -> `https://api-roborock.example.com:555`
-   - `"m"` -> `ssl://api-roborock.example.com:8881`
-   *(If you customized `https_port` or `mqtt_tls_port`, use those values instead.)*
-5. Save the file and restart Home Assistant.
-6. Enable the Roborock integration, trigger **Reconfigure**, and complete the login with `protocol_login_email` and `protocol_login_pin`.
+- Ensure `base_url`, `rriot.r.a`, `rriot.r.l`, and `rriot.r.m` all point to your local stack.
+- Trigger reauth in Home Assistant and enter `protocol_login_pin` so Home Assistant fetches updated MQTT credentials from your local server.
 
 ## Related Docs
 

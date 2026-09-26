@@ -35,13 +35,10 @@ After the dashboard opens:
 The Roborock Home Assistant integration supports a native configuration flow with custom server support:
 
 1. In Home Assistant, go to **Settings** > **Devices & services**.
-2. Add the **Roborock** integration (or select **Reconfigure** on an existing Roborock integration).
-3. In the region dropdown, select **Manual**.
-4. Enter your custom local server URL (e.g. `https://api-roborock.example.com:555`).
-5. Enter your configured `protocol_login_email`.
-6. Enter your 6-digit `protocol_login_pin` as the verification code.
+2. If setting up freshly: Add the **Roborock** integration, select **Manual** in the region dropdown, and enter your local server URL (e.g. `https://api-roborock.example.com:555`).
+3. Enter your configured `protocol_login_email` and your 6-digit `protocol_login_pin` as the code.
 
-If you previously connected the integration to the official cloud, use **Reconfigure** (or remove and re-add the integration) with the `Manual` region flow. There is no longer any need to manually edit `.storage/core.config_entries`.
+For existing cloud integrations, Home Assistant does not support changing the server URL via UI. You can either delete and re-add the integration using the **Manual** region flow, or edit `/config/.storage/core.config_entries` while Home Assistant is stopped to repoint the endpoints while preserving entity IDs. See `docs/home_assistant.md` for details.
 
 ## Notes
 
