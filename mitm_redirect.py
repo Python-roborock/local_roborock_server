@@ -694,7 +694,17 @@ if __name__ == "__main__":
         args.local_api,
         fallback_port=DEFAULT_LOCAL_API_PORT,
     )
+    # Preserve an explicit API port in the value passed to the mitmproxy addon.
+    # This prevents an explicitly supplied :443 from being lost and later
+    # falling back to DEFAULT_LOCAL_API_PORT (555) inside the addon.
     local_api = _format_authority(local_api_host, local_api_port)
+
+    # For direct HTTPS requests made by this launcher (preflight), normalize
+    # the standard HTTPS port out of the URL authority. This still connects to
+    # TCP 443, but avoids sending an explicit Host: hostname:443 header, which
+    # can trigger HAProxy routing quirks in some configurations.
+    local_api_http = _format_authority(local_api_host, local_api_port, default_port=443)
+
     local_mqtt_host, local_mqtt_port = _parse_endpoint(
         args.local_mqtt or "",
         fallback_host=local_api_host,
@@ -725,11 +735,11 @@ if __name__ == "__main__":
 
     if local_sync_secret:
         try:
-            _preflight_sync_endpoint(local_api, local_sync_secret)
+            _preflight_sync_endpoint(local_api_http, local_sync_secret)
         except SyncEndpointError as exc:
             print(f"[SYNC] refusing to start mitmweb: {exc}", file=sys.stderr)
             sys.exit(2)
-        print(f"[SYNC] verified protocol auth sync endpoint via {_sync_callback_url(local_api)}")
+        print(f"[SYNC] verified protocol auth sync endpoint via {_sync_callback_url(local_api_http)}")
     else:
         print("[SYNC] protocol auth session sync disabled: no sync secret configured")
 
