@@ -1493,9 +1493,15 @@ class ReleaseSupervisor:
     def remove_protocol_session(self, *, hawk_id: str, hawk_session: str) -> bool:
         return self.protocol_auth.remove_session(hawk_id=hawk_id, hawk_session=hawk_session)
 
-    def start_onboarding_session(self, *, duid: str) -> dict[str, Any]:
+    def start_onboarding_session(self, *, duid: str = "", new_vacuum: bool = False) -> dict[str, Any]:
         if not self.new_connections_enabled():
             raise ValueError("New connections are disabled.")
+        if new_vacuum:
+            # Blind session for a vacuum that has never been on the cloud and therefore
+            # has no inventory entry to select. The session adopts the did/duid from the
+            # vacuum's own /region + /nc traffic, and the device is auto-persisted to
+            # inventory once it registers (see _maybe_persist_onboarded_device).
+            return self.runtime_state.start_onboarding_session()
         normalized_duid = str(duid or "").strip()
         if not normalized_duid:
             raise ValueError("duid is required")
@@ -1516,7 +1522,105 @@ class ReleaseSupervisor:
             raise KeyError(normalized_session_id)
         if normalized_session_id and snapshot.get("session_id") != normalized_session_id:
             raise KeyError(normalized_session_id)
+        self._maybe_persist_onboarded_device(snapshot)
         return snapshot
+
+    def _maybe_persist_onboarded_device(self, snapshot: dict[str, Any]) -> None:
+        """Auto-persist a blind-onboarded ("new vacuum") device into inventory.
+
+        A vacuum that was never on the cloud has no inventory entry, so Home
+        Assistant's home_data would never list it. Once the device has reached
+        /nc (and therefore has a server-minted localKey in runtime_credentials),
+        write a matching inventory entry so HA can see and control it. Idempotent.
+        """
+        if not isinstance(snapshot, dict) or not snapshot.get("active"):
+            return
+        if str(snapshot.get("identity_conflict") or "").strip() or bool(snapshot.get("unsupported")):
+            return
+        target = snapshot.get("target") if isinstance(snapshot.get("target"), dict) else {}
+        did = str(target.get("did") or "").strip()
+        duid = str(target.get("duid") or "").strip()
+        if not (did or duid):
+            return
+        record = self.runtime_credentials.resolve_device(did=did, duid=duid)
+        if not record:
+            return
+        local_key = str(record.get("localkey") or "").strip()
+        if not local_key:
+            # No minted key yet means the device has not reached /nc; nothing durable to persist.
+            return
+        try:
+            self._persist_discovered_device_to_inventory(
+                did=did or str(record.get("did") or "").strip(),
+                duid=duid or str(record.get("duid") or "").strip(),
+                name=str(record.get("name") or target.get("name") or "").strip(),
+                model=str(record.get("model") or "").strip(),
+                product_id=str(record.get("product_id") or "").strip(),
+                local_key=local_key,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.root_logger.warning("auto-persist onboarded device failed: %s", exc)
+
+    def _persist_discovered_device_to_inventory(
+        self,
+        *,
+        did: str,
+        duid: str,
+        name: str,
+        model: str,
+        product_id: str,
+        local_key: str,
+    ) -> bool:
+        inventory_id = (duid or did).strip()
+        if not inventory_id:
+            return False
+        inventory = _load_inventory(self.paths.inventory_path)
+        devices = inventory.get("devices")
+        if not isinstance(devices, list):
+            devices = []
+        identifiers = {value for value in (inventory_id, did, duid) if value}
+        for existing in devices:
+            if not isinstance(existing, dict):
+                continue
+            existing_ids = {
+                str(existing.get(key) or "").strip()
+                for key in ("duid", "did", "device_id", "deviceId")
+            }
+            if identifiers & existing_ids:
+                return False
+        # Unify the runtime-credentials record so its duid matches the inventory id while
+        # keeping the already-minted localKey. sync_inventory matches on duid only, so an
+        # unset duid would otherwise make it create a duplicate device with a fresh key.
+        self.runtime_credentials.ensure_device(
+            did=did,
+            duid=inventory_id,
+            name=name,
+            model=model,
+            product_id=product_id,
+            assign_localkey=False,
+        )
+        devices.append(
+            {
+                "duid": inventory_id,
+                "did": did,
+                "name": name or inventory_id,
+                "model": model,
+                "product_id": product_id,
+                "local_key": local_key,
+                "source": "onboarding",
+            }
+        )
+        inventory["devices"] = devices
+        if not isinstance(inventory.get("home"), dict):
+            inventory["home"] = {"name": "Local Home", "rooms": [{"id": 1, "name": "Living Room"}]}
+        self.paths.inventory_path.write_text(
+            json.dumps(inventory, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.root_logger.info(
+            "persisted onboarded 'new vacuum' to inventory: id=%s did=%s", inventory_id, did or "-"
+        )
+        return True
 
     def clear_onboarding_session(self, *, session_id: str) -> dict[str, Any]:
         snapshot = self.runtime_state.onboarding_session_snapshot()

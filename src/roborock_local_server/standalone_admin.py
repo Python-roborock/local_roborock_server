@@ -409,8 +409,9 @@ def register_standalone_admin_routes(
         except json.JSONDecodeError:
             body = {}
         duid = str((body or {}).get("duid") or "").strip()
+        new_vacuum = bool((body or {}).get("new_vacuum"))
         try:
-            payload = supervisor.start_onboarding_session(duid=duid)
+            payload = supervisor.start_onboarding_session(duid=duid, new_vacuum=new_vacuum)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except KeyError:

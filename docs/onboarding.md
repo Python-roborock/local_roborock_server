@@ -46,6 +46,19 @@ The guided CLI will:
 
 You do not need to watch the admin dashboard manually during the loop anymore.
 
+## Onboarding A Vacuum That Was Never On The Cloud
+
+Normally you finish the cloud import/fetch-data step first so the server knows which vacuum to target. A brand new vacuum that has **never** been added to the Roborock cloud has no inventory entry, so it will not appear in the known-vacuum list.
+
+For that case, both the CLI and the GUI offer a **New vacuum** option in the vacuum-selection step:
+
+- In the CLI it is listed one past the known vacuums (or type `new`).
+- In the GUI it is a **New vacuum** button shown below any imported devices.
+
+Selecting it starts a "blind" onboarding session: instead of targeting a known device, the server adopts whatever vacuum identity (`did`) shows up in the onboarding traffic. The vacuum presents its own `did`; the server mints the `localKey`. Once the vacuum reaches NC Prepare and registers, the server **auto-adds it to the inventory**, so it then shows up like any other device and Home Assistant's device list can see it.
+
+Everything else in the flow is identical: you still reset the vacuum Wi-Fi, send the onboarding packet, and reconnect. Both V1 and V2 vacuums are supported.
+
 ## Prompts And Defaults
 
 The only required CLI flag is `--server`. The script will prompt for anything missing:

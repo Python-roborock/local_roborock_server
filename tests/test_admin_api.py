@@ -704,6 +704,49 @@ def test_region_v2_request_keeps_onboarding_in_progress(tmp_path: Path) -> None:
     assert session.json()["complete"] is False
 
 
+def test_new_vacuum_blind_session_autopersists_to_inventory(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    # Never-on-cloud scenario: empty inventory, no runtime credentials seeded.
+    paths.inventory_path.write_text(json.dumps({"devices": []}) + "\n", encoding="utf-8")
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+
+    # Start a blind "new vacuum" session with no known target.
+    session = supervisor.start_onboarding_session(new_vacuum=True)
+    session_id = session["session_id"]
+    assert session["active"] is True
+    assert session["target"]["did"] == ""
+
+    client = TestClient(supervisor.app)
+    # The vacuum presents its own did and walks the supported (v1) bootstrap: /region then /nc.
+    assert client.get("/region?did=1103835404427&pid=roborock.vacuum.a117").status_code == 200
+    assert client.get("/nc?did=1103835404427&pid=roborock.vacuum.a117").status_code == 200
+
+    # Polling the session adopts the did and auto-persists the device to inventory.
+    snapshot = supervisor.onboarding_session_snapshot(session_id=session_id)
+    assert snapshot["target"]["did"] == "1103835404427"
+
+    inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    [persisted] = inventory["devices"]
+    assert persisted["duid"] == "1103835404427"
+    assert persisted["did"] == "1103835404427"
+    assert persisted["source"] == "onboarding"
+    assert persisted["local_key"]
+
+    # The persisted localKey is the server-minted one handed to the vacuum via /nc.
+    record = supervisor.runtime_credentials.resolve_device(did="1103835404427")
+    assert record is not None
+    assert persisted["local_key"] == record["localkey"]
+
+    # Idempotent: polling again must not add a duplicate inventory entry.
+    supervisor.onboarding_session_snapshot(session_id=session_id)
+    inventory_again = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    assert len(inventory_again["devices"]) == 1
+
+
 def test_core_only_mode_disables_standalone_admin_routes(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)

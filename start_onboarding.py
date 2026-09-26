@@ -316,8 +316,12 @@ class RemoteOnboardingApi:
         devices = payload.get("devices")
         return list(devices) if isinstance(devices, list) else []
 
-    def start_session(self, *, duid: str) -> dict[str, Any]:
-        return self._request_json("POST", "/admin/api/onboarding/sessions", payload={"duid": duid})
+    def start_session(self, *, duid: str = "", new_vacuum: bool = False) -> dict[str, Any]:
+        return self._request_json(
+            "POST",
+            "/admin/api/onboarding/sessions",
+            payload={"duid": duid, "new_vacuum": new_vacuum},
+        )
 
     def get_session(self, *, session_id: str) -> dict[str, Any]:
         return self._request_json("GET", f"/admin/api/onboarding/sessions/{parse.quote(session_id, safe='')}")
@@ -497,13 +501,16 @@ def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout) ->
         sock.close()
 
 
+def _new_vacuum_choice() -> dict[str, Any]:
+    return {"new_vacuum": True, "duid": "", "name": "New vacuum"}
+
+
 def choose_device(devices: list[dict[str, Any]], *, output: TextIO) -> dict[str, Any] | None:
     if not devices:
         output.write(
-            "No known vacuums are available for onboarding. "
-            "Finish the cloud import/fetch-data step first, then retry.\n"
+            "No vacuums are in the inventory yet (none imported from the cloud).\n"
+            "If this vacuum has never been on the cloud, choose 'New vacuum' below.\n"
         )
-        return None
 
     name_counts: dict[str, int] = {}
     for device in devices:
@@ -516,13 +523,21 @@ def choose_device(devices: list[dict[str, Any]], *, output: TextIO) -> dict[str,
             key = str(device.get("name") or device.get("duid") or "").strip().lower()
             disambiguator = str(device.get("duid") or "") if name_counts.get(key, 0) > 1 else ""
             output.write(f"  {index}. {format_device_label(device, disambiguator=disambiguator)}\n")
-        raw = input("Select a vacuum by number, or type 'quit': ").strip().lower()
+        new_vacuum_index = len(devices) + 1
+        output.write(
+            f"  {new_vacuum_index}. New vacuum (never on the cloud / not yet in inventory)\n"
+        )
+        raw = input("Select a vacuum by number, type 'new', or 'quit': ").strip().lower()
         if raw == "quit":
             return None
+        if raw in ("new", "n"):
+            return _new_vacuum_choice()
         if raw.isdigit():
             index = int(raw)
             if 1 <= index <= len(devices):
                 return devices[index - 1]
+            if index == new_vacuum_index:
+                return _new_vacuum_choice()
         output.write("Please enter a valid number.\n")
 
 
@@ -602,7 +617,14 @@ def run_guided_onboarding(
         if selected is None:
             return 0
 
-        session = api.start_session(duid=str(selected.get("duid") or ""))
+        if selected.get("new_vacuum"):
+            output.write(
+                "Starting a session for a new vacuum. The server will adopt it from its own "
+                "onboarding traffic and add it to the inventory once it registers.\n"
+            )
+            session = api.start_session(new_vacuum=True)
+        else:
+            session = api.start_session(duid=str(selected.get("duid") or ""))
         session_id = str(session.get("session_id") or "").strip()
         if not session_id:
             raise RuntimeError("Server did not return an onboarding session id.")

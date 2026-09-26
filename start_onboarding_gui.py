@@ -318,8 +318,12 @@ class RemoteOnboardingApi:
         devices = payload.get("devices")
         return list(devices) if isinstance(devices, list) else []
 
-    def start_session(self, *, duid: str) -> dict[str, Any]:
-        return self._request_json("POST", "/admin/api/onboarding/sessions", payload={"duid": duid})
+    def start_session(self, *, duid: str = "", new_vacuum: bool = False) -> dict[str, Any]:
+        return self._request_json(
+            "POST",
+            "/admin/api/onboarding/sessions",
+            payload={"duid": duid, "new_vacuum": new_vacuum},
+        )
 
     def get_session(self, *, session_id: str) -> dict[str, Any]:
         return self._request_json("GET", f"/admin/api/onboarding/sessions/{parse.quote(session_id, safe='')}")
@@ -674,12 +678,16 @@ def _run_onboarding_for_device(
         config: GuidedOnboardingConfig,
         device: dict[str, Any],
 ) -> None:
+    is_new_vacuum = bool(device.get("new_vacuum"))
     duid = str(device.get("duid") or "")
-    name = str(device.get("name") or duid or "vacuum")
-    _log.info(f"Starting session for {name} ({duid})")
+    name = str(device.get("name") or duid or ("New vacuum" if is_new_vacuum else "vacuum"))
+    _log.info(f"Starting session for {name} ({duid or 'new vacuum'})")
 
     try:
-        session = api.start_session(duid=duid)
+        if is_new_vacuum:
+            session = api.start_session(new_vacuum=True)
+        else:
+            session = api.start_session(duid=duid)
     except Exception as exc:  # noqa: BLE001
         _log.err(f"Failed to start session: {exc}")
         _set_phase("error", error_message=str(exc), target={"name": name, "duid": duid})
@@ -871,7 +879,10 @@ def _run_device_loop(api: RemoteOnboardingApi, config: GuidedOnboardingConfig) -
             continue
 
         duid = str(payload.get("duid") or "")
-        selected = next((d for d in devices if str(d.get("duid") or "") == duid), None)
+        if duid == "__new__":
+            selected: dict[str, Any] | None = {"new_vacuum": True, "name": "New vacuum", "duid": ""}
+        else:
+            selected = next((d for d in devices if str(d.get("duid") or "") == duid), None)
         if selected is None:
             _log.err(f"Unknown duid {duid}")
             continue
