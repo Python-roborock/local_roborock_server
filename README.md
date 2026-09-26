@@ -58,7 +58,7 @@ Additional docs:
 - [Known limitations](docs/known_limitations.md)
 - [Tested vacuums](docs/tested_vacuums.md)
 - [Home Assistant](docs/home_assistant.md) for the add-on install path and Home Assistant integration rewiring
-- [Using the Roborock App](docs/roborock_app.md)
+- [Mobile App Options](docs/roborock_app.md)
 - [Updating](docs/updating.md)
 - [Custom MQTT](docs/custom_mqtt.md)
 - [Custom certificate management](docs/custom_cert_management.md)

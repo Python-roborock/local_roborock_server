@@ -147,4 +147,4 @@ Everything in "What To Expect" above still applies. Some vacuums need 2-4 cycles
 - [Installation](installation.md)
 - [Tested vacuums](tested_vacuums.md)
 - [Home Assistant](home_assistant.md)
-- [Using the Roborock App](roborock_app.md)
+- [Mobile App Options](roborock_app.md)

@@ -65,4 +65,4 @@ If your model is not listed, start with ZeroSSL unless it is an older model that
 
 - [Installation](installation.md)
 - [Onboarding](onboarding.md)
-- [Using the Roborock App](roborock_app.md)
+- [Mobile App Options](roborock_app.md)
