@@ -22,6 +22,7 @@ from python_multipart.exceptions import MultipartParseError
 import uvicorn
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from .b01_bootstrap import build_response as build_b01_response, canonical_path as b01_path
 from .certs import CertificateManager
 from .bundled_backend.shared.data_helpers import utcnow_iso
 from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIRED_ONBOARDING_STEPS
@@ -939,6 +940,7 @@ class ReleaseSupervisor:
         logger = self.context.loggers.get(group, self.context.loggers["unknown"])
         raw_body = await request.body()
         clean_path = strip_roborock_prefix(request.url.path)
+        is_b01_bootstrap = b01_path(clean_path) is not None
         query_params = _request_query_params(request)
         body_text, body_params = await _request_body_params(request, raw_body)
         body_sha256 = hashlib.sha256(raw_body).hexdigest()
@@ -964,7 +966,7 @@ class ReleaseSupervisor:
 
         query_sample_added = False
         header_sample_added = False
-        if key_cache is not None and key_capture_did:
+        if key_cache is not None and key_capture_did and not is_b01_bootstrap:
             if request.url.query:
                 try:
                     query_sample_added = key_cache.add_signed_query(key_capture_did, request.url.query)
@@ -999,7 +1001,7 @@ class ReleaseSupervisor:
                     logger.warning("key_cache add_header_signature failed did=%s: %s", key_capture_did, exc)
 
         raw_path = request.url.path
-        if request.url.query:
+        if request.url.query and not is_b01_bootstrap:
             raw_path += f"?{request.url.query}"
         client_host = request.client.host if request.client else "-"
         client_port = request.client.port if request.client else 0
@@ -1022,11 +1024,16 @@ class ReleaseSupervisor:
             entry["did"] = explicit_did
         if explicit_pid:
             entry["pid"] = explicit_pid
-        if is_protocol_sync_request:
+        if is_b01_bootstrap:
+            # Activation tokens and nonces are unnecessary for the diagnostic log.
+            entry["raw_path"] = request.url.path
+            entry["query"] = {"d": [explicit_did], "m": [explicit_pid]}
+            entry["headers"] = {"host": host, "content-type": request.headers.get("content-type", "")}
+        if is_protocol_sync_request or is_b01_bootstrap:
             entry["body_redacted"] = True
         else:
             entry["body_b64"] = base64.b64encode(raw_body).decode("ascii")
-        if body_text and not is_protocol_sync_request:
+        if body_text and not is_protocol_sync_request and not is_b01_bootstrap:
             entry["body_text"] = body_text
             try:
                 entry["body_json"] = json.loads(body_text)
@@ -1298,14 +1305,26 @@ class ReleaseSupervisor:
             )
             return response
 
-        route_name, response_payload = resolve_route(
-            rules=self.endpoint_rules,
-            context=self.context,
-            clean_path=clean_path,
-            query_params=query_params,
-            body_params=body_params,
-            method=request.method,
-        )
+        status_code = 200
+        if is_b01_bootstrap:
+            route_name, status_code, response_payload = build_b01_response(
+                ctx=self.context,
+                state_file=self.paths.state_dir / "b01_devices.json",
+                path=clean_path,
+                method=request.method,
+                query=request.url.query,
+                body=raw_body,
+                headers=request.headers,
+            )
+        else:
+            route_name, response_payload = resolve_route(
+                rules=self.endpoint_rules,
+                context=self.context,
+                clean_path=clean_path,
+                query_params=query_params,
+                body_params=body_params,
+                method=request.method,
+            )
         entry["route"] = route_name
         entry["response_json"] = response_payload
         try:
@@ -1324,7 +1343,7 @@ class ReleaseSupervisor:
         except Exception as exc:  # noqa: BLE001
             logger.warning("runtime_state record_http_event failed: %s", exc)
         append_jsonl(self.context.http_jsonl, entry)
-        if key_cache is not None and key_capture_did:
+        if key_cache is not None and key_capture_did and not is_b01_bootstrap:
             try:
                 key_cache.maybe_recover_async(key_capture_did)
             except Exception as exc:  # noqa: BLE001
@@ -1338,7 +1357,7 @@ class ReleaseSupervisor:
             route_name,
             body_sha256[:16],
         )
-        return JSONResponse(response_payload)
+        return JSONResponse(response_payload, status_code=status_code)
 
     def _status_payload(self) -> dict[str, Any]:
         health = self.runtime_state.health_snapshot()
