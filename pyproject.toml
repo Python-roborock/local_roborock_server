@@ -1,6 +1,6 @@
 [project]
 name = "roborock-local-server"
-version = "1.0.2"
+version = "1.1.0"
 description = "private local Roborock server stack."
 requires-python = ">=3.11,<3.14"
 readme = "README.md"
@@ -12,6 +12,7 @@ dependencies = [
   "gmpy2>=2.3,<3",
   "pycryptodome>=3.20,<4",
   "python-roborock==4.20.0",
+  "python-multipart>=0.0.32,<0.1",
   "uvicorn>=0.30,<1",
 ]
 

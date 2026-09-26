@@ -126,9 +126,9 @@ jobs:
           flavor: latest=false
           tags: |
             type=semver,pattern={{version}},value=${{ github.event.release.tag_name }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ github.event.release.tag_name }}
-            type=semver,pattern={{major}},value=${{ github.event.release.tag_name }}
-            type=raw,value=latest,enable=${{ startsWith(github.event.release.tag_name, 'v') && !contains(github.event.release.tag_name, '-') }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ github.event.release.tag_name }},enable=${{ !github.event.release.prerelease && !contains(github.event.release.tag_name, '-') }}
+            type=semver,pattern={{major}},value=${{ github.event.release.tag_name }},enable=${{ !github.event.release.prerelease && !contains(github.event.release.tag_name, '-') }}
+            type=raw,value=latest,enable=${{ !github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v') && !contains(github.event.release.tag_name, '-') }}
             type=sha,prefix=sha-
           labels: |
             org.opencontainers.image.title=roborock-local-server
