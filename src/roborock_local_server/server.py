@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from python_multipart.exceptions import MultipartParseError
 import uvicorn
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .certs import CertificateManager
 from .bundled_backend.shared.data_helpers import utcnow_iso
@@ -122,35 +123,6 @@ def _pick_first_header(headers: dict[str, str], keys: tuple[str, ...]) -> str:
     return ""
 
 
-def _extract_client_host_port(request: Request, headers: dict[str, str]) -> tuple[str, int]:
-    client_host = request.client.host if request.client else "-"
-    client_port = request.client.port if request.client else 0
-    forwarded_for = _pick_first_header(
-        headers,
-        ("x-forwarded-for", "x_forwarded_for", "X-Forwarded-For"),
-    )
-    if not forwarded_for and hasattr(request, "headers"):
-        forwarded_for = str(request.headers.get("x-forwarded-for") or "").strip()
-    if forwarded_for:
-        raw_first = forwarded_for.split(",")[0].strip()
-        if raw_first:
-            if raw_first.startswith("[") and "]:" in raw_first:
-                host_part, port_str = raw_first[1:].split("]:", 1)
-                client_host = host_part.strip()
-                if port_str.isdigit():
-                    client_port = int(port_str)
-            elif raw_first.count(":") == 1:
-                host_part, port_str = raw_first.split(":", 1)
-                if port_str.isdigit():
-                    client_host = host_part.strip()
-                    client_port = int(port_str)
-                else:
-                    client_host = raw_first
-            else:
-                client_host = raw_first
-    return client_host, client_port
-
-
 def _request_json_object(body_params: dict[str, list[str]]) -> dict[str, Any]:
     for raw in body_params.get("__json") or []:
         try:
@@ -238,6 +210,8 @@ class ManagedFastApiServer:
             "port": self._port,
             "log_level": "warning",
             "access_log": False,
+            # X-Forwarded-For is applied by the app's own middleware, scoped to network.trusted_proxies.
+            "proxy_headers": False,
         }
         if self._tls_enabled:
             if self._cert_file is None or self._key_file is None:
@@ -397,6 +371,7 @@ class ReleaseSupervisor:
             log_dir=self.paths.runtime_dir,
             key_state_file=self.paths.device_key_state_path,
             runtime_credentials=self.runtime_credentials,
+            trusted_proxies=self.config.network.trusted_proxies,
         )
         self.runtime_state.set_service(
             "https_server",
@@ -1026,7 +1001,10 @@ class ReleaseSupervisor:
         raw_path = request.url.path
         if request.url.query:
             raw_path += f"?{request.url.query}"
-        client_host, client_port = _extract_client_host_port(request, request_headers)
+        client_host = request.client.host if request.client else "-"
+        client_port = request.client.port if request.client else 0
+        if ":" in client_host:
+            client_host = f"[{client_host}]"
         entry: dict[str, object] = {
             "time": utcnow_iso(),
             "server": group,
@@ -1625,6 +1603,7 @@ class ReleaseSupervisor:
 
     def _create_app(self) -> FastAPI:
         app = FastAPI(title="Roborock Local Server", docs_url=None, redoc_url=None, openapi_url=None)
+        app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=list(self.config.network.trusted_proxies))
         if self.enable_standalone_admin:
             register_standalone_admin_routes(
                 app=app,

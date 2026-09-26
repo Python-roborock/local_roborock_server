@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 from collections import deque
+from collections.abc import Iterable
 from datetime import datetime, timezone
+import ipaddress
 import json
 import logging
 from pathlib import Path
@@ -48,6 +50,23 @@ def _extract_ip(remote: str | None) -> str:
     return stripped
 
 
+def _parse_ip_networks(entries: Iterable[str]) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    networks = []
+    for entry in entries:
+        text = str(entry or "").strip()
+        if text:
+            networks.append(ipaddress.ip_network(text, strict=False))
+    return tuple(networks)
+
+
+def _ip_in_networks(ip: str, networks: Iterable[ipaddress.IPv4Network | ipaddress.IPv6Network]) -> bool:
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(address in network for network in networks)
+
+
 def _parse_iso(value: str | None) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
@@ -86,10 +105,12 @@ class RuntimeState:
         log_dir: Path,
         key_state_file: Path | None,
         runtime_credentials: RuntimeCredentialsStore | None = None,
+        trusted_proxies: Iterable[str] = (),
     ) -> None:
         self.log_dir = log_dir
         self.key_state_file = key_state_file
         self.runtime_credentials = runtime_credentials
+        self._trusted_proxy_networks = _parse_ip_networks(trusted_proxies)
 
         self._lock = threading.RLock()
         self._services: dict[str, dict[str, Any]] = {}
@@ -449,6 +470,13 @@ class RuntimeState:
             if not str(session.get("region_at") or "").strip() or not str(session.get("nc_at") or "").strip():
                 return None
             target_ip = str(session.get("target_ip") or "").strip()
+            if not target_ip:
+                return None
+            if target_ip != normalized_ip:
+                # A stream proxy / SNAT hides the vacuum's real address on the MQTT side, so
+                # only a connection arriving from a configured trusted proxy may skip the match.
+                if not _ip_in_networks(normalized_ip, self._trusted_proxy_networks):
+                    return None
             target_did = str(session.get("target_did") or "").strip()
             target_duid = str(session.get("target_duid") or "").strip()
             if not target_did:
@@ -456,9 +484,9 @@ class RuntimeState:
             key_state = self._session_key_state_locked(target_did, target_duid)
             if not bool(key_state.get("has_modulus")):
                 return None
-            if target_ip and target_ip != normalized_ip:
-                logger.info(
-                    "Onboarding MQTT client IP %s differs from HTTP target_ip %s (reverse proxy / NAT); accepting candidate did=%s",
+            if target_ip != normalized_ip:
+                logger.warning(
+                    "Onboarding MQTT client IP %s (trusted proxy) differs from HTTP target_ip %s; accepting candidate did=%s",
                     normalized_ip,
                     target_ip,
                     target_did,
