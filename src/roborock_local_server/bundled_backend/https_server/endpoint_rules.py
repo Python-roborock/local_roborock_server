@@ -7,7 +7,7 @@ import re
 import time
 from typing import Any, Callable, Sequence
 
-from shared.constants import DEFAULT_HOME_NAME, DEFAULT_TIMEZONE, MODEL_PRODUCT_ID_OVERRIDES
+from shared.constants import DEFAULT_HOME_NAME, DEFAULT_PRODUCT_SCHEMA, DEFAULT_TIMEZONE, MODEL_PRODUCT_ID_OVERRIDES
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, as_int, default_home_id, default_product_name, get_value, stable_int
 from shared.http_helpers import wrap_response
@@ -351,8 +351,10 @@ def _normalize_devices(
             if capability is not None:
                 product["capability"] = capability
             schema = get_value(raw_item, "schema")
-            if isinstance(schema, list):
+            if isinstance(schema, list) and schema:
                 product["schema"] = schema
+            elif get_value(raw_item, "source") == "onboarding":
+                product["schema"] = DEFAULT_PRODUCT_SCHEMA
             products_by_id[product_id] = product
     return devices, list(products_by_id.values())
 

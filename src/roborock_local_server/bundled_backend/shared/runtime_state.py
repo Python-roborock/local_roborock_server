@@ -170,10 +170,14 @@ class RuntimeState:
         remote: str,
         did: str | None,
         pid: str | None = None,
+        model: str | None = None,
         region_version: str | None = None,
     ) -> None:
         ip = _extract_ip(remote)
         normalized_pid = (pid or "").strip()
+        normalized_model = (model or "").strip()
+        if not normalized_model and normalized_pid.startswith("roborock."):
+            normalized_model = normalized_pid
         normalized_region_version = (region_version or "").strip().lower()
         step_name = route_name if route_name in _TRACKED_ONBOARDING_STEPS else None
         with self._lock:
@@ -199,6 +203,8 @@ class RuntimeState:
                 "did": resolved_did or did,
                 "pid": normalized_pid,
             }
+            if normalized_model:
+                event["model"] = normalized_model
             if normalized_region_version:
                 event["region_version"] = normalized_region_version
             if storage_id and storage_id != resolved_did:
@@ -230,6 +236,8 @@ class RuntimeState:
                     vac["last_ip"] = ip
                 if route_name == "region" and normalized_region_version:
                     vac["last_region_version"] = normalized_region_version
+                if normalized_model and not vac.get("model"):
+                    vac["model"] = normalized_model
                 vac["last_http_at"] = event_time
                 vac["last_http_route"] = route_name
                 vac["last_http_path"] = clean_path
@@ -243,6 +251,7 @@ class RuntimeState:
                 route_name=route_name,
                 identifier=resolved_did or (did or "").strip(),
                 remote_ip=ip,
+                model=normalized_model,
             )
 
     def record_mqtt_connection(self, *, conn_id: str, client_ip: str, client_port: int) -> None:
@@ -383,6 +392,7 @@ class RuntimeState:
         target_duid: str = "",
         target_name: str = "",
         target_did: str = "",
+        target_model: str = "",
     ) -> dict[str, Any]:
         with self._lock:
             now = utcnow_iso()
@@ -397,6 +407,7 @@ class RuntimeState:
                 "connected_at": "",
                 "target_did": str(target_did or "").strip(),
                 "target_duid": str(target_duid or "").strip(),
+                "target_model": str(target_model or "").strip(),
                 "target_ip": "",
                 "selected_name": str(target_name or "").strip(),
                 "identity_conflict": "",
@@ -692,6 +703,12 @@ class RuntimeState:
             or best_duid
             or best_did
         )
+        best_model = (
+            str(session.get("target_model") or "").strip()
+            or str((selected_vac or {}).get("model") or "").strip()
+            or str((observed_vac or {}).get("model") or "").strip()
+            or str(self.key_models_by_did().get(best_did) or "").strip()
+        )
         last_ip = (
             str(session.get("target_ip") or "").strip()
             or str((selected_vac or {}).get("last_ip") or "").strip()
@@ -762,6 +779,7 @@ class RuntimeState:
             "did": best_did,
             "duid": best_duid,
             "name": best_name,
+            "model": best_model,
             "last_ip": last_ip,
             "connected": connected,
         }
@@ -1000,6 +1018,7 @@ class RuntimeState:
         route_name: str,
         identifier: str,
         remote_ip: str,
+        model: str = "",
     ) -> None:
         session = self._pairing_session
         if session is None or not _is_same_or_newer_timestamp(event_time, str(session.get("started_at") or "")):
@@ -1013,6 +1032,11 @@ class RuntimeState:
             changed = True
         if route_name == "nc_prepare" and session.get("nc_at") != event_time:
             session["nc_at"] = event_time
+            changed = True
+
+        normalized_model = model.strip()
+        if normalized_model and not session.get("target_model"):
+            session["target_model"] = normalized_model
             changed = True
 
         normalized_ip = remote_ip.strip()

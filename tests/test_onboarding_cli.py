@@ -32,14 +32,24 @@ class FakeApi:
     def list_devices(self) -> list[dict]:
         return list(self.devices)
 
-    def start_session(self, *, duid: str = "", new_vacuum: bool = False) -> dict:
+    def start_session(
+        self,
+        *,
+        duid: str = "",
+        new_vacuum: bool = False,
+        name: str = "",
+        model: str = "",
+        **kwargs: object,
+    ) -> dict:
         self.started_duids.append(duid)
         self.started_new_vacuum.append(new_vacuum)
+        resolved_name = name or next((item["name"] for item in self.devices if item["duid"] == duid), duid)
         return {
             "session_id": self.session_id,
             "target": {
                 "duid": duid,
-                "name": next((item["name"] for item in self.devices if item["duid"] == duid), duid),
+                "name": resolved_name,
+                "model": model,
                 "did": "",
                 "connected": False,
                 "last_ip": "",

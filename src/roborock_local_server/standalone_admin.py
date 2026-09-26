@@ -410,8 +410,15 @@ def register_standalone_admin_routes(
             body = {}
         duid = str((body or {}).get("duid") or "").strip()
         new_vacuum = bool((body or {}).get("new_vacuum"))
+        name = str((body or {}).get("name") or "").strip()
+        model = str((body or {}).get("model") or "").strip()
         try:
-            payload = supervisor.start_onboarding_session(duid=duid, new_vacuum=new_vacuum)
+            payload = supervisor.start_onboarding_session(
+                duid=duid,
+                new_vacuum=new_vacuum,
+                name=name,
+                model=model,
+            )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except KeyError:

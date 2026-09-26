@@ -1,5 +1,61 @@
+from __future__ import annotations
+
+from typing import Any
+
 DEFAULT_HOME_NAME = "Local Home"
 DEFAULT_TIMEZONE = "America/New_York"
+
+DEFAULT_PRODUCT_SCHEMA: list[dict[str, Any]] = [
+    {
+        "id": 101,
+        "name": "rpc_request",
+        "code": "rpc_request",
+        "mode": "rw",
+        "type": "RAW",
+    },
+    {
+        "id": 121,
+        "name": "Device State",
+        "code": "state",
+        "mode": "ro",
+        "type": "ENUM",
+    },
+    {
+        "id": 122,
+        "name": "Battery",
+        "code": "battery",
+        "mode": "ro",
+        "type": "VALUE",
+    },
+    {
+        "id": 123,
+        "name": "Fan Power",
+        "code": "fan_power",
+        "mode": "rw",
+        "type": "ENUM",
+    },
+    {
+        "id": 124,
+        "name": "Water Box Mode",
+        "code": "water_box_mode",
+        "mode": "rw",
+        "type": "ENUM",
+    },
+    {
+        "id": 125,
+        "name": "Charge Status",
+        "code": "charge_status",
+        "mode": "ro",
+        "type": "ENUM",
+    },
+    {
+        "id": 126,
+        "name": "Drying Status",
+        "code": "drying_status",
+        "mode": "ro",
+        "type": "ENUM",
+    },
+]
 
 MODEL_PRODUCT_ID_OVERRIDES = {
     "roborock.vacuum.a87": 110,

@@ -316,11 +316,23 @@ class RemoteOnboardingApi:
         devices = payload.get("devices")
         return list(devices) if isinstance(devices, list) else []
 
-    def start_session(self, *, duid: str = "", new_vacuum: bool = False) -> dict[str, Any]:
+    def start_session(
+        self,
+        *,
+        duid: str = "",
+        new_vacuum: bool = False,
+        name: str = "",
+        model: str = "",
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"duid": duid, "new_vacuum": new_vacuum}
+        if name:
+            payload["name"] = name
+        if model:
+            payload["model"] = model
         return self._request_json(
             "POST",
             "/admin/api/onboarding/sessions",
-            payload={"duid": duid, "new_vacuum": new_vacuum},
+            payload=payload,
         )
 
     def get_session(self, *, session_id: str) -> dict[str, Any]:
@@ -624,7 +636,11 @@ def run_guided_onboarding(
             )
             session = api.start_session(new_vacuum=True)
         else:
-            session = api.start_session(duid=str(selected.get("duid") or ""))
+            session = api.start_session(
+                duid=str(selected.get("duid") or ""),
+                name=str(selected.get("name") or ""),
+                model=str(selected.get("model") or ""),
+            )
         session_id = str(session.get("session_id") or "").strip()
         if not session_id:
             raise RuntimeError("Server did not return an onboarding session id.")

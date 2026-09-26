@@ -318,11 +318,23 @@ class RemoteOnboardingApi:
         devices = payload.get("devices")
         return list(devices) if isinstance(devices, list) else []
 
-    def start_session(self, *, duid: str = "", new_vacuum: bool = False) -> dict[str, Any]:
+    def start_session(
+        self,
+        *,
+        duid: str = "",
+        new_vacuum: bool = False,
+        name: str = "",
+        model: str = "",
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"duid": duid, "new_vacuum": new_vacuum}
+        if name:
+            payload["name"] = name
+        if model:
+            payload["model"] = model
         return self._request_json(
             "POST",
             "/admin/api/onboarding/sessions",
-            payload={"duid": duid, "new_vacuum": new_vacuum},
+            payload=payload,
         )
 
     def get_session(self, *, session_id: str) -> dict[str, Any]:
@@ -687,7 +699,11 @@ def _run_onboarding_for_device(
         if is_new_vacuum:
             session = api.start_session(new_vacuum=True)
         else:
-            session = api.start_session(duid=duid)
+            session = api.start_session(
+                duid=duid,
+                name=str(device.get("name") or ""),
+                model=str(device.get("model") or ""),
+            )
     except Exception as exc:  # noqa: BLE001
         _log.err(f"Failed to start session: {exc}")
         _set_phase("error", error_message=str(exc), target={"name": name, "duid": duid})
