@@ -225,3 +225,41 @@ def test_parse_endpoint_defaults_to_new_stack_ports(monkeypatch) -> None:
 
     assert (api_host, api_port) == ("api-roborock.example.com", 555)
     assert (mqtt_host, mqtt_port) == ("api-roborock.example.com", 8881)
+
+
+def test_explicit_443_survives_cli_to_addon_round_trip(monkeypatch) -> None:
+    mitm_redirect = _load_mitm_redirect(monkeypatch)
+
+    host, port = mitm_redirect._parse_endpoint(
+        "api-rr.example.com:443",
+        fallback_port=mitm_redirect.DEFAULT_LOCAL_API_PORT,
+    )
+    env_authority = mitm_redirect._format_authority(host, port)
+
+    reloaded_host, reloaded_port = mitm_redirect._parse_endpoint(
+        env_authority,
+        fallback_port=mitm_redirect.DEFAULT_LOCAL_API_PORT,
+    )
+    local_api = mitm_redirect._format_authority(reloaded_host, reloaded_port, default_port=443)
+
+    assert (host, port) == ("api-rr.example.com", 443)
+    assert env_authority == "api-rr.example.com:443"
+    assert (reloaded_host, reloaded_port) == ("api-rr.example.com", 443)
+    assert local_api == "api-rr.example.com"
+    assert (
+        mitm_redirect._sync_callback_url(local_api)
+        == "https://api-rr.example.com/internal/protocol/user-data"
+    )
+
+
+def test_host_only_local_api_still_defaults_to_555(monkeypatch) -> None:
+    mitm_redirect = _load_mitm_redirect(monkeypatch)
+
+    host, port = mitm_redirect._parse_endpoint(
+        "api-rr.example.com",
+        fallback_port=mitm_redirect.DEFAULT_LOCAL_API_PORT,
+    )
+    env_authority = mitm_redirect._format_authority(host, port)
+
+    assert (host, port) == ("api-rr.example.com", 555)
+    assert env_authority == "api-rr.example.com:555"

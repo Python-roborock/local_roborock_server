@@ -69,6 +69,17 @@ Update the add-on from the Home Assistant Add-on Store, then restart the add-on.
 
 The add-on does not automatically rewrite Home Assistant's Roborock integration entry. If you changed the stack hostname or ports during the update, repeat the endpoint edit in [Home Assistant](home_assistant.md).
 
+### Switching From Beta To Stable
+
+The Beta add-on is currently unused. For `1.1.0`, use **Roborock Local Server**.
+Back up Beta before switching, then stop it and disable **Start on boot** before
+starting stable on the same ports.
+
+The two add-ons have separate settings and data; installing stable does not copy
+Beta's configuration, cloud import, or recovered keys. If stable was already
+configured, update and start it. Otherwise, follow the [Home Assistant setup](home_assistant.md).
+You may need to pair the vacuum again and reconfigure clients for stable.
+
 ## After Updating
 
 Open the admin dashboard and check:

@@ -60,6 +60,14 @@ After the dashboard opens, complete the same post-start steps as the Docker inst
 
 If you need the MITM protocol sync secret for the Roborock app flow, sign in to the admin page and open **Protocol Auth**. The dashboard shows the active `admin.session_secret`, so you do not need to inspect `/data/config.toml` manually.
 
+### Beta add-on
+
+**Roborock Local Server Beta** is currently unused and remains on `1.1.0-rc2`.
+Install **Roborock Local Server** for the stable `1.1.0` release.
+
+Beta and stable keep separate data. See [switching from Beta to stable](updating.md#switching-from-beta-to-stable)
+if you tested an RC using the Beta add-on.
+
 ### Add-on Behavior
 
 - The add-on always runs the embedded MQTT broker and keeps the topic bridge enabled.

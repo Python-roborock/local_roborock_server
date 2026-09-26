@@ -1,11 +1,12 @@
-name: Roborock Local Server
-version: "1.1.0"
-slug: roborock_local_server
-description: Private Roborock HTTPS and MQTT stack for Home Assistant environments.
+name: Roborock Local Server Beta
+version: "1.1.0-rc2"
+slug: roborock_local_server_beta
+description: Currently unused. Install Roborock Local Server for the stable release.
+stage: experimental
 url: "https://github.com/Python-roborock/local_roborock_server"
 image: "ghcr.io/python-roborock/local_roborock_server"
 startup: services
-boot: auto
+boot: manual
 init: false
 arch:
   - amd64

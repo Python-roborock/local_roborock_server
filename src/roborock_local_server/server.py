@@ -18,6 +18,7 @@ from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
+from python_multipart.exceptions import MultipartParseError
 import uvicorn
 
 from .certs import CertificateManager
@@ -88,8 +89,21 @@ def _request_query_params(request: Request) -> dict[str, list[str]]:
     return parse_qs(request.url.query, keep_blank_values=True)
 
 
-def _request_body_params(raw_body: bytes, *, content_type: str = "") -> tuple[str, dict[str, list[str]]]:
+async def _request_body_params(request: Request, raw_body: bytes) -> tuple[str, dict[str, list[str]]]:
     body_text = raw_body.decode("utf-8", errors="replace")
+    content_type = str(request.headers.get("content-type") or "")
+    if content_type.partition(";")[0].strip().lower() == "multipart/form-data":
+        # The V2 request builder sends NC fields as multipart text parts. Keep
+        # the original body intact for capture/signature metadata.
+        body_params: dict[str, list[str]] = {}
+        try:
+            async with request.form(max_files=0) as form:
+                for name, value in form.multi_items():
+                    if isinstance(value, str):
+                        body_params.setdefault(name, []).append(value)
+        except MultipartParseError as exc:
+            raise HTTPException(status_code=400, detail="Invalid multipart form data") from exc
+        return body_text, body_params
     if not body_text:
         return "", {}
     body_params = parse_qs(body_text, keep_blank_values=True)
@@ -922,10 +936,7 @@ class ReleaseSupervisor:
         raw_body = await request.body()
         clean_path = strip_roborock_prefix(request.url.path)
         query_params = _request_query_params(request)
-        body_text, body_params = _request_body_params(
-            raw_body,
-            content_type=str(request.headers.get("content-type") or ""),
-        )
+        body_text, body_params = await _request_body_params(request, raw_body)
         body_sha256 = hashlib.sha256(raw_body).hexdigest()
         is_protocol_sync_request = self._is_protocol_sync_path(clean_path)
 
@@ -978,6 +989,7 @@ class ReleaseSupervisor:
                         ts=ts,
                         signature_b64=sign,
                         body_sha256=body_sha256,
+                        version=region_version,
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("key_cache add_header_signature failed did=%s: %s", key_capture_did, exc)

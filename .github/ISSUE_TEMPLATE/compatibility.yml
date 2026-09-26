@@ -1,0 +1,68 @@
+name: Device compatibility report
+description: Share a tested vacuum model, firmware, and certificate result
+title: "Compatibility report: "
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Check the [tested vacuums list](https://github.com/Python-roborock/local_roborock_server/blob/main/docs/tested_vacuums.md)
+        for existing results. Share what you tested so we can update it.
+        If you need help investigating a failure, use the bug report form instead.
+
+  - type: input
+    id: vacuum
+    attributes:
+      label: Vacuum model
+      description: Include the model identifier if available.
+      placeholder: Roborock S8 / roborock.vacuum.a51
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      description: Copy the exact version shown for the vacuum, or say if it is unknown.
+      placeholder: "02.17.42"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Server version
+      description: Include the release or image tag and any custom changes.
+      placeholder: v1.1.0, Home Assistant add-on
+    validations:
+      required: true
+
+  - type: input
+    id: certificate
+    attributes:
+      label: Certificate issuer and chain
+      description: >-
+        For example, ZeroSSL, Actalis, Let's Encrypt, or SSL.com. Include the chain
+        if known. Cloudflare DNS or ACME alone does not identify the issuer;
+        say unknown if you cannot check it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: result
+    attributes:
+      label: What worked or failed?
+      description: >-
+        Describe whether onboarding completed and whether you could control the
+        vacuum from Home Assistant or the Roborock app. Include any limitations.
+    validations:
+      required: true
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: Setup and workarounds
+      description: >-
+        Mention Docker or the Home Assistant add-on, any reverse proxy, and any
+        changes needed to make it work. Link an existing issue or PR if relevant.
+    validations:
+      required: false

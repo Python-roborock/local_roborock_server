@@ -314,8 +314,9 @@ def test_runtime_state_onboarding_device_mqtt_candidate_requires_matching_ip_and
     assert state.onboarding_device_mqtt_candidate(client_ip="192.168.8.11") is None
 
 
-def test_runtime_state_marks_region_v2_onboarding_as_unsupported(tmp_path: Path) -> None:
-    state = RuntimeState(log_dir=tmp_path, key_state_file=None)
+def test_runtime_state_completes_region_v2_onboarding(tmp_path: Path) -> None:
+    key_state_path = tmp_path / "device_key_state.json"
+    state = RuntimeState(log_dir=tmp_path, key_state_file=key_state_path)
     state.upsert_vacuum("cloud-saros-a", name="Saros", id_kind="duid")
     state.start_onboarding_session(target_duid="cloud-saros-a", target_name="Saros")
 
@@ -334,12 +335,63 @@ def test_runtime_state_marks_region_v2_onboarding_as_unsupported(tmp_path: Path)
 
     [vacuum] = state.vacuum_snapshot()
     assert vacuum["last_region_version"] == "v2"
-    assert vacuum["onboarding"]["status"] == "unsupported"
-    assert vacuum["onboarding"]["unsupported"] is True
-    assert vacuum["onboarding"]["unsupported_reason"] == "region_v2"
-    assert "v2 /region onboarding flow" in vacuum["onboarding"]["guidance"]
+    assert vacuum["onboarding"]["status"] == "collecting_messages"
+    assert vacuum["onboarding"]["unsupported"] is False
+    assert vacuum["onboarding"]["unsupported_reason"] == ""
+    assert vacuum["onboarding"]["missing_steps"] == ["nc_prepare"]
 
     session = state.onboarding_session_snapshot()
-    assert session["status"] == "unsupported"
-    assert session["unsupported"] is True
-    assert session["unsupported_reason"] == "region_v2"
+    assert session["status"] == "in_progress"
+    assert session["unsupported"] is False
+    assert session["unsupported_reason"] == ""
+    assert session["complete"] is False
+
+    # The status layer reads the result persisted by public-key recovery.
+    key_state_path.write_text(
+        json.dumps(
+            {
+                "devices": {
+                    "1103821560705": {
+                        "modulus_hex": "ab",
+                        "recovery": {
+                            "state": "recovered",
+                            "finished_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    session = state.onboarding_session_snapshot()
+    assert session["has_public_key"] is True
+    assert session["complete"] is False
+    assert "one more pairing cycle" in session["guidance"]
+
+    state.record_http_event(
+        event_time=datetime.now(timezone.utc).isoformat(),
+        route_name="nc_prepare",
+        clean_path="/nc",
+        raw_path="/nc",
+        method="POST",
+        host="api-roborock.example.com",
+        remote="192.168.8.10:54321",
+        did="1103821560705",
+    )
+    [vacuum] = state.vacuum_snapshot()
+    assert vacuum["onboarding"]["status"] == "ready"
+    assert vacuum["onboarding"]["public_key_ready"] is True
+    assert state.onboarding_session_snapshot()["complete"] is False
+
+    state.record_mqtt_connection(conn_id="v2", client_ip="192.168.8.10", client_port=54322)
+    state.record_mqtt_message(
+        conn_id="v2",
+        direction="c2b",
+        topic="rr/d/i/1103821560705/c25b14ceac358d2a",
+        payload_preview="{}",
+    )
+    session = state.onboarding_session_snapshot()
+    assert session["status"] == "complete"
+    assert session["complete"] is True
+    assert session["unsupported"] is False
+    assert all(session["checks"].values())
