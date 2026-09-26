@@ -9,6 +9,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from .backend import _load_inventory
+from .product_registry import export_inventory_device_profiles
 from .security import verify_password
 
 
@@ -351,6 +353,13 @@ def register_standalone_admin_routes(
     async def admin_vacuums(request: Request) -> JSONResponse:
         supervisor._require_admin(request)
         return JSONResponse(supervisor._vacuums_payload())
+
+    @app.get("/admin/api/product-registry/export")
+    async def admin_export_product_registry(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        inventory = _load_inventory(supervisor.paths.inventory_path)
+        profiles = export_inventory_device_profiles(inventory)
+        return JSONResponse({"profiles": profiles, "count": len(profiles)})
 
     @app.get("/admin/api/auth")
     async def admin_auth(request: Request) -> JSONResponse:

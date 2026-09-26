@@ -24,6 +24,7 @@ import uvicorn
 from .certs import CertificateManager
 from .bundled_backend.shared.constants import DEFAULT_PRODUCT_SCHEMA
 from .bundled_backend.shared.data_helpers import utcnow_iso
+from .product_registry import resolve_product_metadata
 from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIRED_ONBOARDING_STEPS
 from .cloud import CloudImportManager
 from .config import AppConfig, AppPaths, load_config, resolve_paths
@@ -1593,8 +1594,8 @@ class ReleaseSupervisor:
             or ""
         ).strip()
         name = str(record.get("name") or target.get("name") or "").strip()
-        if not name or name == duid or name == did:
-            name = f"Roborock {model.split('.')[-1].upper()}" if model else "Roborock Vacuum"
+        if name == duid or name == did:
+            name = ""
         try:
             self._persist_discovered_device_to_inventory(
                 did=did or str(record.get("did") or "").strip(),
@@ -1625,6 +1626,17 @@ class ReleaseSupervisor:
         if not isinstance(devices, list):
             devices = []
         identifiers = {value for value in (inventory_id, did, duid) if value}
+        meta = resolve_product_metadata(
+            model=model,
+            custom_name=name,
+            custom_registry_path=self.paths.runtime_dir / "product_registry.custom.json",
+        )
+        resolved_name = meta["product_name"]
+        resolved_model = meta["model"]
+        resolved_category = meta["category"]
+        resolved_product_id = product_id or meta["product_id"]
+        resolved_schema = meta["schema"]
+
         for existing in devices:
             if not isinstance(existing, dict):
                 continue
@@ -1635,13 +1647,19 @@ class ReleaseSupervisor:
             if identifiers & existing_ids:
                 changed = False
                 if name and (not existing.get("name") or existing.get("name") in identifiers):
-                    existing["name"] = name
+                    existing["name"] = resolved_name
+                    changed = True
+                if not existing.get("product_name"):
+                    existing["product_name"] = resolved_name
                     changed = True
                 if model and not existing.get("model"):
-                    existing["model"] = model
+                    existing["model"] = resolved_model
                     changed = True
                 if not existing.get("schema"):
-                    existing["schema"] = DEFAULT_PRODUCT_SCHEMA
+                    existing["schema"] = resolved_schema
+                    changed = True
+                if not existing.get("category"):
+                    existing["category"] = resolved_category
                     changed = True
                 if changed:
                     self.paths.inventory_path.write_text(
@@ -1652,25 +1670,26 @@ class ReleaseSupervisor:
         # Unify the runtime-credentials record so its duid matches the inventory id while
         # keeping the already-minted localKey. sync_inventory matches on duid only, so an
         # unset duid would otherwise make it create a duplicate device with a fresh key.
-        product_id = product_id or (model.split(".")[-1] if model else "a117")
         self.runtime_credentials.ensure_device(
             did=did,
             duid=inventory_id,
-            name=name,
-            model=model,
-            product_id=product_id,
+            name=resolved_name,
+            model=resolved_model,
+            product_id=resolved_product_id,
             assign_localkey=False,
         )
         devices.append(
             {
                 "duid": inventory_id,
                 "did": did,
-                "name": name or (f"Roborock {model.split('.')[-1].upper()}" if model else "Roborock Vacuum"),
-                "model": model,
-                "product_id": product_id,
+                "name": resolved_name,
+                "product_name": resolved_name,
+                "model": resolved_model,
+                "category": resolved_category,
+                "product_id": resolved_product_id,
                 "local_key": local_key,
                 "source": "onboarding",
-                "schema": DEFAULT_PRODUCT_SCHEMA,
+                "schema": resolved_schema,
             }
         )
         inventory["devices"] = devices

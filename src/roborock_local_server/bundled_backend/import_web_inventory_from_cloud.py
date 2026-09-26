@@ -911,11 +911,97 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not write full unredacted snapshot file.",
     )
+    parser.add_argument(
+        "--export-device-profiles",
+        type=Path,
+        help="Export sanitized community device profile(s) from an inventory or snapshot JSON file.",
+    )
     return parser.parse_args()
+
+
+def _extract_sanitized_device_profiles(source_data: Any) -> list[dict[str, Any]]:
+    seen_models: set[str] = set()
+    profiles: list[dict[str, Any]] = []
+
+    candidates: list[Any] = []
+    if isinstance(source_data, list):
+        candidates.extend(source_data)
+    elif isinstance(source_data, dict):
+        for key in ("devices", "received_devices", "products"):
+            val = source_data.get(key)
+            if isinstance(val, list):
+                candidates.extend(val)
+        home_data = source_data.get("home_data")
+        if isinstance(home_data, dict):
+            for key in ("devices", "received_devices", "products"):
+                val = home_data.get(key)
+                if isinstance(val, list):
+                    candidates.extend(val)
+
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        model = str(item.get("model") or "").strip()
+        if not model or model in seen_models:
+            continue
+        name = str(item.get("product_name") or item.get("name") or "").strip()
+        category = str(item.get("category") or "robot.vacuum.cleaner").strip()
+        if category.startswith("RoborockCategory."):
+            cat_suffix = category.split(".")[-1].lower()
+            category = "roborock.washer" if cat_suffix == "washer" else "robot.vacuum.cleaner"
+
+        product_id = str(item.get("product_id") or item.get("id") or "").strip()
+        capability = item.get("capability")
+        schema = item.get("schema")
+
+        profile: dict[str, Any] = {
+            "model": model,
+            "product_name": name or f"Roborock {model.split('.')[-1].upper()}",
+            "category": category,
+            "product_id": product_id or model.split(".")[-1],
+        }
+        if capability is not None:
+            profile["capability"] = capability
+
+        if isinstance(schema, list) and schema:
+            sanitized_schema: list[dict[str, Any]] = []
+            for s_item in schema:
+                if isinstance(s_item, dict):
+                    sanitized_s_item: dict[str, Any] = {
+                        "id": s_item.get("id"),
+                        "name": s_item.get("name"),
+                        "code": s_item.get("code"),
+                        "mode": s_item.get("mode"),
+                        "type": s_item.get("type"),
+                    }
+                    if s_item.get("property") is not None:
+                        sanitized_s_item["property"] = s_item.get("property")
+                    sanitized_schema.append(sanitized_s_item)
+            profile["schema"] = sanitized_schema
+        seen_models.add(model)
+        profiles.append(profile)
+
+    return profiles
 
 
 async def _main_async() -> None:
     args = _parse_args()
+
+    if args.export_device_profiles:
+        source_path = args.export_device_profiles
+        if not source_path.exists():
+            raise RuntimeError(f"Source file not found: {source_path}")
+        raw_data = json.loads(source_path.read_text(encoding="utf-8"))
+        profiles = _extract_sanitized_device_profiles(raw_data)
+        output_payload = {"profiles": profiles, "count": len(profiles)}
+        output_json = json.dumps(output_payload, indent=2)
+        if args.print_only or args.output == DEFAULT_OUTPUT_FILE:
+            print(output_json)
+        else:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(output_json + "\n", encoding="utf-8")
+            print(f"Wrote {len(profiles)} sanitized device profile(s) to: {args.output}")
+        return
 
     if args.request_code and args.code:
         raise RuntimeError("Use either --request-code or --code, not both.")

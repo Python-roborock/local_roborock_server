@@ -799,11 +799,16 @@ def test_new_vacuum_admin_api_custom_name_and_home_data_schema(tmp_path: Path) -
     assert persisted["model"] == "roborock.vacuum.a72"
     assert persisted["source"] == "onboarding"
 
-    # Verify default schema is present in inventory
+    # Verify default schema is present in inventory with correct Roborock DP IDs
     schema = persisted.get("schema")
     assert isinstance(schema, list)
-    schema_codes = {item["code"] for item in schema}
-    assert {"battery", "state", "fan_power", "water_box_mode", "charge_status", "drying_status", "rpc_request"}.issubset(schema_codes)
+    dps_map = {item["code"]: item["id"] for item in schema}
+    assert {"battery", "state", "fan_power", "water_box_mode", "charge_status", "drying_status", "rpc_request", "main_brush_life", "side_brush_life", "filter_life"}.issubset(dps_map.keys())
+    assert dps_map["main_brush_life"] == 125
+    assert dps_map["side_brush_life"] == 126
+    assert dps_map["filter_life"] == 127
+    assert dps_map["charge_status"] == 133
+    assert dps_map["drying_status"] == 134
 
     # Refresh supervisor inventory and test Home Assistant login and home data endpoint
     supervisor.refresh_inventory_state()
@@ -858,6 +863,64 @@ def test_new_vacuum_admin_api_custom_name_and_home_data_schema(tmp_path: Path) -
     assert "water_box_mode" in product.supported_schema_codes
     assert "charge_status" in product.supported_schema_codes
     assert "drying_status" in product.supported_schema_codes
+    assert "main_brush_life" in product.supported_schema_codes
+    assert "side_brush_life" in product.supported_schema_codes
+    assert "filter_life" in product.supported_schema_codes
+
+
+def test_product_registry_resolution_and_export_api(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(json.dumps({"devices": []}) + "\n", encoding="utf-8")
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
+
+    # Start an onboarding session for a B01 series model (Q7 Series sc05)
+    started = client.post(
+        "/admin/api/onboarding/sessions",
+        json={"new_vacuum": True},
+    )
+    assert started.status_code == 200
+    session_id = started.json()["session_id"]
+
+    # Robot sends /region and /nc with m=roborock.vacuum.sc05
+    assert client.get("/region?d=2203821560999&m=roborock.vacuum.sc05").status_code == 200
+    assert client.get("/nc?d=2203821560999&m=roborock.vacuum.sc05").status_code == 200
+
+    # Polling session adopts and persists from product registry
+    fetched = client.get(f"/admin/api/onboarding/sessions/{session_id}")
+    assert fetched.status_code == 200
+    snapshot = fetched.json()
+    assert snapshot["target"]["model"] == "roborock.vacuum.sc05"
+
+    inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    [persisted] = inventory["devices"]
+    assert persisted["model"] == "roborock.vacuum.sc05"
+    assert persisted["name"] == "Roborock Q7 Series"
+    assert persisted["product_id"] == "5ayEx3aKgStqZZ0v5IpMBP"
+    # B01 models have the 28-item schema
+    assert len(persisted["schema"]) == 28
+
+    # Query the community export endpoint
+    export_res = client.get("/admin/api/product-registry/export")
+    assert export_res.status_code == 200
+    export_data = export_res.json()
+    assert export_data["count"] == 1
+    [exported_profile] = export_data["profiles"]
+    assert exported_profile["model"] == "roborock.vacuum.sc05"
+    assert exported_profile["product_name"] == "Roborock Q7 Series"
+    assert len(exported_profile["schema"]) == 28
+    # Verify strict sanitization: no credentials, keys, or IDs leaked
+    assert "local_key" not in exported_profile
+    assert "did" not in exported_profile
+    assert "duid" not in exported_profile
+    assert "sn" not in exported_profile
 
 
 def test_core_only_mode_disables_standalone_admin_routes(tmp_path: Path) -> None:
