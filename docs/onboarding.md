@@ -50,12 +50,12 @@ You do not need to watch the admin dashboard manually during the loop anymore.
 
 The only required CLI flag is `--server`. The script will prompt for anything missing:
 
-- `admin password`
-- `ssid`
-- `password`
-- `timezone`
-- `cst`
-- `country-domain`
+- `admin password`: Your local server admin password (to authenticate with the onboarding API).
+- `ssid`: Your 2.4 GHz home Wi-Fi network name.
+- `password`: Your home Wi-Fi password.
+- `timezone`: An IANA timezone string (default: `America/New_York`).
+- `cst`: POSIX timezone string used by the vacuum firmware for local scheduling and clock synchronization (e.g. `EST5EDT,M3.2.0,M11.1.0` or `CET-1CEST,M3.5.0,M10.5.0/3`).
+- `country-domain`: The country or region code sent to the vacuum firmware in the local Wi-Fi configuration payload (e.g. `us`, `eu`, `de`, `at`, `gb`).
 
 You can still pass them explicitly if you prefer:
 
@@ -64,6 +64,17 @@ uv run start_onboarding.py --server api-roborock.example.com --ssid "My Wifi" --
 ```
 
 `server` should be your real stack hostname, usually the same `api-...` hostname you use for `/admin`. If you omit the port, the CLI assumes `:555`. Explicit ports are supported, so if your admin page is at `https://api-roborock.example.com:8443/admin`, use `--server api-roborock.example.com:8443`.
+
+## Country Domain (`--country-domain`)
+
+The `country-domain` parameter sets the regional/country domain code inside the Roborock Wi-Fi pairing payload (`"country_domain": ...`).
+
+- **Auto-detection**: If your IANA timezone is in the script's built-in table (such as US timezones, London, Berlin, Paris, Amsterdam, Tokyo, Sydney), both `cst` and `country-domain` are auto-detected.
+- **Unlisted timezones**: If you enter a timezone that is not in the built-in table (for example `Europe/Vienna`, `Europe/Zurich`, `Europe/Rome`, etc.), the script cannot infer the country code and will prompt:
+  ```text
+  Country domain (could not auto-detect from timezone) [us]:
+  ```
+- **What to enter**: You can enter either your two-letter ISO country code (e.g. `at`, `de`, `ch`, `gb`, `us`) or your broader region code (e.g. `eu`, `us`). Both are accepted by Roborock vacuum firmware.
 
 ## CST Examples
 
@@ -79,7 +90,7 @@ Pacific Time (US): `PST8PDT,M3.2.0,M11.1.0`
 
 London (UK): `GMT0BST,M3.5.0,M10.5.0`
 
-Central Europe (Paris/Berlin): `CET-1CEST,M3.5.0,M10.5.0`
+Central Europe (Paris/Berlin/Vienna/Rome/Zurich): `CET-1CEST,M3.5.0,M10.5.0/3`
 
 India (No DST): `IST-5:30`
 
