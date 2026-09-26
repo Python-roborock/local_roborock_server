@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from python_multipart.exceptions import MultipartParseError
 import uvicorn
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .certs import CertificateManager
 from .bundled_backend.shared.data_helpers import utcnow_iso
@@ -209,6 +210,8 @@ class ManagedFastApiServer:
             "port": self._port,
             "log_level": "warning",
             "access_log": False,
+            # X-Forwarded-For is applied by the app's own middleware, scoped to network.trusted_proxies.
+            "proxy_headers": False,
         }
         if self._tls_enabled:
             if self._cert_file is None or self._key_file is None:
@@ -368,6 +371,7 @@ class ReleaseSupervisor:
             log_dir=self.paths.runtime_dir,
             key_state_file=self.paths.device_key_state_path,
             runtime_credentials=self.runtime_credentials,
+            trusted_proxies=self.config.network.trusted_proxies,
         )
         self.runtime_state.set_service(
             "https_server",
@@ -999,6 +1003,8 @@ class ReleaseSupervisor:
             raw_path += f"?{request.url.query}"
         client_host = request.client.host if request.client else "-"
         client_port = request.client.port if request.client else 0
+        if ":" in client_host:
+            client_host = f"[{client_host}]"
         entry: dict[str, object] = {
             "time": utcnow_iso(),
             "server": group,
@@ -1597,6 +1603,7 @@ class ReleaseSupervisor:
 
     def _create_app(self) -> FastAPI:
         app = FastAPI(title="Roborock Local Server", docs_url=None, redoc_url=None, openapi_url=None)
+        app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=list(self.config.network.trusted_proxies))
         if self.enable_standalone_admin:
             register_standalone_admin_routes(
                 app=app,

@@ -88,6 +88,23 @@ api-roborock.example.com {
 }
 ```
 
+## Trusted Proxies and Onboarding
+
+When onboarding a new vacuum, the server links its MQTT login to the `/region` and `/nc` HTTP requests that came just before it. It does this by checking that both came from the same IP address. With a proxy in front of the server, that check fails: the HTTP requests show the proxy's address and MQTT may show a different one (e.g. a Kubernetes node doing SNAT).
+
+List every proxy or SNAT address that forwards traffic to the server in `trusted_proxies` (IPs or CIDR networks):
+
+```toml
+[network]
+# Default: ["127.0.0.1", "::1"]
+trusted_proxies = ["10.42.0.0/16", "10.1.1.10"]
+```
+
+- **HTTP:** requests from a trusted proxy use the `X-Forwarded-For` header to find the vacuum's real IP. The header is ignored from any other client, so it can't be spoofed. Traefik and Caddy set it by default; nginx needs `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
+- **MQTT:** during an active onboarding session, a new MQTT login is normally accepted only from the IP that completed `/region` and `/nc`. A connection from a trusted proxy is also accepted, because a stream proxy hides the vacuum's address. The session must still have completed `/region` and `/nc`, and the first publish must be on that vacuum's topic.
+
+> Only list addresses that are actually proxies. Any client that connects from a trusted address during onboarding can claim the vacuum being onboarded. Keep onboarding windows short, and turn off new connections when you are not adding a device.
+
 ## What Is Not Supported
 
 Path-prefix hosting is not supported. The Roborock protocol and the admin API expect the stack at the hostname root, for example `/region`, `/api/...`, and `/admin`.

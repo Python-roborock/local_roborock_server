@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 from pathlib import Path
 import re
 import tomllib
@@ -24,6 +25,7 @@ class NetworkConfig:
     mqtt_username: str
     mqtt_password: str
     mqtt_client_id: str
+    trusted_proxies: tuple[str, ...] = ("127.0.0.1", "::1")
 
 
 @dataclass(frozen=True)
@@ -164,6 +166,26 @@ def _as_port(value: object, field_name: str, default: int) -> int:
     return candidate
 
 
+def _as_trusted_proxies(value: object, field_name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        value = value.split(",")
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{field_name} must be a list of IP addresses or CIDR networks")
+    entries: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        try:
+            ipaddress.ip_network(text, strict=False)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} entry {text!r} is not a valid IP address or CIDR network") from exc
+        entries.append(text)
+    return tuple(entries)
+
+
 def _as_bool(value: object, default: bool) -> bool:
     if value is None:
         return default
@@ -230,6 +252,11 @@ def load_config(path: str | Path) -> AppConfig:
             mqtt_username=str(network.get("mqtt_username", "")).strip(),
             mqtt_password=str(network.get("mqtt_password", "")).strip(),
             mqtt_client_id=str(network.get("mqtt_client_id", "")).strip(),
+            trusted_proxies=_as_trusted_proxies(
+                network.get("trusted_proxies"),
+                "network.trusted_proxies",
+                NetworkConfig.trusted_proxies,
+            ),
         ),
         broker=BrokerConfig(
             mode=broker_mode,

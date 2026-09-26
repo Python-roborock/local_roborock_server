@@ -980,3 +980,123 @@ def test_handle_client_returns_mqtt5_not_authorized_connack_on_rejected_connect(
 
     assert tls_conn.sent == [b"\x20\x03\x00\x87\x00"]
     assert tls_conn.closed is True
+
+
+def _build_reverse_proxy_onboarding(
+    tmp_path: Path,
+    *,
+    trusted_proxies: tuple[str, ...],
+    steps: tuple[tuple[str, str], ...] = (("region", "/region"), ("nc_prepare", "/nc")),
+) -> tuple[MqttTlsProxy, RuntimeCredentialsStore, bytes]:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    key_state_path = tmp_path / "device_key_state.json"
+    _seed_key_state(key_state_path, did="1103821560705")
+    runtime_credentials_path = tmp_path / "runtime_credentials.json"
+    _write_json(
+        runtime_credentials_path,
+        {
+            "schema_version": 2,
+            "devices": [
+                {
+                    "did": "1103821560705",
+                    "duid": "6HL2zfniaoYYV01CkVuhkO",
+                    "name": "Roborock Qrevo MaxV 2",
+                    "model": "roborock.vacuum.a87",
+                    "localkey": "xPd5Dr8CGGqtdDlH",
+                    "device_mqtt_usr": "",
+                    "device_mqtt_pass": "",
+                }
+            ],
+        },
+    )
+    runtime_credentials = RuntimeCredentialsStore(runtime_credentials_path)
+    runtime_state = RuntimeState(
+        log_dir=tmp_path,
+        key_state_file=key_state_path,
+        runtime_credentials=runtime_credentials,
+        trusted_proxies=trusted_proxies,
+    )
+    runtime_state.upsert_vacuum("6HL2zfniaoYYV01CkVuhkO", name="Roborock Qrevo MaxV 2", id_kind="duid")
+    runtime_state.start_onboarding_session(target_duid="6HL2zfniaoYYV01CkVuhkO", target_name="Roborock Qrevo MaxV 2")
+    # HTTP arrives through a trusted reverse proxy, so the recorded remote is the vacuum's real LAN IP.
+    event_time = datetime.now(timezone.utc).isoformat()
+    for route_name, path_name in steps:
+        runtime_state.record_http_event(
+            event_time=event_time,
+            route_name=route_name,
+            clean_path=path_name,
+            raw_path=path_name,
+            method="GET",
+            host="api-roborock.example.com",
+            remote="10.1.6.170:0",
+            did="1103821560705",
+        )
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        runtime_state=runtime_state,
+        runtime_credentials=runtime_credentials,
+    )
+    packet = _build_connect_packet(
+        client_id="a012391cb5f8bc97",
+        username="c25b14ceac358d2a",
+        password="ff8922d24a9a9af81f18f35dcee9a5a5",
+    )
+    return proxy, runtime_credentials, packet
+
+
+def test_onboarding_candidate_accepts_mqtt_from_trusted_stream_proxy(tmp_path) -> None:
+    # MQTT is SNAT'd by a stream proxy / ServiceLB (10.1.1.10), so it never shows the vacuum's IP.
+    proxy, runtime_credentials, packet = _build_reverse_proxy_onboarding(tmp_path, trusted_proxies=("10.1.1.0/24",))
+
+    authorized, reason, _info, candidate = proxy._authorize_connect_packet_for_client(packet, client_ip="10.1.1.10")
+
+    assert authorized is True
+    assert reason == "device_mqtt_onboarding_pending"
+    assert candidate is not None
+    assert candidate["did"] == "1103821560705"
+    assert candidate["client_ip"] == "10.1.1.10"
+
+    proxy._set_pending_onboarding_auth("proxied-conn", candidate)
+    proxy._register_conn_endpoints("proxied-conn", _FakeSourceSocket(), _FakeBackendSocket())
+    proxy._trace_packet("proxied-conn", "c2b", _build_publish_packet(topic="rr/d/i/1103821560705/c25b14ceac358d2a"))
+
+    confirmed = runtime_credentials.resolve_device(did="1103821560705")
+    assert confirmed is not None
+    assert confirmed["device_mqtt_usr"] == "c25b14ceac358d2a"
+
+
+def test_onboarding_candidate_rejects_mqtt_from_untrusted_mismatched_ip(tmp_path) -> None:
+    proxy, runtime_credentials, packet = _build_reverse_proxy_onboarding(tmp_path, trusted_proxies=("10.1.1.0/24",))
+
+    authorized, reason, _info, candidate = proxy._authorize_connect_packet_for_client(packet, client_ip="10.1.6.99")
+
+    assert authorized is False
+    assert reason == "invalid_mqtt_credentials"
+    assert candidate is None
+    device = runtime_credentials.resolve_device(did="1103821560705")
+    assert device is not None
+    assert device["device_mqtt_usr"] == ""
+
+
+def test_onboarding_candidate_from_trusted_proxy_still_requires_region_and_nc(tmp_path) -> None:
+    proxy, _runtime_credentials, packet = _build_reverse_proxy_onboarding(
+        tmp_path,
+        trusted_proxies=("10.1.1.0/24",),
+        steps=(("region", "/region"),),
+    )
+
+    authorized, reason, _info, candidate = proxy._authorize_connect_packet_for_client(packet, client_ip="10.1.1.10")
+
+    assert authorized is False
+    assert reason == "invalid_mqtt_credentials"
+    assert candidate is None

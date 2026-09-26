@@ -395,3 +395,53 @@ def test_runtime_state_completes_region_v2_onboarding(tmp_path: Path) -> None:
     assert session["complete"] is True
     assert session["unsupported"] is False
     assert all(session["checks"].values())
+
+
+def _start_completed_onboarding(tmp_path: Path, *, remote: str, trusted_proxies: tuple[str, ...] = ()) -> RuntimeState:
+    credentials_path = tmp_path / "runtime_credentials.json"
+    credentials_path.write_text(
+        json.dumps({"schema_version": 2, "devices": [{"did": "", "duid": "cloud-q7-a", "localkey": "local-key-a"}]}),
+        encoding="utf-8",
+    )
+    key_state_path = tmp_path / "device_key_state.json"
+    key_state_path.write_text(json.dumps({"devices": {"1103821560705": {"modulus_hex": "ab"}}}), encoding="utf-8")
+    state = RuntimeState(
+        log_dir=tmp_path,
+        key_state_file=key_state_path,
+        runtime_credentials=RuntimeCredentialsStore(credentials_path),
+        trusted_proxies=trusted_proxies,
+    )
+    state.upsert_vacuum("cloud-q7-a", name="Q7 Upstairs", id_kind="duid")
+    state.start_onboarding_session(target_duid="cloud-q7-a", target_name="Q7 Upstairs")
+    event_time = datetime.now(timezone.utc).isoformat()
+    for route_name, path_name in (("region", "/region"), ("nc_prepare", "/nc")):
+        state.record_http_event(
+            event_time=event_time,
+            route_name=route_name,
+            clean_path=path_name,
+            raw_path=path_name,
+            method="GET",
+            host="api-roborock.example.com",
+            remote=remote,
+            did="1103821560705",
+        )
+    return state
+
+
+def test_runtime_state_onboarding_device_mqtt_candidate_allows_mismatch_only_from_trusted_proxy(tmp_path: Path) -> None:
+    state = _start_completed_onboarding(tmp_path, remote="10.1.6.170:0", trusted_proxies=("10.1.1.10", "fd00::/8"))
+
+    assert state.onboarding_device_mqtt_candidate(client_ip="10.1.6.170") is not None
+    trusted = state.onboarding_device_mqtt_candidate(client_ip="10.1.1.10")
+    assert trusted is not None
+    assert trusted["did"] == "1103821560705"
+    assert state.onboarding_device_mqtt_candidate(client_ip="fd00::1") is not None
+    assert state.onboarding_device_mqtt_candidate(client_ip="10.1.1.11") is None
+    assert state.onboarding_device_mqtt_candidate(client_ip="not-an-ip") is None
+
+
+def test_runtime_state_onboarding_matches_bracketed_ipv6_remote(tmp_path: Path) -> None:
+    state = _start_completed_onboarding(tmp_path, remote="[fd00::170]:54321")
+
+    assert state.onboarding_device_mqtt_candidate(client_ip="fd00::170") is not None
+    assert state.onboarding_device_mqtt_candidate(client_ip="fd00::171") is None

@@ -1,6 +1,7 @@
 """Exercise NC onboarding with synthetic keys and firmware-style multipart fields."""
 
 import base64
+from dataclasses import replace
 import hashlib
 import json
 
@@ -29,6 +30,8 @@ def private_key():
 def supervisor(tmp_path, private_key):
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
+    # TestClient connects from this address; treat it as the reverse proxy in front of the server.
+    config = replace(config, network=replace(config.network, trusted_proxies=("10.42.0.0/16",)))
     paths = resolve_paths(config_file, config)
     for path, payload in (
         (paths.inventory_path, {"devices": [{"duid": DUID, "model": MODEL, "local_key": LOCAL_KEY}]}),
@@ -126,3 +129,31 @@ def test_nc_multipart_rejects_file_parts(supervisor):
         response = client.post("/nc", files={"d": ("device.txt", DID)})
     assert response.status_code == 400
     assert not any(event.get("route") == "nc_prepare" for event in supervisor.runtime_state.recent_events())
+
+
+def test_x_forwarded_for_from_trusted_proxy_sets_client_ip(supervisor):
+    with TestClient(supervisor.app, client=("10.42.222.161", 54321)) as client:
+        response = client.get(
+            "/region",
+            params={"d": DID, "m": MODEL},
+            headers={"v": "v2", "x-forwarded-for": "203.0.113.9, 10.1.6.170"},
+        )
+    assert response.status_code == 200
+
+    region_event = next(e for e in supervisor.runtime_state.recent_events() if e.get("route") == "region")
+    assert region_event["remote"] == "10.1.6.170:0"
+    assert supervisor.runtime_state.pairing_snapshot()["target"]["last_ip"] == "10.1.6.170"
+
+
+def test_x_forwarded_for_from_untrusted_client_is_ignored(supervisor):
+    with TestClient(supervisor.app, client=("10.1.6.99", 54321)) as client:
+        response = client.get(
+            "/region",
+            params={"d": DID, "m": MODEL},
+            headers={"v": "v2", "x-forwarded-for": "10.1.6.170"},
+        )
+    assert response.status_code == 200
+
+    region_event = next(e for e in supervisor.runtime_state.recent_events() if e.get("route") == "region")
+    assert region_event["remote"] == "10.1.6.99:54321"
+    assert supervisor.runtime_state.pairing_snapshot()["target"]["last_ip"] == "10.1.6.99"
