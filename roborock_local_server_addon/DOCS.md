@@ -13,6 +13,8 @@ It publishes two TLS ports directly:
 2. Set `admin_password`, `protocol_login_email`, and `protocol_login_pin` (6 digits).
 3. Choose TLS mode:
    - `provided`: set `cert_file` and `key_file`
+     - If using the official Home Assistant Let's Encrypt add-on, certificates are located in `/ssl` (e.g. `cert_file: /ssl/fullchain.pem` and `key_file: /ssl/privkey.pem`).
+     - If using another add-on such as Nginx Proxy Manager, certificates are available under `/all_addon_configs/...` (e.g. `/all_addon_configs/a0d7b954_nginxproxymanager/letsencrypt/live/npm-3/fullchain.pem`).
    - `cloudflare_acme`: set `tls_base_domain`, `tls_email`, `cloudflare_token`
 4. Start the add-on.
 
@@ -28,16 +30,20 @@ After the dashboard opens:
 2. Confirm the expected vacuum appears in the inventory.
 3. Run onboarding from a second machine. If you copy the onboarding scripts to that machine, keep `start_onboarding_gui.py`, `ui.html`, and `onboarding_shared.py` together for the GUI flow, or keep `start_onboarding.py` and `onboarding_shared.py` together for the CLI flow.
 
-This add-on does not auto-edit Home Assistant's Roborock config entry. You still need to update `.storage/core.config_entries` so Home Assistant points at your local stack.
+## Connecting Home Assistant
 
-Disable the Roborock integration before editing `.storage/core.config_entries`. Update `username`, `base_url`, `rriot.r.a`, `rriot.r.l`, and `rriot.r.m`, then restart home assistant and enable the integration.
+The Roborock Home Assistant integration supports a native configuration flow with custom server support:
 
-Use **Reconfigure** on the Roborock integration after Home Assistant has loaded the local endpoint data. Enter `protocol_login_email` as the account and `protocol_login_pin` as the code. If **Reconfigure** is not available yet, restart Home Assistant and reopen the integration.
+1. In Home Assistant, go to **Settings** > **Devices & services**.
+2. If setting up freshly: Add the **Roborock** integration, select **Manual** in the region dropdown, and enter your local server URL (e.g. `https://api-roborock.example.com:555`).
+3. Enter your configured `protocol_login_email` and your 6-digit `protocol_login_pin` as the code.
+
+For existing cloud integrations, Home Assistant does not support changing the server URL via UI. You can either delete and re-add the integration using the **Manual** region flow, or edit `/config/.storage/core.config_entries` while Home Assistant is stopped to repoint the endpoints while preserving entity IDs. See `docs/home_assistant.md` for details.
 
 ## Notes
 
 - Local-only access is still the preferred setup. If you expose it for remote access, the server handles auth and can disable new devices from connecting, but any publicly accessible self-hosted service has risk.
 - If you change `https_port` or `mqtt_tls_port`, update your DNS/clients to use those ports.
 - The current server advertises the same hostname for HTTPS and MQTT/TLS, so Home Assistant's Roborock entry should normally use `ssl://api-roborock.example.com:8881`, not a separate `mqtt-...` hostname.
-- If you already manage certificates in another Home Assistant add-on such as Nginx Proxy Manager, you can point `cert_file` and `key_file` at that add-on's certs through `/all_addon_configs/...`. Example: `/all_addon_configs/a0d7b954_nginxproxymanager/letsencrypt/live/npm-3/fullchain.pem`.
+- For `tls_mode: provided`, certificates from the official Home Assistant Let's Encrypt add-on are stored in `/ssl` (e.g. `/ssl/fullchain.pem` and `/ssl/privkey.pem`). If you manage certificates in another add-on such as Nginx Proxy Manager, you can point `cert_file` and `key_file` at that add-on's certs through `/all_addon_configs/...` (example: `/all_addon_configs/a0d7b954_nginxproxymanager/letsencrypt/live/npm-3/fullchain.pem`).
 - If a reverse proxy exposes different public ports than the add-on listeners, keep `https_port`/`mqtt_tls_port` as the add-on listener ports and set `advertised_https_port`/`advertised_mqtt_tls_port` to the public ports. The proxy must preserve the original `Host` header, and MQTT/TLS still needs a reachable port or a TCP/stream proxy.
