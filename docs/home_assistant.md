@@ -121,7 +121,7 @@ If you are setting up the Roborock integration for the first time:
 
 ### Existing Roborock Integration (Repointing from Cloud)
 
-If your Roborock integration is already installed and connected to the official Roborock cloud, Home Assistant does not support reconfiguring the integration's server URL or region in the UI. You have two options:
+If your Roborock integration is already installed and connected to the official Roborock cloud, Home Assistant does not currently support changing the region in the options flow. You have two options:
 
 #### Option 1: Remove and Re-add (Easiest, Clean Slate)
 
@@ -135,11 +135,11 @@ If you do not mind re-adding the integration:
 6. Enter `protocol_login_email` and your 6-digit `protocol_login_pin` code.
 
 > [!NOTE]
-> Deleting the integration entry removes its entities and devices from Home Assistant. When re-added, entity IDs may need to be matched to your previous dashboard cards or automations.
+> This has the normal side effects of deleting a initegration.
 
 #### Option 2: Edit `core.config_entries` (Preserves Entity IDs, Dashboards & History)
 
-If you have existing automations, dashboards, and entity customizations that you want to preserve without deleting the integration, you must update the URLs in Home Assistant's configuration entries file:
+If you would like to avoid deleting the integration, you must update the URLs in Home Assistant's configuration entries file:
 
 > [!WARNING]
 > Manually editing `.storage/core.config_entries` carries risk if edited incorrectly while Home Assistant is running. **Always take a backup of Home Assistant before modifying files in `.storage`.**
