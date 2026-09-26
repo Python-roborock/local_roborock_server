@@ -20,7 +20,7 @@ If you want to support this project, next time you buy a Roborock, use one of my
 
 - [Known limitations](known_limitations.md)
 - [Home Assistant](home_assistant.md)
-- [Using the Roborock App](roborock_app.md)
+- [Mobile App Options](roborock_app.md)
 - [Updating](updating.md)
 - [Tested vacuums](tested_vacuums.md)
 - [Reverse proxy](reverse_proxy.md)

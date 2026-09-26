@@ -150,4 +150,4 @@ If you see that message after reauth, check that:
 
 - [Installation](installation.md)
 - [Onboarding](onboarding.md)
-- [Using the Roborock App](roborock_app.md)
+- [Mobile App Options](roborock_app.md)

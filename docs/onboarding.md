@@ -6,7 +6,16 @@ Make sure you have already completed the cloud import/fetch-data step from Insta
 
 If this is a brand new vacuum, it is still a good idea to set it up once in the official Roborock app first so the app can fetch the vacuum's current metadata. I would skip doing any firmware updates unless you know the latest firmware version is supported.
 
-## Guided Flow
+## Onboarding Methods
+
+You can onboard your vacuum using either of the following approaches:
+
+1. **[Via Computer (CLI or Web UI)](#guided-flow-cli)** — Run the guided onboarding script (`start_onboarding.py` or `start_onboarding_gui.py`) from a second machine on your network.
+2. **[Via Mobile App (LocalRock)](#alternative-onboarding-via-localrock)** — Provision directly from your phone over Wi-Fi using the third-party LocalRock app.
+
+---
+
+## Guided Flow (CLI)
 
 Run onboarding from a second machine, not from the machine hosting the local server:
 
@@ -143,9 +152,25 @@ Everything in "What To Expect" above still applies. Some vacuums need 2-4 cycles
 - **"Could not reach the server after leaving the vacuum hotspot."** Your machine did not rejoin your normal Wi-Fi within two minutes. Check your network and click Retry.
 - **The UI is stuck on "Polling...".** Give it the full five-minute timeout. Some vacuums are especially slow on the final cycle after the public key is already ready. If nothing changes, check the log pane for errors, then click Retry or Pick another vacuum.
 
+---
+ 
+## Alternative: Onboarding Via LocalRock
+
+> **Notice:** I did not make this app, nor do I maintain it. LocalRock was created by Sidon ([@DonSidro](https://github.com/DonSidro)).
+
+If you have a smartphone, you can use [LocalRock](roborock_app.md#localrock-third-party-app) (available for Android and iOS) to onboard your vacuum directly from your phone without needing a second computer:
+ 
+1. Connect LocalRock to your local server by providing your server URL and login credentials.
+2. Select the **Add vacuum** option in the app.
+3. Reset your vacuum's Wi-Fi (press and hold the two dock buttons or the left/right buttons on the vacuum for 3–5 seconds until you hear the Wi-Fi reset alert).
+4. Follow the in-app prompts to connect your phone to the vacuum's temporary Wi-Fi hotspot and send your home Wi-Fi credentials.
+5. The app will complete the handshake, recover the key, and verify that the vacuum connects to your local server.
+ 
+---
+ 
 ## Related Docs
 
 - [Installation](installation.md)
 - [Tested vacuums](tested_vacuums.md)
 - [Home Assistant](home_assistant.md)
-- [Using the Roborock App](roborock_app.md)
+- [Mobile App Options](roborock_app.md)

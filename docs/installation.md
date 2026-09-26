@@ -162,6 +162,6 @@ Use [Home Assistant](home_assistant.md) as the installation guide if you want to
 
 - [Onboarding](onboarding.md) for pairing a new vacuum
 - [Home Assistant](home_assistant.md) if you want to repoint Home Assistant's Roborock integration to your local stack
-- [Using the Roborock App](roborock_app.md) if you want to point the official app at your local stack
+- [Mobile App Options](roborock_app.md) if you want to control your vacuum with a mobile app (the official Roborock app or LocalRock)
 - [Updating](updating.md) for upgrading an existing install
 - [Docs index](index.md) for the rest of the guides

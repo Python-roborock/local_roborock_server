@@ -1,4 +1,13 @@
-# Using the Roborock App
+# Mobile App Options
+
+After [Installation](installation.md) and [Onboarding](onboarding.md), you have options for controlling your vacuum from a mobile device:
+
+1. **[Official Roborock App](#official-roborock-app)** — The official Roborock app redirected to talk to your local stack via MITM interception and (on Android) a patched APK.
+2. **[LocalRock (Third-Party App)](#localrock-third-party-app)** — An open-source app created by Sidon that connects directly to this server.
+
+---
+
+## Official Roborock App
 
 Use this after [Installation](installation.md) and [Onboarding](onboarding.md) if you want the official Roborock app to talk to your local stack.
 
@@ -8,7 +17,7 @@ The launcher can auto-load a sync secret from `config.toml` beside `mitm_redirec
 
 The launcher now preflights that callback before starting `mitmweb`. If the `--local-api` host cannot be reached, if the TLS certificate does not validate for that host, or if the sync secret is rejected, the script exits immediately instead of letting you proceed into a broken login flow.
 
-## iPhone
+### iPhone
 
 1. Log out of the app on your phone.
 
@@ -38,7 +47,7 @@ The launcher now preflights that callback before starting `mitmweb`. If the `--l
 
 5. Once the MITM setup is working, open the Roborock app, log back in, enter your verification code, and the server should automatically show the vacuums already known to your local stack. Turn off WireGuard, disable the MITM certificate, and then open one of your devices to confirm the map loads.
 
-## Android
+### Android
 
 > **Note:** It is recommended to disable auto update in the Roborock App.
 
@@ -48,7 +57,7 @@ Android 7+ (API level 24+) only trusts system certificates, so the app will reje
 
 To work around both issues, you need to patch `librrcodec.so` to remove the integrity check, then repackage the APK.
 
-### Prerequisites
+#### Prerequisites
 
 Make sure you have the following installed:
 
@@ -58,7 +67,7 @@ Make sure you have the following installed:
 - [keytool](https://docs.oracle.com/en/java/javase/17/docs/specs/man/keytool.html) (part of JDK)
 - [Python 3](https://www.python.org/downloads/)
 
-### Patching the APK
+#### Patching the APK
 
 1. Download the Roborock APK (e.g. from [APKMirror](https://www.apkmirror.com/apk/roborock/roborock/)) and place it in your working directory.
 
@@ -144,11 +153,32 @@ Make sure you have the following installed:
 11. Once the MITM setup is working, open the Roborock app, log back in, enter your verification code, and the server should automatically show the vacuums already known to your local stack. Then close the Roborock app, turn off WireGuard, disable or delete the MITM certificate, reopen the Roborock app, and select your device or devices to confirm the map loads.
 
 
-### What the patch does
+#### What the patch does
 
 During `JNI_OnLoad`, `librrcodec.so` calls a verification function that retrieves the APK's signing certificate via `PackageManager.getPackageInfo()`, hashes it with `MessageDigest`, and compares it against a hardcoded value. If the hash doesn't match, it calls `Process.killProcess()`. The patch replaces the two `BL` (branch-link) instructions that call this function with `NOP`, so the check never runs. In the disassembly, these call sites are at VA `0x4bdcc` and `0x4c428`; in `patcher/patch_librrcodec.py`, the corresponding file offsets are `0x4adcc` and `0x4b428`. The crypto functions the app actually needs are unaffected.
 
 > **Note:** This patch has only been tested and confirmed working on Roborock app version **4.60.06**, against the `librrcodec.so` with build ID `becc35bc1a75903df1eae3f90b380ca5403d06cb`. If Roborock releases a new app version, the virtual addresses and file offsets may change and the patch script will need to be updated.
+
+---
+
+## LocalRock (Third-Party App)
+
+[LocalRock](https://github.com/DonSidro/LocalRock) is an open-source app created by **Sidon Kodraliu** ([@DonSidro](https://github.com/DonSidro)) that connects directly to the local Roborock server.
+
+- **Google Play:** [LocalRock on Google Play](https://play.google.com/store/apps/details?id=com.kodraliu.localrock&hl=en_US&pli=1)
+- **App Store:** [LocalRock on the App Store](https://apps.apple.com/dk/app/localrock/id6788538720)
+- **Source Code:** [DonSidro/LocalRock on GitHub](https://github.com/DonSidro/LocalRock)
+
+> **Notice:** I did not make this app, nor do I maintain it.
+
+### Why use LocalRock?
+- **Less likely to break:** Unlike the official Roborock app, LocalRock talks natively to the local server over HTTPS and MQTT. It does not require running a MITM proxy, installing custom root certificates, WireGuard redirection, or patching and re-signing native APK libraries (`librrcodec.so`). App updates will not break your setup.
+- **Alternative onboarding technique:** LocalRock includes an "Add vacuum" flow that provisions new vacuums over Wi-Fi directly from your phone. This serves as a convenient alternative to running the onboarding scripts (`start_onboarding.py` / `start_onboarding_gui.py`) from a second computer (see [Onboarding](onboarding.md#alternative-onboarding-via-localrock)).
+
+### Trade-offs
+- **You may lose features:** Because LocalRock is an independent client reverse-engineered from the protocol, you may lose some advanced or proprietary features found in the official Roborock app (e.g. customized multi-floor/3D maps, complex routines, and camera live streaming is experimental/untested).
+
+---
 
 ## Related Docs
 

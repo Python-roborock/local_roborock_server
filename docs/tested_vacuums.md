@@ -102,4 +102,4 @@ Use the [compatibility report form](https://github.com/Python-roborock/local_rob
 
 - [Installation](installation.md)
 - [Onboarding](onboarding.md)
-- [Using the Roborock App](roborock_app.md)
+- [Mobile App Options](roborock_app.md)
