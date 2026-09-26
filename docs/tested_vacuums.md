@@ -23,7 +23,6 @@ onboarding support; please report your model, firmware, and certificate chain
 if you try one.
 
 - [Roborock Qrevo Curv 2 Pro](https://github.com/Python-roborock/local_roborock_server/issues/47)
-- [Saros 20 / Saros 20X](https://github.com/Python-roborock/local_roborock_server/issues/47)
 - [Roborock Qrevo S Pro](https://github.com/Python-roborock/local_roborock_server/issues/67)
 - Qrevo Curv 2 Flow
 - Saros Z70
@@ -67,11 +66,13 @@ Cloudflare can provide DNS validation for several certificate issuers. Its use a
 | Roborock Saros 10R | `02.50.56` | ❓ | ❓ | ❓ | ❓ | [#78](https://github.com/Python-roborock/local_roborock_server/issues/78) |
 | Roborock Saros 10R | `02.52.32` | ✅ | ❓ | ✅ | ❓ | — |
 | Roborock Saros 10R (a144) | `02.52.86` | ❓ | ❓ | ✅ | ❓ | [#57](https://github.com/Python-roborock/local_roborock_server/issues/57), [#61](https://github.com/Python-roborock/local_roborock_server/issues/61) |
+| Roborock Saros 20 Complete (a288) | `02.55.44` | ✅ | ❓ | ❓ | ❓ | [#98](https://github.com/Python-roborock/local_roborock_server/issues/98) |
 | Roborock Saros 20 Sonic (a279) | `02.42.52` | ✅ | ❓ | ❓ | ❓ | [#84](https://github.com/Python-roborock/local_roborock_server/pull/84#issuecomment-5701936113) |
 | Roborock G30U | `02.52.32` | ✅ | ❓ | ❓ | ❓ | — |
-| Roborock Q5 Pro | `2.04.06` | ❓ | ❓ | ✅ | ❓ | [#56](https://github.com/Python-roborock/local_roborock_server/issues/56) |
+| Roborock Q5 Pro | `02.04.66` | ❌ | ❓ | ✅ | ❓ | [#56](https://github.com/Python-roborock/local_roborock_server/issues/56), [#97](https://github.com/Python-roborock/local_roborock_server/issues/97) |
 | Roborock Q8 Max | `02.06.86` | ❓ | ❓ | ✅ | ❓ | [#70](https://github.com/Python-roborock/local_roborock_server/issues/70) |
-| QRevo | `02.20.60` | ❓ | ❓ | ✅ | ❓ | [#75](https://github.com/Python-roborock/local_roborock_server/pull/75) |
+| Roborock Qrevo C (a170) | `02.16.64` | ❓ | ❓ | ❓ | ❓ | [#95](https://github.com/Python-roborock/local_roborock_server/issues/95) |
+| QRevo | `02.20.60` | ✅ | ❓ | ✅ | ❓ | [#75](https://github.com/Python-roborock/local_roborock_server/pull/75), [#94](https://github.com/Python-roborock/local_roborock_server/issues/94) |
 | QRevo Curv | `02.28.60` | ❓ | ❓ | ✅ | ❓ | [#60](https://github.com/Python-roborock/local_roborock_server/issues/60) |
 | QRevo CurvX | `02.35.88` | ✅ | ❓ | ❓ | ❓ | [#64](https://github.com/Python-roborock/local_roborock_server/issues/64) |
 | QRevo Edge | `02.22.52` | ❓ | ❓ | ✅ | ❓ | [#90](https://github.com/Python-roborock/local_roborock_server/issues/90) |
@@ -87,6 +88,8 @@ Setup notes:
 
 - S7 Pro Ultra: the Actalis success used an RSA-2048 certificate. The Let's Encrypt failure was reported with an R3/E1 chain.
 - Saros 10R `02.50.56`: the reported pfSense/HAProxy setup used provided certificates and the MITM redirect fix in [PR #77](https://github.com/Python-roborock/local_roborock_server/pull/77).
+- Q5 Pro: ZeroSSL was attempted and failed (MQTT broken pipe), while Let's Encrypt succeeded.
+- Qrevo C: confirmed working with a GoDaddy-issued certificate and tested with the LocalRock Android app.
 - QRevo Curv: the reporter worked around an app redirect port issue, also tracked by [PR #77](https://github.com/Python-roborock/local_roborock_server/pull/77).
 - QRevo Master: the SSL.com result used a Sectigo Public Server Authentication CA DV R36 chain and a workaround for the proxy MQTT onboarding issue in [#83](https://github.com/Python-roborock/local_roborock_server/issues/83).
 
