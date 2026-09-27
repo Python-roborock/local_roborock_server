@@ -217,6 +217,8 @@ STYLE_CSS = dedent(
         word-break: break-word; max-height: 22em; overflow: auto; color: var(--rls-text);
     }
 
+    .hidden { display: none !important; }
+
     @media (max-width: 480px) {
         .container:not(.nav-wrapper) { padding: 1em; margin-top: .75em; margin-bottom: .75em; }
     }
