@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+- Added onboarding for vacuums that have never been on the Roborock cloud: choose **New vacuum** in the guided CLI or GUI. The server adopts the vacuum from its own onboarding traffic and adds it to the inventory as soon as it registers, with its model, product name, and product id taken from a built-in catalog of Roborock robot vacuums.
+- Guided onboarding now shows when the server is calculating the public key, so you know to wait before starting the next pairing cycle.
+- Fixed onboarding behind a reverse proxy or SNAT when the HTTP and MQTT client addresses differ.
+- Fixed the advertised MQTT port when it differs from the listening port.
+- Fixed explicit HTTPS ports for reverse proxies, including `--local-api` on `:443`.
+- Deleting a routine in the Roborock app now persists.
+- Existing settings, cloud imports, and recovered keys are retained when updating.
+
 ## 1.1.0
 
 - Added V2 onboarding support, including automatic public-key recovery and multipart NC registration.

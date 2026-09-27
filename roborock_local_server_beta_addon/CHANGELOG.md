@@ -1,6 +1,6 @@
 # Changelog
 
-Beta is currently unused. Use **Roborock Local Server** for the stable `1.1.0` release.
+Beta is currently unused. Use **Roborock Local Server** for the stable `1.2.0` release.
 
 ## 1.1.0-rc2
 
