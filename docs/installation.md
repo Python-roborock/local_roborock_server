@@ -92,11 +92,20 @@ If your model already has certificate notes on the tested-vacuums page, follow t
    uv sync
    ```
 
-3. Run the setup wizard:
+3. Run the setup wizard.
 
-   ```bash
-   uv run roborock-local-server configure
-   ```
+   You have two options here, and they write the same `config.toml`:
+
+   - **In your browser (no `uv`/Python needed on the host):** skip straight to step 6 and start the container
+     with no `config.toml` present. It boots into a setup wizard, served in plain HTTP at `/admin` on your
+     configured HTTPS port (`http://<this host>:555/admin` by default), that asks for the same fields as the
+     CLI wizard below. Submitting it writes `config.toml`, and the container restarts itself into the full
+     HTTPS/MQTT stack - reload the page after a few seconds and you're at the real (now HTTPS) admin login.
+   - **On the command line:**
+
+     ```bash
+     uv run roborock-local-server configure
+     ```
 
    The wizard asks for:
 
@@ -111,7 +120,7 @@ If your model already has certificate notes on the tested-vacuums page, follow t
 
    It then writes `config.toml`, generates `admin.password_hash` and `admin.session_secret`, and if you chose Cloudflare it also writes `secrets/cloudflare_token`. If you also chose `acme_server = actalis`, it writes `secrets/acme_eab_kid` and `secrets/acme_eab_hmac_key`.
 
-4. If you chose external MQTT, fill in `broker.host` in `config.toml` before starting the stack. See [Custom MQTT](custom_mqtt.md).
+4. If you chose external MQTT with the CLI wizard, fill in `broker.host` in `config.toml` before starting the stack (the browser wizard asks for the broker host directly, so this step doesn't apply there). See [Custom MQTT](custom_mqtt.md).
 
 5. If you skipped Cloudflare, put your certificate files in `data/certs/fullchain.pem` and `data/certs/privkey.pem` (relative to the repository root on the host, which maps to `/data/certs/` inside the container). This is the path to use when your vacuum works better with a certificate chain you manage yourself. See [Custom certificate management](custom_cert_management.md).
 
