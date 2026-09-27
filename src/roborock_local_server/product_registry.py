@@ -10,118 +10,29 @@ from .bundled_backend.shared.constants import DEFAULT_PRODUCT_SCHEMA
 
 _LOGGER = logging.getLogger(__name__)
 
-# B01 protocol 28-item schema (for Tuya-DP models like Q7 Series sc05)
-B01_PRODUCT_SCHEMA: list[dict[str, Any]] = [
-    {"id": 101, "name": "RPC Request", "code": "rpc_request", "mode": "rw", "type": "RAW"},
-    {"id": 102, "name": "RPC Response", "code": "rpc_response", "mode": "rw", "type": "RAW"},
-    {"id": 120, "name": "error_code", "code": "error_code", "mode": "ro", "type": "ENUM"},
-    {"id": 121, "name": "state", "code": "state", "mode": "ro", "type": "VALUE"},
-    {"id": 122, "name": "battery", "code": "battery", "mode": "ro", "type": "ENUM"},
-    {"id": 123, "name": "fan_power", "code": "fan_power", "mode": "rw", "type": "ENUM"},
-    {"id": 124, "name": "water_box_mode", "code": "water_box_mode", "mode": "rw", "type": "RAW"},
-    {"id": 125, "name": "main_brush_life", "code": "main_brush_life", "mode": "ro", "type": "ENUM"},
-    {"id": 126, "name": "side_brush_life", "code": "side_brush_life", "mode": "ro", "type": "ENUM"},
-    {"id": 127, "name": "filter_life", "code": "filter_life", "mode": "ro", "type": "ENUM"},
-    {"id": 135, "name": "offline_status", "code": "offline_status", "mode": "ro", "type": "ENUM"},
-    {"id": 136, "name": "clean_times", "code": "clean_times", "mode": "rw", "type": "ENUM"},
-    {"id": 137, "name": "cleaning_preference", "code": "cleaning_preference", "mode": "rw", "type": "ENUM"},
-    {"id": 138, "name": "clean_task_type", "code": "clean_task_type", "mode": "ro", "type": "ENUM"},
-    {"id": 139, "name": "back_type", "code": "back_type", "mode": "ro", "type": "ENUM"},
-    {"id": 141, "name": "cleaning_progress", "code": "cleaning_progress", "mode": "ro", "type": "ENUM"},
-    {"id": 142, "name": "fc_state", "code": "fc_state", "mode": "ro", "type": "RAW"},
-    {"id": 201, "name": "start_clean_task", "code": "start_clean_task", "mode": "wo", "type": "ENUM"},
-    {"id": 202, "name": "start_back_dock_task", "code": "start_back_dock_task", "mode": "wo", "type": "ENUM"},
-    {"id": 203, "name": "start_dock_task", "code": "start_dock_task", "mode": "wo", "type": "ENUM"},
-    {"id": 204, "name": "pause", "code": "pause", "mode": "wo", "type": "RAW"},
-    {"id": 205, "name": "resume", "code": "resume", "mode": "wo", "type": "RAW"},
-    {"id": 206, "name": "stop", "code": "stop", "mode": "wo", "type": "RAW"},
-    {"id": 10000, "name": "request_cmd", "code": "request_cmd", "mode": "wo", "type": "RAW"},
-    {"id": 10001, "name": "response_cmd", "code": "response_cmd", "mode": "ro", "type": "RAW"},
-    {"id": 10002, "name": "request_map", "code": "request_map", "mode": "ro", "type": "RAW"},
-    {"id": 10003, "name": "response_map", "code": "response_map", "mode": "ro", "type": "RAW"},
-    {"id": 10004, "name": "event_report", "code": "event_report", "mode": "rw", "type": "RAW"},
-]
+ROBOT_VACUUM_CATEGORY = "robot.vacuum.cleaner"
 
-# Built-in Roborock device registry mapping model identifiers to verified profiles
-BUILTIN_PRODUCT_REGISTRY: dict[str, dict[str, Any]] = {
-    "roborock.vacuum.a87": {
-        "model": "roborock.vacuum.a87",
-        "product_name": "Roborock Qrevo MaxV",
-        "category": "robot.vacuum.cleaner",
-        "product_id": "5gUei3OIJIXVD3eD85Balg",
-        "schema": DEFAULT_PRODUCT_SCHEMA,
-    },
-    "roborock.vacuum.a15": {
-        "model": "roborock.vacuum.a15",
-        "product_name": "Roborock S7",
-        "category": "robot.vacuum.cleaner",
-        "product_id": "1YYW18rpgyAJTISwb1NM91",
-        "schema": DEFAULT_PRODUCT_SCHEMA,
-    },
-    "roborock.vacuum.sc05": {
-        "model": "roborock.vacuum.sc05",
-        "product_name": "Roborock Q7 Series",
-        "category": "robot.vacuum.cleaner",
-        "product_id": "5ayEx3aKgStqZZ0v5IpMBP",
-        "schema": B01_PRODUCT_SCHEMA,
-    },
-    "roborock.vacuum.a72": {
-        "model": "roborock.vacuum.a72",
-        "product_name": "Roborock Q5 Pro",
-        "category": "robot.vacuum.cleaner",
-        "product_id": "a72",
-        "schema": DEFAULT_PRODUCT_SCHEMA,
-    },
-    "roborock.vacuum.a51": {
-        "model": "roborock.vacuum.a51",
-        "product_name": "Roborock S8",
-        "category": "robot.vacuum.cleaner",
-        "product_id": "a51",
-        "schema": DEFAULT_PRODUCT_SCHEMA,
-    },
-    "roborock.vacuum.a27": {
-        "model": "roborock.vacuum.a27",
-        "product_name": "Roborock S7 MaxV",
-        "category": "robot.vacuum.cleaner",
-        "product_id": "a27",
-        "schema": DEFAULT_PRODUCT_SCHEMA,
-    },
-    "roborock.vacuum.a75": {
-        "model": "roborock.vacuum.a75",
-        "product_name": "Roborock Q Revo",
-        "category": "robot.vacuum.cleaner",
-        "product_id": "a75",
-        "schema": DEFAULT_PRODUCT_SCHEMA,
-    },
-    "roborock.vacuum.a288": {
-        "model": "roborock.vacuum.a288",
-        "product_name": "Roborock Saros 20 Complete",
-        "category": "robot.vacuum.cleaner",
-        "product_id": "a288",
-        "schema": DEFAULT_PRODUCT_SCHEMA,
-    },
-    "roborock.vacuum.a170": {
-        "model": "roborock.vacuum.a170",
-        "product_name": "Roborock Qrevo C",
-        "category": "robot.vacuum.cleaner",
-        "product_id": "a170",
-        "schema": DEFAULT_PRODUCT_SCHEMA,
-    },
-    "roborock.vacuum.s5e": {
-        "model": "roborock.vacuum.s5e",
-        "product_name": "Roborock S5 Max",
-        "category": "robot.vacuum.cleaner",
-        "product_id": "s5e",
-        "schema": DEFAULT_PRODUCT_SCHEMA,
-    },
-    "roborock.vacuum.a102": {
-        "model": "roborock.vacuum.a102",
-        "product_name": "Roborock Zeo One",
-        "category": "roborock.washer",
-        "product_id": "a102",
-        "schema": DEFAULT_PRODUCT_SCHEMA,
-    },
-}
+# Robot vacuum models (Roborock product catalog category 1) mapped to their cloud product
+# name and product id ("rriotid"). Regenerate from python-roborock's
+# RoborockApiClient.get_products() when Roborock ships new models.
+PRODUCT_CATALOG_PATH = Path(__file__).with_name("product_catalog.json")
+
+
+def _load_builtin_registry() -> dict[str, dict[str, Any]]:
+    products = json.loads(PRODUCT_CATALOG_PATH.read_text(encoding="utf-8"))["products"]
+    return {
+        model: {
+            "model": model,
+            "product_name": entry["product_name"],
+            "category": ROBOT_VACUUM_CATEGORY,
+            "product_id": entry["product_id"],
+            "schema": DEFAULT_PRODUCT_SCHEMA,
+        }
+        for model, entry in products.items()
+    }
+
+
+BUILTIN_PRODUCT_REGISTRY: dict[str, dict[str, Any]] = _load_builtin_registry()
 
 
 def normalize_model_string(model: str | None) -> str:
@@ -131,7 +42,7 @@ def normalize_model_string(model: str | None) -> str:
         return ""
     if trimmed.startswith("roborock."):
         return trimmed
-    # If passed just a short code like 'a72' or 'sc05'
+    # If passed just a short code like 'a72'
     return f"roborock.vacuum.{trimmed}"
 
 
@@ -144,7 +55,7 @@ def resolve_product_metadata(
 
     Checks:
     1. Optional custom user registry JSON file
-    2. Built-in product registry
+    2. Built-in product catalog
     3. Fallback baseline profile with standard 17-item DP schema
     """
     normalized_model = normalize_model_string(model)
@@ -164,14 +75,9 @@ def resolve_product_metadata(
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("Failed reading custom product registry %s: %s", custom_registry_path, exc)
 
-    # Check built-in registry
+    # Check built-in catalog
     if normalized_model in BUILTIN_PRODUCT_REGISTRY:
         result = copy.deepcopy(BUILTIN_PRODUCT_REGISTRY[normalized_model])
-        if custom_name:
-            result["product_name"] = custom_name
-        return result
-    if short_code and short_code in BUILTIN_PRODUCT_REGISTRY:
-        result = copy.deepcopy(BUILTIN_PRODUCT_REGISTRY[short_code])
         if custom_name:
             result["product_name"] = custom_name
         return result
@@ -181,7 +87,7 @@ def resolve_product_metadata(
     return {
         "model": normalized_model or "roborock.vacuum.generic",
         "product_name": fallback_name,
-        "category": "robot.vacuum.cleaner",
+        "category": ROBOT_VACUUM_CATEGORY,
         "product_id": short_code or "generic",
         "schema": copy.deepcopy(DEFAULT_PRODUCT_SCHEMA),
     }

@@ -8,6 +8,7 @@ from roborock.data import HomeData
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
 from roborock_local_server.server import ReleaseSupervisor, resolve_route
+from shared.constants import DEFAULT_PRODUCT_SCHEMA
 from shared.protocol_auth import ProtocolAuthStore, build_hawk_authorization
 
 
@@ -736,7 +737,8 @@ def test_new_vacuum_blind_session_autopersists_to_inventory(tmp_path: Path) -> N
     assert persisted["duid"] == "1103835404427"
     assert persisted["did"] == "1103835404427"
     assert persisted["model"] == "roborock.vacuum.a117"
-    assert persisted["name"] == "Roborock A117"
+    assert persisted["name"] == "Roborock Qrevo Master"
+    assert persisted["product_id"] == "3hVxBJoGbDP2kv93Pcc1pb"
     assert persisted["source"] == "onboarding"
     assert persisted["local_key"]
     assert persisted.get("schema") is not None
@@ -940,7 +942,7 @@ def test_product_registry_resolution_for_new_vacuum(tmp_path: Path) -> None:
     login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
     assert login.status_code == 200
 
-    # Start an onboarding session for a B01 series model (Q7 Series sc05)
+    # Start a blind onboarding session for a never-on-cloud vacuum
     started = client.post(
         "/admin/api/onboarding/sessions",
         json={"new_vacuum": True},
@@ -948,23 +950,22 @@ def test_product_registry_resolution_for_new_vacuum(tmp_path: Path) -> None:
     assert started.status_code == 200
     session_id = started.json()["session_id"]
 
-    # Robot sends /region and /nc with m=roborock.vacuum.sc05
-    assert client.get("/region?d=2203821560999&m=roborock.vacuum.sc05").status_code == 200
-    assert client.get("/nc?d=2203821560999&m=roborock.vacuum.sc05").status_code == 200
+    # Robot sends /region and /nc with m=roborock.vacuum.a87
+    assert client.get("/region?d=2203821560999&m=roborock.vacuum.a87").status_code == 200
+    assert client.get("/nc?d=2203821560999&m=roborock.vacuum.a87").status_code == 200
 
     # Polling session adopts and persists from product registry
     fetched = client.get(f"/admin/api/onboarding/sessions/{session_id}")
     assert fetched.status_code == 200
     snapshot = fetched.json()
-    assert snapshot["target"]["model"] == "roborock.vacuum.sc05"
+    assert snapshot["target"]["model"] == "roborock.vacuum.a87"
 
     inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
     [persisted] = inventory["devices"]
-    assert persisted["model"] == "roborock.vacuum.sc05"
-    assert persisted["name"] == "Roborock Q7 Series"
-    assert persisted["product_id"] == "5ayEx3aKgStqZZ0v5IpMBP"
-    # B01 models have the 28-item schema
-    assert len(persisted["schema"]) == 28
+    assert persisted["model"] == "roborock.vacuum.a87"
+    assert persisted["name"] == "Roborock Qrevo MaxV"
+    assert persisted["product_id"] == "5gUei3OIJIXVD3eD85Balg"
+    assert len(persisted["schema"]) == len(DEFAULT_PRODUCT_SCHEMA)
 
 
 def test_core_only_mode_disables_standalone_admin_routes(tmp_path: Path) -> None:
