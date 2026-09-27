@@ -12,6 +12,7 @@ def _answers(
     https_port: int = 555,
     mqtt_tls_port: int = 8881,
     broker_mode: str = "embedded",
+    broker_host: str = "",
     tls_mode: str = "cloudflare_acme",
     acme_server: str = "zerossl",
     acme_eab_kid: str = "",
@@ -22,6 +23,7 @@ def _answers(
         https_port=https_port,
         mqtt_tls_port=mqtt_tls_port,
         broker_mode=broker_mode,
+        broker_host=broker_host,
         tls_mode=tls_mode,
         base_domain="example.com" if tls_mode == "cloudflare_acme" else "",
         email="you@example.com" if tls_mode == "cloudflare_acme" else "",
@@ -83,6 +85,23 @@ def test_write_config_setup_external_broker_requires_host_before_serve(tmp_path:
 
     with pytest.raises(ValueError, match="broker.host is required"):
         load_config(config_file)
+
+
+def test_write_config_setup_external_broker_with_host_needs_no_manual_edit(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+
+    result = write_config_setup(
+        config_file=config_file,
+        answers=_answers(broker_mode="external", broker_host="mqtt.internal", tls_mode="provided"),
+    )
+
+    assert not result.broker_template_needs_edit
+    rendered = config_file.read_text(encoding="utf-8")
+    assert 'host = "mqtt.internal"' in rendered
+    assert "# Fill this in" not in rendered
+
+    config = load_config(config_file)
+    assert config.broker.host == "mqtt.internal"
 
 
 def test_write_config_setup_refuses_overwrite_without_force(tmp_path: Path) -> None:
