@@ -201,7 +201,7 @@ def _status_html() -> str:
         + dedent(
             """\
             <div class="container">
-              <h4 class="header orange-text">Setup is complete</h4>
+              <h4 class="header rls-heading">Setup is complete</h4>
               <p>The stack is restarting into the full dashboard at this same address - reload in a few
               seconds.</p>
             </div>
@@ -287,7 +287,7 @@ def _setup_wizard_html() -> str:
             <p class="rls-muted">This runs once, the first time the stack boots without a config.toml. Fill
             this in, submit, and the container will restart into the full HTTPS/MQTT stack.</p>
             <form id="setup">
-              <h5 class="header orange-text">Network</h5>
+              <h5 class="header rls-heading">Network</h5>
               <div class="row">
                 <div class="input-field col s12">
                   <input id="stack_fqdn" name="stack_fqdn" type="text" required>
@@ -306,7 +306,7 @@ def _setup_wizard_html() -> str:
               </div>
               <div class="divider"></div>
 
-              <h5 class="header orange-text">MQTT Broker</h5>
+              <h5 class="header rls-heading">MQTT Broker</h5>
               <p>
                 <label><input class="with-gap" name="broker_mode" type="radio" value="embedded" checked /><span>Embedded (recommended)</span></label>
               </p>
@@ -321,7 +321,7 @@ def _setup_wizard_html() -> str:
               </div>
               <div class="divider"></div>
 
-              <h5 class="header orange-text">Certificates</h5>
+              <h5 class="header rls-heading">Certificates</h5>
               <p>
                 <label><input class="with-gap" name="tls_mode" type="radio" value="cloudflare_acme" checked /><span>Cloudflare DNS-01 auto-renew</span></label>
               </p>
@@ -371,7 +371,7 @@ def _setup_wizard_html() -> str:
               </p>
               <div class="divider"></div>
 
-              <h5 class="header orange-text">Admin Access</h5>
+              <h5 class="header rls-heading">Admin Access</h5>
               <div class="row">
                 <div class="input-field col s6">
                   <input id="admin_password" name="admin_password" type="password" required>
@@ -384,7 +384,7 @@ def _setup_wizard_html() -> str:
               </div>
               <div class="divider"></div>
 
-              <h5 class="header orange-text">App / Home Assistant Login</h5>
+              <h5 class="header rls-heading">App / Home Assistant Login</h5>
               <div class="row">
                 <div class="input-field col s12">
                   <input id="protocol_login_email" name="protocol_login_email" type="email" required>
@@ -468,7 +468,7 @@ def _admin_only_wizard_html() -> str:
             <p class="rls-muted">Network, broker, and certificate settings are already set (from environment
             variables). Just add admin credentials to finish setup.</p>
             <form id="setup">
-              <h5 class="header orange-text">Admin Access</h5>
+              <h5 class="header rls-heading">Admin Access</h5>
               <div class="row">
                 <div class="input-field col s6">
                   <input id="admin_password" name="admin_password" type="password" required>
@@ -481,7 +481,7 @@ def _admin_only_wizard_html() -> str:
               </div>
               <div class="divider"></div>
 
-              <h5 class="header orange-text">App / Home Assistant Login</h5>
+              <h5 class="header rls-heading">App / Home Assistant Login</h5>
               <div class="row">
                 <div class="input-field col s12">
                   <input id="protocol_login_email" name="protocol_login_email" type="email" required>
