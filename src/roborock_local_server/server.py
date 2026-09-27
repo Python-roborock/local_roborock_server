@@ -1663,6 +1663,9 @@ class ReleaseSupervisor:
                 for key in ("duid", "did", "device_id", "deviceId")
             }
             if identifiers & existing_ids:
+                if existing.get("source") != "onboarding":
+                    # Cloud-imported records are authoritative; never rewrite them here.
+                    return False
                 changed = False
                 if name and (not existing.get("name") or existing.get("name") in identifiers):
                     existing["name"] = resolved_name

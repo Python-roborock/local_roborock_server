@@ -784,6 +784,35 @@ def test_new_vacuum_persists_at_nc_without_session_polling(tmp_path: Path) -> No
     assert len(json.loads(paths.inventory_path.read_text(encoding="utf-8"))["devices"]) == 1
 
 
+def test_onboarding_cloud_imported_vacuum_leaves_inventory_record_untouched(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    # Older cloud imports carry no product_name/schema/category on the device record.
+    cloud_device = {
+        "duid": "6HL2zfniaoYYV01CkVuhkO",
+        "did": "1103821560705",
+        "name": "Roborock Qrevo MaxV 2",
+        "model": "roborock.vacuum.a87",
+        "product_id": "5gUei3OIJIXVD3eD85Balg",
+        "local_key": "xPd5Dr8CGGqtdDlH",
+    }
+    paths.inventory_path.write_text(json.dumps({"devices": [cloud_device]}, indent=2) + "\n", encoding="utf-8")
+    before = paths.inventory_path.read_text(encoding="utf-8")
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    session = supervisor.start_onboarding_session(duid="6HL2zfniaoYYV01CkVuhkO")
+
+    client = TestClient(supervisor.app)
+    assert client.get("/region?did=1103821560705&m=roborock.vacuum.a87").status_code == 200
+    assert client.get("/nc?did=1103821560705&m=roborock.vacuum.a87").status_code == 200
+    supervisor.persist_active_onboarding_device()
+    supervisor.onboarding_session_snapshot(session_id=session["session_id"])
+
+    assert paths.inventory_path.read_text(encoding="utf-8") == before
+
+
 def test_new_vacuum_admin_api_custom_name_and_home_data_schema(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
