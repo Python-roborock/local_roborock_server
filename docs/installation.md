@@ -223,6 +223,8 @@ Use [Home Assistant](home_assistant.md) as the installation guide if you want to
 
 4. For any routines that use zones, re-save them so the server stores the zone data correctly. In the Roborock app, open each routine that has zones, open the zone, tap **Edit**, open any **Zone Cleaning** entry, then tap **Save**. Repeat for each zone in the routine.
 
+5. The dashboard's **Activity** panel shows recent HTTP/MQTT traffic between your vacuum(s)/app/Home Assistant and this server - useful for confirming a device is actually talking to the local stack. It only shows redacted metadata (method/path/topic/RPC method name, sizes, timestamps) by default, since the underlying logs can contain device keys and decrypted command payloads. Set `ROBOROCK_SERVER_ACTIVITY_RAW=1` if you need full unredacted entries for debugging.
+
 ## Next Steps
 
 - [Onboarding](onboarding.md) for pairing a new vacuum
