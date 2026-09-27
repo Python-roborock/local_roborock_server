@@ -24,6 +24,7 @@ from python_multipart.exceptions import MultipartParseError
 import uvicorn
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from .activity_log import activity_raw_enabled, read_recent_activity
 from .certs import CertificateManager
 from .bundled_backend.shared.constants import DEFAULT_PRODUCT_SCHEMA
 from .bundled_backend.shared.data_helpers import utcnow_iso
@@ -1491,6 +1492,16 @@ class ReleaseSupervisor:
                 }
             )
         return devices
+
+    def _activity_payload(self, *, limit: int) -> dict[str, Any]:
+        raw = activity_raw_enabled(os.environ)
+        entries = read_recent_activity(
+            http_jsonl_path=self.paths.http_jsonl_path,
+            mqtt_jsonl_path=self.paths.mqtt_jsonl_path,
+            limit=limit,
+            raw=raw,
+        )
+        return {"raw": raw, "entries": entries}
 
     def _auth_payload(self) -> dict[str, Any]:
         sessions = [

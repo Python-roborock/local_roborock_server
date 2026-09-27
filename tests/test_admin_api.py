@@ -1572,3 +1572,107 @@ def test_execute_scene_hydrates_missing_zone_ranges_from_mqtt(tmp_path: Path) ->
     persisted_outer = json.loads(scene["param"])
     persisted_step = json.loads(persisted_outer["action"]["items"][0]["param"])
     assert persisted_step["params"]["data"][0]["zones"][0]["range"] == [32800, 22750, 34550, 25350]
+
+
+def _logged_in_client(supervisor: ReleaseSupervisor) -> TestClient:
+    client = TestClient(supervisor.app)
+    response = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert response.status_code == 200
+    return client
+
+
+def test_admin_activity_requires_auth(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    response = client.get("/admin/api/activity")
+
+    assert response.status_code == 401
+
+
+def test_admin_activity_returns_redacted_entries_by_default(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.http_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.http_jsonl_path.write_text(
+        json.dumps(
+            {
+                "time": "2026-01-01T00:00:00Z",
+                "method": "GET",
+                "clean_path": "/api/v1/user/login",
+                "headers": {"authorization": "Bearer super-secret"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = _logged_in_client(supervisor)
+
+    response = client.get("/admin/api/activity")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["raw"] is False
+    assert len(payload["entries"]) == 1
+    assert payload["entries"][0]["method"] == "GET"
+    assert "headers" not in payload["entries"][0]
+    assert "super-secret" not in json.dumps(payload)
+
+
+def test_admin_activity_raw_mode_via_env_var(tmp_path: Path, monkeypatch) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.http_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.http_jsonl_path.write_text(
+        json.dumps({"time": "2026-01-01T00:00:00Z", "method": "GET", "headers": {"x": "y"}}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ROBOROCK_SERVER_ACTIVITY_RAW", "1")
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = _logged_in_client(supervisor)
+
+    response = client.get("/admin/api/activity")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["raw"] is True
+    assert payload["entries"][0]["headers"] == {"x": "y"}
+
+
+def test_admin_activity_rejects_non_integer_limit(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = _logged_in_client(supervisor)
+
+    response = client.get("/admin/api/activity", params={"limit": "not-a-number"})
+
+    assert response.status_code == 400
+
+
+def test_admin_activity_clamps_limit(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.http_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.http_jsonl_path.write_text(
+        "\n".join(
+            json.dumps({"time": f"2026-01-01T00:00:{i:02d}Z", "method": "GET"}) for i in range(10)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = _logged_in_client(supervisor)
+
+    response = client.get("/admin/api/activity", params={"limit": "2"})
+
+    assert response.status_code == 200
+    assert len(response.json()["entries"]) == 2
