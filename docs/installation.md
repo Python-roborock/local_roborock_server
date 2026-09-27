@@ -107,6 +107,13 @@ If your model already has certificate notes on the tested-vacuums page, follow t
      uv run roborock-local-server configure
      ```
 
+   You can also combine the two: if `ROBOROCK_SERVER_*` env vars generate `config.toml`'s network/broker/TLS
+   settings but the admin ones (`ROBOROCK_SERVER_ADMIN_PASSWORD`, `ROBOROCK_SERVER_PROTOCOL_LOGIN_EMAIL`,
+   `ROBOROCK_SERVER_PROTOCOL_LOGIN_PIN`) are left unset, the container still boots into `/admin`, but the
+   wizard notices the rest is already configured and only asks for admin credentials. Useful for a
+   reverse-proxy or ACME setup you'd rather express as env vars/IaC, while still picking the admin password
+   in a browser instead of a compose file.
+
    The wizard asks for:
 
    - `stack_fqdn` (must start with `api-`)
