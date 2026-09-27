@@ -12,7 +12,7 @@ You can also support via BMAC or paypal:
 [![Buy Me a Coffee][badge-bmac]][link-bmac]
 [![PayPal][badge-paypal]][link-paypal]
 
-Roborock Local Server is a private Roborock HTTPS and MQTT stack you run on your own system.
+Roborock Local Server is a private Roborock HTTPS and MQTT stack you run on your own system without any rooting needed!
 
 This service is meant to stay private. Point your own DNS at your server's LAN IP. If you want this to work away from your home network, the server does handle auth and lets you disable new devices from connecting. BUT there is ALWAYS a risk when you make a self-hosted service publicly accessible, so please only do it if you know what you are doing. If your workflow is fine with local-only access, that will always be better. If you find any vulnerabilities, please let me know.
 
@@ -63,8 +63,6 @@ Additional docs:
 - [Custom MQTT](docs/custom_mqtt.md)
 - [Custom certificate management](docs/custom_cert_management.md)
 
-
-
 ## Acknowledgements
 
 - [Dennis Giese (@dgiese)](https://dontvacuum.me/) whose research and papers inspired much of the work on reverse-engineering Roborock vacuums
@@ -82,6 +80,8 @@ This software is provided "as is", without warranty of any kind. Running this st
 ## License
 
 This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
+
+If this repository worked for you, consider giving it a star to help other find it!
 
 [link-bmac]: https://buymeacoffee.com/lashl
 [badge-bmac]: https://img.shields.io/badge/Buy%20Me%20a%20Coffee-donate-yellow?style=for-the-badge&logo=buymeacoffee&logoColor=black
