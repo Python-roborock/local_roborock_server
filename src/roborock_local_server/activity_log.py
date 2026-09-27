@@ -1,12 +1,15 @@
-"""Redacted summary view over the HTTP/MQTT protocol jsonl logs, for the
-admin dashboard's Activity panel.
+"""Redacted summary view over the HTTP/MQTT/MITM protocol jsonl logs, for
+the admin dashboard's Activity panel.
 
-decompiled_http.jsonl / decompiled_mqtt.jsonl (see AppPaths in config.py)
-have no rotation or size cap, and can contain sensitive data: HTTP request
-headers and onboarding-adjacent bodies can carry localKey/passwords, and
-MQTT entries carry fully-decrypted device RPC payloads. So by default this
-module only ever returns safe metadata (method/path/topic/RPC method name,
-sizes, timestamps) - never raw headers, bodies, or payloads.
+decompiled_http.jsonl / decompiled_mqtt.jsonl / mitm_activity.jsonl (see
+AppPaths in config.py) have no rotation or size cap, and can contain
+sensitive data: HTTP request headers and onboarding-adjacent bodies can
+carry localKey/passwords, MQTT entries carry fully-decrypted device RPC
+payloads, and mitm_activity.jsonl (populated by mitm_redirect.py's optional
+--activity-sync, capturing traffic between the native Roborock app and
+Roborock's real cloud) can carry actual Roborock account tokens. So by
+default this module only ever returns safe metadata (method/path/topic/RPC
+method name, sizes, timestamps) - never raw headers, bodies, or payloads.
 
 Set ROBOROCK_SERVER_ACTIVITY_RAW=1 to return complete, unredacted entries
 instead. This is an explicit, deployment-time operator opt-in (matching how
@@ -106,28 +109,45 @@ def _summarize_mqtt_entry(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _summarize_mitm_entry(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "time": raw.get("time"),
+        "source": "mitm",
+        "host": raw.get("host"),
+        "method": raw.get("method"),
+        "path": raw.get("path"),
+        "status": raw.get("status"),
+        "rewritten": bool(raw.get("rewritten")),
+    }
+
+
 def read_recent_activity(
     *,
     http_jsonl_path: Path,
     mqtt_jsonl_path: Path,
+    mitm_jsonl_path: Path | None = None,
     limit: int = DEFAULT_LIMIT,
     raw: bool = False,
 ) -> list[dict[str, Any]]:
-    """Most recent `limit` HTTP+MQTT activity entries, newest first.
+    """Most recent `limit` HTTP+MQTT(+MITM) activity entries, newest first.
 
     `raw=True` returns complete, unredacted entries (see module docstring);
     the default returns metadata-only summaries with no header/body/payload
-    content at all.
+    content at all. `mitm_jsonl_path` is optional since not every deployment
+    runs mitm_redirect.py with --activity-sync.
     """
     http_entries = _parse_jsonl_lines(_tail_lines(http_jsonl_path, limit))
     mqtt_entries = _parse_jsonl_lines(_tail_lines(mqtt_jsonl_path, limit))
+    mitm_entries = _parse_jsonl_lines(_tail_lines(mitm_jsonl_path, limit)) if mitm_jsonl_path else []
 
     if raw:
         combined = [{"source": "http", **entry} for entry in http_entries]
         combined += [{"source": "mqtt", **entry} for entry in mqtt_entries]
+        combined += [{"source": "mitm", **entry} for entry in mitm_entries]
     else:
         combined = [_summarize_http_entry(entry) for entry in http_entries]
         combined += [_summarize_mqtt_entry(entry) for entry in mqtt_entries]
+        combined += [_summarize_mitm_entry(entry) for entry in mitm_entries]
 
     combined.sort(key=lambda entry: str(entry.get("time") or ""), reverse=True)
     return combined[:limit]
