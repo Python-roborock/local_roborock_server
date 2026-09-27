@@ -13,6 +13,7 @@ from pathlib import Path
 import secrets
 import signal
 import socket
+import threading
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -373,6 +374,7 @@ class ReleaseSupervisor:
         if not self.paths.device_key_state_path.exists():
             self.paths.device_key_state_path.parent.mkdir(parents=True, exist_ok=True)
             self.paths.device_key_state_path.write_text('{"devices":{}}\n', encoding="utf-8")
+        self._onboarded_device_persist_lock = threading.Lock()
         self.runtime_credentials = RuntimeCredentialsStore(
             self.paths.runtime_credentials_path,
             inventory_path=self.paths.inventory_path,
@@ -1342,6 +1344,10 @@ class ReleaseSupervisor:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("runtime_state record_http_event failed: %s", exc)
+        if route_name == "nc_prepare":
+            # /nc just handed the vacuum its localKey; persist now instead of relying on an
+            # onboarding client still polling the session (it may have timed out or exited).
+            self.persist_active_onboarding_device()
         append_jsonl(self.context.http_jsonl, entry)
         if key_cache is not None and key_capture_did:
             try:
@@ -1563,7 +1569,19 @@ class ReleaseSupervisor:
         self._maybe_persist_onboarded_device(snapshot)
         return snapshot
 
+    def persist_active_onboarding_device(self) -> None:
+        """Persist the active session's blind-onboarded vacuum, driven by server-side events."""
+        try:
+            self._maybe_persist_onboarded_device(self.runtime_state.onboarding_session_snapshot())
+        except Exception as exc:  # noqa: BLE001
+            self.root_logger.warning("auto-persist onboarded device failed: %s", exc)
+
     def _maybe_persist_onboarded_device(self, snapshot: dict[str, Any]) -> None:
+        # Called from HTTP handlers, admin polling and the MQTT proxy thread.
+        with self._onboarded_device_persist_lock:
+            self._maybe_persist_onboarded_device_locked(snapshot)
+
+    def _maybe_persist_onboarded_device_locked(self, snapshot: dict[str, Any]) -> None:
         """Auto-persist a blind-onboarded ("new vacuum") device into inventory.
 
         A vacuum that was never on the cloud has no inventory entry, so Home
@@ -1832,6 +1850,7 @@ class ReleaseSupervisor:
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self.context.zone_ranges_store,
             tls_enabled=self._uses_local_tls(),
+            on_onboarding_credentials_learned=self.persist_active_onboarding_device,
         )
         self._mqtt_proxy.start()
         self.runtime_state.set_service("mqtt_tls_proxy", running=True, required=True, enabled=True)

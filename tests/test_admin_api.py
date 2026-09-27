@@ -754,6 +754,36 @@ def test_new_vacuum_blind_session_autopersists_to_inventory(tmp_path: Path) -> N
     assert len(inventory_again["devices"]) == 1
 
 
+def test_new_vacuum_persists_at_nc_without_session_polling(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(json.dumps({"devices": []}) + "\n", encoding="utf-8")
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    supervisor.start_onboarding_session(new_vacuum=True)
+
+    client = TestClient(supervisor.app)
+    assert client.get("/region?did=1103821560705&m=roborock.vacuum.a87").status_code == 200
+    # Nothing has polled the session yet (the onboarding client may have timed out or exited).
+    assert json.loads(paths.inventory_path.read_text(encoding="utf-8"))["devices"] == []
+    assert client.get("/nc?did=1103821560705&m=roborock.vacuum.a87").status_code == 200
+
+    inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    [persisted] = inventory["devices"]
+    assert persisted["duid"] == "1103821560705"
+    assert persisted["name"] == "Roborock Qrevo MaxV"
+    assert persisted["product_id"] == "5gUei3OIJIXVD3eD85Balg"
+    record = supervisor.runtime_credentials.resolve_device(did="1103821560705")
+    assert record is not None
+    assert persisted["local_key"] == record["localkey"]
+
+    # Later server-side triggers (e.g. the vacuum's first MQTT connect) stay idempotent.
+    supervisor.persist_active_onboarding_device()
+    assert len(json.loads(paths.inventory_path.read_text(encoding="utf-8"))["devices"]) == 1
+
+
 def test_new_vacuum_admin_api_custom_name_and_home_data_schema(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
