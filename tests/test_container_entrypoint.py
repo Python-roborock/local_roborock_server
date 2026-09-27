@@ -65,3 +65,81 @@ def test_run_entrypoint_prefers_compose_config_when_present(
     )
 
     assert calls == [compose_config]
+
+
+def test_run_entrypoint_prefers_existing_data_config_over_env_vars(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compose_config = tmp_path / "app-config.toml"
+    data_config = tmp_path / "data-config.toml"
+    addon_options = tmp_path / "options.json"
+    data_config.write_text("existing = true\n", encoding="utf-8")
+
+    monkeypatch.setenv("ROBOROCK_SERVER_STACK_FQDN", "api-roborock.example.com")
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        container_entrypoint,
+        "_exec_server",
+        lambda config_path: calls.append(config_path),
+    )
+    monkeypatch.setattr(
+        container_entrypoint,
+        "write_config_from_env",
+        lambda *args, **kwargs: pytest.fail("should not regenerate an existing config.toml"),
+    )
+
+    container_entrypoint._run_entrypoint(
+        compose_config=compose_config,
+        data_config=data_config,
+        addon_options=addon_options,
+    )
+
+    assert calls == [data_config]
+
+
+def test_run_entrypoint_generates_config_from_env_vars(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compose_config = tmp_path / "app-config.toml"
+    data_config = tmp_path / "data-config.toml"
+    addon_options = tmp_path / "options.json"
+
+    monkeypatch.setenv("ROBOROCK_SERVER_STACK_FQDN", "api-roborock.example.com")
+    calls: list[tuple[str, Path]] = []
+    monkeypatch.setattr(
+        container_entrypoint,
+        "write_config_from_env",
+        lambda env, *, config_path: calls.append(("write", config_path)),
+    )
+    monkeypatch.setattr(
+        container_entrypoint,
+        "_exec_server",
+        lambda config_path: calls.append(("exec", config_path)),
+    )
+
+    container_entrypoint._run_entrypoint(
+        compose_config=compose_config,
+        data_config=data_config,
+        addon_options=addon_options,
+    )
+
+    assert calls == [("write", data_config), ("exec", data_config)]
+
+
+def test_run_entrypoint_errors_without_config_or_env_vars(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compose_config = tmp_path / "app-config.toml"
+    data_config = tmp_path / "data-config.toml"
+    addon_options = tmp_path / "options.json"
+    monkeypatch.delenv("ROBOROCK_SERVER_STACK_FQDN", raising=False)
+
+    with pytest.raises(SystemExit):
+        container_entrypoint._run_entrypoint(
+            compose_config=compose_config,
+            data_config=data_config,
+            addon_options=addon_options,
+        )
