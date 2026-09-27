@@ -232,17 +232,13 @@ def _as_bool(value: object, default: bool) -> bool:
     return bool(value)
 
 
-def load_config(path: str | Path) -> AppConfig:
-    config_path = Path(path).resolve()
-    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
-
+def _load_network_broker_storage_tls(
+    parsed: dict[str, object],
+) -> tuple[NetworkConfig, BrokerConfig, StorageConfig, TlsConfig]:
     network = _get_section(parsed, "network")
     broker = _get_section(parsed, "broker")
     storage = _get_section(parsed, "storage")
     tls = _get_section(parsed, "tls")
-    admin = _get_section(parsed, "admin")
-    turn = _get_section(parsed, "turn")
-    turn_mode = str(turn.get("mode", "external" if _as_bool(turn.get("enabled"), False) else "disabled")).strip().lower()
     broker_mode = str(broker.get("mode", "embedded")).strip().lower()
     if broker_mode not in {"embedded", "external"}:
         raise ValueError("broker.mode must be 'embedded' or 'external'")
@@ -263,144 +259,192 @@ def load_config(path: str | Path) -> AppConfig:
     https_port = _as_port(network.get("https_port"), "network.https_port", 555)
     mqtt_tls_port = _as_port(network.get("mqtt_tls_port"), "network.mqtt_tls_port", 8881)
 
-    config = AppConfig(
-        network=NetworkConfig(
-            stack_fqdn=_require_stack_fqdn(network.get("stack_fqdn"), "network.stack_fqdn"),
-            listener_mode=listener_mode,
-            bind_host=str(network.get("bind_host", "0.0.0.0")).strip() or "0.0.0.0",
-            https_port=https_port,
-            mqtt_tls_port=mqtt_tls_port,
-            advertised_https_port=_as_port(
-                network.get("advertised_https_port"),
-                "network.advertised_https_port",
-                https_port,
-            ),
-            advertised_mqtt_tls_port=_as_port(
-                network.get("advertised_mqtt_tls_port"),
-                "network.advertised_mqtt_tls_port",
-                mqtt_tls_port,
-            ),
-            region=str(network.get("region", "us")).strip().lower() or "us",
-            localkey=str(network.get("localkey", "")).strip(),
-            duid=str(network.get("duid", "")).strip(),
-            mqtt_username=str(network.get("mqtt_username", "")).strip(),
-            mqtt_password=str(network.get("mqtt_password", "")).strip(),
-            mqtt_client_id=str(network.get("mqtt_client_id", "")).strip(),
-            trusted_proxies=_as_trusted_proxies(
-                network.get("trusted_proxies"),
-                "network.trusted_proxies",
-                NetworkConfig.trusted_proxies,
-            ),
-            timezone=_as_timezone(
-                network.get("timezone", "") or parsed.get("timezone", ""),
-                "network.timezone",
-            ),
+    network_config = NetworkConfig(
+        stack_fqdn=_require_stack_fqdn(network.get("stack_fqdn"), "network.stack_fqdn"),
+        listener_mode=listener_mode,
+        bind_host=str(network.get("bind_host", "0.0.0.0")).strip() or "0.0.0.0",
+        https_port=https_port,
+        mqtt_tls_port=mqtt_tls_port,
+        advertised_https_port=_as_port(
+            network.get("advertised_https_port"),
+            "network.advertised_https_port",
+            https_port,
         ),
-        broker=BrokerConfig(
-            mode=broker_mode,
-            host=broker_host,
-            port=_as_port(broker.get("port"), "broker.port", broker_port_default),
-            mosquitto_binary=str(broker.get("mosquitto_binary", "mosquitto")).strip() or "mosquitto",
-            enable_topic_bridge=_as_bool(broker.get("enable_topic_bridge"), True),
+        advertised_mqtt_tls_port=_as_port(
+            network.get("advertised_mqtt_tls_port"),
+            "network.advertised_mqtt_tls_port",
+            mqtt_tls_port,
         ),
-        storage=StorageConfig(
-            data_dir=str(storage.get("data_dir", "/data")).strip() or "/data",
+        region=str(network.get("region", "us")).strip().lower() or "us",
+        localkey=str(network.get("localkey", "")).strip(),
+        duid=str(network.get("duid", "")).strip(),
+        mqtt_username=str(network.get("mqtt_username", "")).strip(),
+        mqtt_password=str(network.get("mqtt_password", "")).strip(),
+        mqtt_client_id=str(network.get("mqtt_client_id", "")).strip(),
+        trusted_proxies=_as_trusted_proxies(
+            network.get("trusted_proxies"),
+            "network.trusted_proxies",
+            NetworkConfig.trusted_proxies,
         ),
-        tls=TlsConfig(
-            mode=tls_mode,
-            base_domain=(
-                _normalize_hostname(tls.get("base_domain"), "tls.base_domain")
-                if str(tls.get("base_domain", "")).strip()
-                else ""
-            ),
-            email=str(tls.get("email", "")).strip(),
-            cloudflare_token_file=str(tls.get("cloudflare_token_file", "")).strip(),
-            renew_days_before=_as_int(tls.get("renew_days_before"), "tls.renew_days_before", 30),
-            renew_check_seconds=_as_int(tls.get("renew_check_seconds"), "tls.renew_check_seconds", 43200),
-            acme_server=_normalize_acme_server(tls.get("acme_server", "zerossl"), "tls.acme_server"),
-            acme_eab_kid=str(tls.get("acme_eab_kid", "")).strip(),
-            acme_eab_hmac_key=str(tls.get("acme_eab_hmac_key", "")).strip(),
-            acme_eab_kid_file=str(tls.get("acme_eab_kid_file", "")).strip(),
-            acme_eab_hmac_key_file=str(tls.get("acme_eab_hmac_key_file", "")).strip(),
-            cert_file=str(tls.get("cert_file", "")).strip(),
-            key_file=str(tls.get("key_file", "")).strip(),
-        ),
-        admin=AdminConfig(
-            password_hash=_require_non_empty(admin.get("password_hash"), "admin.password_hash"),
-            session_secret=_require_non_empty(admin.get("session_secret"), "admin.session_secret"),
-            session_ttl_seconds=_as_int(admin.get("session_ttl_seconds"), "admin.session_ttl_seconds", 86400),
-            protocol_auth_enabled=_as_bool(admin.get("protocol_auth_enabled"), True),
-            new_connections_enabled=_as_bool(admin.get("new_connections_enabled"), True),
-            protocol_login_email=_require_non_empty(admin.get("protocol_login_email"), "admin.protocol_login_email"),
-            protocol_login_pin_hash=_require_non_empty(
-                admin.get("protocol_login_pin_hash"),
-                "admin.protocol_login_pin_hash",
-            ),
-        ),
-        turn=TurnConfig(
-            mode=turn_mode,
-            host=str(turn.get("host", "")).strip(),
-            port=_as_port(turn.get("port"), "turn.port", 3478),
-            username=str(turn.get("username", "") or ("roborock" if turn_mode == "provided" else "")).strip(),
-            password=str(turn.get("password", "")).strip(),
-            realm=str(turn.get("realm", "") or turn.get("host", "")).strip(),
-            ttl=_as_int(turn.get("ttl"), "turn.ttl", 86400),
+        timezone=_as_timezone(
+            network.get("timezone", "") or parsed.get("timezone", ""),
+            "network.timezone",
         ),
     )
+    broker_config = BrokerConfig(
+        mode=broker_mode,
+        host=broker_host,
+        port=_as_port(broker.get("port"), "broker.port", broker_port_default),
+        mosquitto_binary=str(broker.get("mosquitto_binary", "mosquitto")).strip() or "mosquitto",
+        enable_topic_bridge=_as_bool(broker.get("enable_topic_bridge"), True),
+    )
+    storage_config = StorageConfig(
+        data_dir=str(storage.get("data_dir", "/data")).strip() or "/data",
+    )
+    tls_config = TlsConfig(
+        mode=tls_mode,
+        base_domain=(
+            _normalize_hostname(tls.get("base_domain"), "tls.base_domain")
+            if str(tls.get("base_domain", "")).strip()
+            else ""
+        ),
+        email=str(tls.get("email", "")).strip(),
+        cloudflare_token_file=str(tls.get("cloudflare_token_file", "")).strip(),
+        renew_days_before=_as_int(tls.get("renew_days_before"), "tls.renew_days_before", 30),
+        renew_check_seconds=_as_int(tls.get("renew_check_seconds"), "tls.renew_check_seconds", 43200),
+        acme_server=_normalize_acme_server(tls.get("acme_server", "zerossl"), "tls.acme_server"),
+        acme_eab_kid=str(tls.get("acme_eab_kid", "")).strip(),
+        acme_eab_hmac_key=str(tls.get("acme_eab_hmac_key", "")).strip(),
+        acme_eab_kid_file=str(tls.get("acme_eab_kid_file", "")).strip(),
+        acme_eab_hmac_key_file=str(tls.get("acme_eab_hmac_key_file", "")).strip(),
+        cert_file=str(tls.get("cert_file", "")).strip(),
+        key_file=str(tls.get("key_file", "")).strip(),
+    )
 
-    if len(config.admin.session_secret) < 24:
-        raise ValueError("admin.session_secret must be at least 24 characters")
-    if "@" not in config.admin.protocol_login_email:
-        raise ValueError("admin.protocol_login_email must be an email address")
-
-    if config.broker.mode == "external":
-        _require_non_empty(config.broker.host, "broker.host")
-
-    if config.turn.mode not in {"disabled", "provided", "external"}:
-        raise ValueError("turn.mode must be 'disabled', 'provided', or 'external'")
-    if config.turn.mode != "disabled":
-        _require_non_empty(config.turn.host, "turn.host")
-        _require_non_empty(config.turn.username, "turn.username")
-        _require_non_empty(config.turn.password, "turn.password")
-        _require_non_empty(config.turn.realm, "turn.realm")
-        if config.turn.ttl <= 0:
-            raise ValueError("turn.ttl must be greater than 0")
-    if config.turn.mode == "provided":
-        for name in ("username", "password", "realm"):
-            if any(character in getattr(config.turn, name) for character in "\r\n:="):
-                raise ValueError(f"turn.{name} cannot contain newlines, colons, or equals signs in provided mode")
+    if broker_config.mode == "external":
+        _require_non_empty(broker_config.host, "broker.host")
 
     # In external_tls the proxy terminates TLS and presents the cert to clients,
     # so the server itself needs no certificate material.
-    if config.network.listener_mode == "local_tls":
-        if config.tls.mode == "cloudflare_acme":
-            _normalize_hostname(config.tls.base_domain, "tls.base_domain")
-            _require_non_empty(config.tls.email, "tls.email")
-            _require_non_empty(config.tls.cloudflare_token_file, "tls.cloudflare_token_file")
-            has_kid = bool(config.tls.acme_eab_kid or config.tls.acme_eab_kid_file)
-            has_hmac = bool(config.tls.acme_eab_hmac_key or config.tls.acme_eab_hmac_key_file)
+    if network_config.listener_mode == "local_tls":
+        if tls_config.mode == "cloudflare_acme":
+            _normalize_hostname(tls_config.base_domain, "tls.base_domain")
+            _require_non_empty(tls_config.email, "tls.email")
+            _require_non_empty(tls_config.cloudflare_token_file, "tls.cloudflare_token_file")
+            has_kid = bool(tls_config.acme_eab_kid or tls_config.acme_eab_kid_file)
+            has_hmac = bool(tls_config.acme_eab_hmac_key or tls_config.acme_eab_hmac_key_file)
             if has_kid != has_hmac:
                 raise ValueError(
                     "tls.acme_eab_kid/tls.acme_eab_kid_file and "
                     "tls.acme_eab_hmac_key/tls.acme_eab_hmac_key_file must be set together"
                 )
-            if config.tls.acme_server == "actalis":
+            if tls_config.acme_server == "actalis":
                 if not has_kid:
                     raise ValueError(
                         "Actalis requires tls.acme_eab_kid or tls.acme_eab_kid_file, "
                         "and tls.acme_eab_hmac_key or tls.acme_eab_hmac_key_file"
                     )
         else:
-            _require_non_empty(config.tls.cert_file, "tls.cert_file")
-            _require_non_empty(config.tls.key_file, "tls.key_file")
-    elif config.tls.mode == "cloudflare_acme":
+            _require_non_empty(tls_config.cert_file, "tls.cert_file")
+            _require_non_empty(tls_config.key_file, "tls.key_file")
+    elif tls_config.mode == "cloudflare_acme":
         # external_tls never issues or renews certificates, so cloudflare_acme
         # would be a silent no-op. Require the proxy-managed 'provided' mode.
         raise ValueError(
             "network.listener_mode='external_tls' requires tls.mode='provided' "
             "(the proxy terminates TLS; the server does not issue certificates)"
         )
-    return config
+
+    return network_config, broker_config, storage_config, tls_config
+
+
+def _load_turn(parsed: dict[str, object]) -> TurnConfig:
+    turn = _get_section(parsed, "turn")
+    mode = str(turn.get("mode", "external" if _as_bool(turn.get("enabled"), False) else "disabled")).strip().lower()
+    turn_config = TurnConfig(
+        mode=mode,
+        host=str(turn.get("host", "")).strip(),
+        port=_as_port(turn.get("port"), "turn.port", 3478),
+        username=str(turn.get("username", "") or ("roborock" if mode == "provided" else "")).strip(),
+        password=str(turn.get("password", "")).strip(),
+        realm=str(turn.get("realm", "") or turn.get("host", "")).strip(),
+        ttl=_as_int(turn.get("ttl"), "turn.ttl", 86400),
+    )
+    if turn_config.mode not in {"disabled", "provided", "external"}:
+        raise ValueError("turn.mode must be 'disabled', 'provided', or 'external'")
+    if turn_config.mode != "disabled":
+        _require_non_empty(turn_config.host, "turn.host")
+        _require_non_empty(turn_config.username, "turn.username")
+        _require_non_empty(turn_config.password, "turn.password")
+        _require_non_empty(turn_config.realm, "turn.realm")
+        if turn_config.ttl <= 0:
+            raise ValueError("turn.ttl must be greater than 0")
+    if turn_config.mode == "provided":
+        for name in ("username", "password", "realm"):
+            if any(character in getattr(turn_config, name) for character in "\r\n:="):
+                raise ValueError(f"turn.{name} cannot contain newlines, colons, or equals signs in provided mode")
+    return turn_config
+
+
+def _load_admin(parsed: dict[str, object]) -> AdminConfig:
+    admin = _get_section(parsed, "admin")
+    admin_config = AdminConfig(
+        password_hash=_require_non_empty(admin.get("password_hash"), "admin.password_hash"),
+        session_secret=_require_non_empty(admin.get("session_secret"), "admin.session_secret"),
+        session_ttl_seconds=_as_int(admin.get("session_ttl_seconds"), "admin.session_ttl_seconds", 86400),
+        protocol_auth_enabled=_as_bool(admin.get("protocol_auth_enabled"), True),
+        new_connections_enabled=_as_bool(admin.get("new_connections_enabled"), True),
+        protocol_login_email=_require_non_empty(admin.get("protocol_login_email"), "admin.protocol_login_email"),
+        protocol_login_pin_hash=_require_non_empty(
+            admin.get("protocol_login_pin_hash"),
+            "admin.protocol_login_pin_hash",
+        ),
+    )
+    if len(admin_config.session_secret) < 24:
+        raise ValueError("admin.session_secret must be at least 24 characters")
+    if "@" not in admin_config.protocol_login_email:
+        raise ValueError("admin.protocol_login_email must be an email address")
+    return admin_config
+
+
+def load_config(path: str | Path) -> AppConfig:
+    config_path = Path(path).resolve()
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    network_config, broker_config, storage_config, tls_config = _load_network_broker_storage_tls(parsed)
+    turn_config = _load_turn(parsed)
+    admin_config = _load_admin(parsed)
+    return AppConfig(
+        network=network_config,
+        broker=broker_config,
+        storage=storage_config,
+        tls=tls_config,
+        admin=admin_config,
+        turn=turn_config,
+    )
+
+
+def diagnose_config(path: str | Path) -> str:
+    """Classify config.toml's state for the setup wizard.
+
+    Returns "ok" (loads cleanly), "missing_admin" (network/broker/storage/tls
+    all validate, but [admin] doesn't - e.g. a partial env-var-generated
+    config still waiting on the wizard for credentials), or "invalid" (file
+    missing/unreadable, or something other than [admin] is wrong).
+    """
+    try:
+        parsed = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return "invalid"
+    try:
+        _load_network_broker_storage_tls(parsed)
+        _load_turn(parsed)
+    except ValueError:
+        return "invalid"
+    try:
+        _load_admin(parsed)
+    except ValueError:
+        return "missing_admin"
+    return "ok"
 
 
 def resolve_paths(config_file: str | Path, config: AppConfig) -> AppPaths:
