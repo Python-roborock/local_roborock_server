@@ -24,6 +24,7 @@ from python_multipart.exceptions import MultipartParseError
 import uvicorn
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from .activity_log import activity_raw_enabled, read_recent_activity
 from .certs import CertificateManager
 from .bundled_backend.shared.constants import DEFAULT_PRODUCT_SCHEMA
 from .bundled_backend.shared.data_helpers import utcnow_iso
@@ -1391,7 +1392,10 @@ class ReleaseSupervisor:
             # /nc just handed the vacuum its localKey; persist now instead of relying on an
             # onboarding client still polling the session (it may have timed out or exited).
             self.persist_active_onboarding_device()
-        append_jsonl(self.context.http_jsonl, entry)
+        if route_name != "catchall":
+            # Truly unmatched requests (favicon probes, health checks, random scans) aren't
+            # meaningful onboarding/protocol activity - keep them out of the Activity feed.
+            append_jsonl(self.context.http_jsonl, entry)
         if key_cache is not None and key_capture_did:
             try:
                 key_cache.maybe_recover_async(key_capture_did)
@@ -1504,6 +1508,16 @@ class ReleaseSupervisor:
                 }
             )
         return devices
+
+    def _activity_payload(self, *, limit: int) -> dict[str, Any]:
+        raw = activity_raw_enabled(os.environ)
+        entries = read_recent_activity(
+            http_jsonl_path=self.paths.http_jsonl_path,
+            mqtt_jsonl_path=self.paths.mqtt_jsonl_path,
+            limit=limit,
+            raw=raw,
+        )
+        return {"raw": raw, "entries": entries}
 
     def _auth_payload(self) -> dict[str, Any]:
         sessions = [

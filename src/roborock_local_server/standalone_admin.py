@@ -75,6 +75,11 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           <div id="sessionList" style="display:grid;gap:8px;margin-top:12px">Loading sessions...</div>
         </section>
 
+        <section><h2>Activity</h2>
+          <div id="activityMeta" style="margin-bottom:8px;color:#555"></div>
+          <div id="activityList" style="display:grid;gap:6px;max-height:480px;overflow:auto"></div>
+        </section>
+
         <section><h2>Health</h2><pre id="health"></pre></section>
         <section><h2>Vacuums</h2><pre id="vacuums"></pre></section>
         <script>
@@ -221,6 +226,52 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           }}
         }}
 
+        function renderActivity(payload) {{
+          document.getElementById("activityMeta").textContent = payload.raw
+            ? "Showing full raw entries (ROBOROCK_SERVER_ACTIVITY_RAW is enabled) - headers/bodies/payloads are not redacted."
+            : "Showing redacted summaries. Set ROBOROCK_SERVER_ACTIVITY_RAW=1 to see full raw entries.";
+          const list = document.getElementById("activityList");
+          list.innerHTML = "";
+          const entries = Array.isArray(payload.entries) ? payload.entries : [];
+          if (!entries.length) {{
+            const empty = document.createElement("div");
+            empty.textContent = "No recent activity.";
+            empty.style.color = "#555";
+            list.appendChild(empty);
+            return;
+          }}
+          for (const entry of entries) {{
+            const row = document.createElement("div");
+            row.style.border = "1px solid #ddd";
+            row.style.borderRadius = "6px";
+            row.style.padding = "8px";
+            row.style.background = entry.source === "mqtt" ? "#f0f7ff" : "#fafafa";
+            row.style.fontSize = "12px";
+            const summary = document.createElement("div");
+            if (payload.raw) {{
+              summary.textContent = `${{entry.time || ""}} [${{entry.source}}]`;
+              const pre = document.createElement("pre");
+              pre.style.whiteSpace = "pre-wrap";
+              pre.style.marginTop = "4px";
+              pre.textContent = JSON.stringify(entry, null, 2);
+              row.appendChild(summary);
+              row.appendChild(pre);
+            }} else if (entry.source === "mqtt") {{
+              const methods = (entry.rpc_methods || []).join(", ");
+              summary.textContent =
+                `${{entry.time || ""}} [MQTT ${{entry.direction || ""}}] ${{entry.topic || ""}}` +
+                (methods ? ` - ${{methods}}` : "");
+              row.appendChild(summary);
+            }} else {{
+              summary.textContent =
+                `${{entry.time || ""}} [HTTP] ${{entry.method || ""}} ${{entry.path || ""}}` +
+                (entry.route ? ` (${{entry.route}})` : "");
+              row.appendChild(summary);
+            }}
+            list.appendChild(row);
+          }}
+        }}
+
         async function refresh() {{
           const status = await fetchJson("/admin/api/status");
           document.getElementById("overall").textContent = status.health.overall_ok ? "Healthy" : "Needs Attention";
@@ -229,6 +280,7 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           const vacuums = await fetchJson("/admin/api/vacuums");
           renderVacuumSummary(vacuums.vacuums);
           document.getElementById("vacuums").textContent = JSON.stringify(vacuums.vacuums, null, 2);
+          renderActivity(await fetchJson("/admin/api/activity"));
         }}
         document.getElementById("sendCode").addEventListener("click", async () => {{
           try {{
@@ -356,6 +408,17 @@ def register_standalone_admin_routes(
     async def admin_auth(request: Request) -> JSONResponse:
         supervisor._require_admin(request)
         return JSONResponse(supervisor._auth_payload())
+
+    @app.get("/admin/api/activity")
+    async def admin_activity(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        raw_limit = request.query_params.get("limit")
+        try:
+            limit = int(raw_limit) if raw_limit else 200
+        except ValueError:
+            return JSONResponse({"error": "limit must be an integer"}, status_code=400)
+        limit = max(1, min(limit, 500))
+        return JSONResponse(supervisor._activity_payload(limit=limit))
 
     @app.post("/admin/api/auth")
     async def admin_auth_update(request: Request) -> JSONResponse:
