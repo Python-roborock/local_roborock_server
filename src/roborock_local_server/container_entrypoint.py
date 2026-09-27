@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .env_config import has_env_config, write_config_from_env
 from .ha_addon import write_config_from_home_assistant_options
 
 
@@ -32,8 +33,14 @@ def _run_entrypoint(*, compose_config: Path, data_config: Path, addon_options: P
         _exec_server(data_config)
         return
 
+    if has_env_config(os.environ):
+        write_config_from_env(os.environ, config_path=data_config)
+        _exec_server(data_config)
+        return
+
     raise SystemExit(
-        "No config file found. Expected /app/config.toml, /data/config.toml, or /data/options.json."
+        "No config file found. Expected /app/config.toml, /data/config.toml, /data/options.json, "
+        "or ROBOROCK_SERVER_* environment variables (see docs/installation.md)."
     )
 
 
