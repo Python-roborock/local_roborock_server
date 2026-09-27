@@ -179,3 +179,86 @@ def test_read_recent_activity_respects_limit(tmp_path: Path) -> None:
 
     assert len(entries) == 3
     assert entries[0]["time"] == "2026-01-01T00:00:09Z"
+
+
+def test_read_recent_activity_without_mitm_path_is_unaffected(tmp_path: Path) -> None:
+    http_path = tmp_path / "http.jsonl"
+    mqtt_path = tmp_path / "mqtt.jsonl"
+    _write_jsonl(http_path, [{"time": "2026-01-01T00:00:00Z", "method": "GET"}])
+    _write_jsonl(mqtt_path, [])
+
+    entries = read_recent_activity(http_jsonl_path=http_path, mqtt_jsonl_path=mqtt_path)
+
+    assert len(entries) == 1
+
+
+def test_read_recent_activity_redacts_mitm_entries_by_default(tmp_path: Path) -> None:
+    http_path = tmp_path / "http.jsonl"
+    mqtt_path = tmp_path / "mqtt.jsonl"
+    mitm_path = tmp_path / "mitm.jsonl"
+    _write_jsonl(http_path, [])
+    _write_jsonl(mqtt_path, [])
+    _write_jsonl(
+        mitm_path,
+        [
+            {
+                "time": "2026-01-01T00:00:00Z",
+                "host": "usiot.roborock.com",
+                "method": "GET",
+                "path": "/api/v1/userinfo",
+                "status": 200,
+                "rewritten": True,
+                "request_headers": {"authorization": "real-cloud-token-999"},
+                "response_body": "real account data here",
+            }
+        ],
+    )
+
+    entries = read_recent_activity(http_jsonl_path=http_path, mqtt_jsonl_path=mqtt_path, mitm_jsonl_path=mitm_path)
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["source"] == "mitm"
+    assert entry["host"] == "usiot.roborock.com"
+    assert entry["method"] == "GET"
+    assert entry["path"] == "/api/v1/userinfo"
+    assert entry["status"] == 200
+    assert entry["rewritten"] is True
+    assert "request_headers" not in entry
+    assert "response_body" not in entry
+    assert "real-cloud-token-999" not in json.dumps(entry)
+
+
+def test_read_recent_activity_mitm_raw_mode_returns_full_entry(tmp_path: Path) -> None:
+    http_path = tmp_path / "http.jsonl"
+    mqtt_path = tmp_path / "mqtt.jsonl"
+    mitm_path = tmp_path / "mitm.jsonl"
+    _write_jsonl(http_path, [])
+    _write_jsonl(mqtt_path, [])
+    _write_jsonl(
+        mitm_path,
+        [{"time": "2026-01-01T00:00:00Z", "host": "usiot.roborock.com", "request_headers": {"x": "y"}}],
+    )
+
+    entries = read_recent_activity(
+        http_jsonl_path=http_path,
+        mqtt_jsonl_path=mqtt_path,
+        mitm_jsonl_path=mitm_path,
+        raw=True,
+    )
+
+    assert entries[0]["source"] == "mitm"
+    assert entries[0]["request_headers"] == {"x": "y"}
+
+
+def test_read_recent_activity_sorts_across_all_three_sources(tmp_path: Path) -> None:
+    http_path = tmp_path / "http.jsonl"
+    mqtt_path = tmp_path / "mqtt.jsonl"
+    mitm_path = tmp_path / "mitm.jsonl"
+    _write_jsonl(http_path, [{"time": "2026-01-01T00:00:00Z", "method": "GET"}])
+    _write_jsonl(mqtt_path, [{"time": "2026-01-01T00:00:02Z", "topic": "rr/x"}])
+    _write_jsonl(mitm_path, [{"time": "2026-01-01T00:00:01Z", "host": "usiot.roborock.com"}])
+
+    entries = read_recent_activity(http_jsonl_path=http_path, mqtt_jsonl_path=mqtt_path, mitm_jsonl_path=mitm_path)
+
+    assert [entry["source"] for entry in entries] == ["mqtt", "mitm", "http"]
