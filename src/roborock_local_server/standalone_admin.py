@@ -245,7 +245,8 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
             row.style.border = "1px solid #ddd";
             row.style.borderRadius = "6px";
             row.style.padding = "8px";
-            row.style.background = entry.source === "mqtt" ? "#f0f7ff" : "#fafafa";
+            row.style.background =
+              entry.source === "mqtt" ? "#f0f7ff" : entry.source === "mitm" ? "#fff7ed" : "#fafafa";
             row.style.fontSize = "12px";
             const summary = document.createElement("div");
             if (payload.raw) {{
@@ -261,6 +262,12 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
               summary.textContent =
                 `${{entry.time || ""}} [MQTT ${{entry.direction || ""}}] ${{entry.topic || ""}}` +
                 (methods ? ` - ${{methods}}` : "");
+              row.appendChild(summary);
+            }} else if (entry.source === "mitm") {{
+              summary.textContent =
+                `${{entry.time || ""}} [MITM] ${{entry.method || ""}} ${{entry.host || ""}}${{entry.path || ""}}` +
+                (entry.status ? ` -> ${{entry.status}}` : "") +
+                (entry.rewritten ? " (rewritten to local)" : "");
               row.appendChild(summary);
             }} else {{
               summary.textContent =
