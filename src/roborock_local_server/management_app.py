@@ -29,6 +29,7 @@ from .configure import (
     hash_password,
     write_config_setup,
 )
+from .web_theme import HEAD_ASSETS, NAV_HTML, SCRIPT_ASSETS, register_theme_routes
 
 DEFAULT_BOOTSTRAP_HTTPS_PORT = 555
 _ENV_HTTPS_PORT = "ROBOROCK_SERVER_HTTPS_PORT"
@@ -183,239 +184,335 @@ def complete_admin_section(
 
 
 def _status_html() -> str:
-    return dedent(
-        """\
-        <!doctype html><html><body style="font-family:Segoe UI,sans-serif;max-width:520px;margin:12vh auto">
-        <h1>Roborock Local Server</h1>
-        <p>Setup is complete. The stack is restarting into the full dashboard at this same address -
-        reload in a few seconds.</p>
-        </body></html>
-        """
+    return (
+        dedent(
+            """\
+            <!doctype html><html><head><meta charset="utf-8">
+            <title>Roborock Local Server</title>
+            """
+        )
+        + HEAD_ASSETS
+        + dedent(
+            """\
+            </head><body>
+            """
+        )
+        + NAV_HTML
+        + dedent(
+            """\
+            <div class="container">
+              <h4 class="header orange-text">Setup is complete</h4>
+              <p>The stack is restarting into the full dashboard at this same address - reload in a few
+              seconds.</p>
+            </div>
+            """
+        )
+        + SCRIPT_ASSETS
+        + "\n</body></html>\n"
     )
 
 
+_WIZARD_SCRIPT_HEAD = dedent(
+    """\
+    <script>
+    const form = document.getElementById("setup");
+    const resultEl = document.getElementById("result");
+    const successEl = document.getElementById("success");
+
+    function showResult(text) {
+      resultEl.textContent = text;
+      resultEl.classList.toggle("shown", Boolean(text));
+    }
+    function showSuccess(text) {
+      successEl.textContent = text;
+      successEl.classList.toggle("shown", Boolean(text));
+    }
+    """
+)
+
+_WIZARD_SCRIPT_SUBMIT_COMMON = dedent(
+    """\
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      showResult("");
+      showSuccess("");
+
+      const data = Object.fromEntries(new FormData(form).entries());
+      if (data.admin_password !== data.admin_password_confirm) {
+        showResult("Admin password and confirmation do not match.");
+        return;
+      }
+      if (data.protocol_login_pin !== data.protocol_login_pin_confirm) {
+        showResult("PIN and confirmation do not match.");
+        return;
+      }
+
+      const response = await fetch("/admin/api/setup", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(data),
+      });
+      const payload = await response.json().catch(() => ({error: "Invalid response"}));
+      if (!response.ok) {
+        showResult(payload.error || "Setup failed.");
+        return;
+      }
+      form.classList.add("hidden");
+      showSuccess("Saved. The stack is restarting into the full HTTPS/MQTT service - " +
+        "give it a minute, then reload this page.");
+    });
+    </script>
+    """
+)
+
+
 def _setup_wizard_html() -> str:
-    return dedent(
-        """\
-        <!doctype html><html><head><meta charset="utf-8">
-        <title>Roborock Local Server Setup</title>
-        <style>
-          body{font-family:Segoe UI,sans-serif;max-width:640px;margin:4vh auto;padding:0 16px}
-          fieldset{margin-bottom:16px;border:1px solid #ccc;border-radius:6px}
-          label{display:block;margin-top:8px}
-          input,select{width:100%;padding:8px;box-sizing:border-box}
-          .row{display:flex;gap:12px}
-          .row>div{flex:1}
-          button{padding:10px 16px;margin-top:16px}
-          #result{white-space:pre-wrap;color:#b00020}
-          #success{white-space:pre-wrap;color:#0a7a2c}
-          .hidden{display:none}
-        </style>
-        </head><body>
-        <h1>Roborock Local Server Setup</h1>
-        <p>This runs once, the first time the stack boots without a config.toml. Fill this in, submit, and the
-        container will restart into the full HTTPS/MQTT stack.</p>
-        <form id="setup">
-          <fieldset>
-            <legend>Network</legend>
-            <label>Stack FQDN (must start with <code>api-</code>)
-              <input name="stack_fqdn" placeholder="api-roborock.example.com" required>
-            </label>
-            <div class="row">
-              <div><label>HTTPS port<input name="https_port" type="number" value="555" required></label></div>
-              <div><label>MQTT TLS port<input name="mqtt_tls_port" type="number" value="8881" required></label></div>
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>MQTT Broker</legend>
-            <label><input type="radio" name="broker_mode" value="embedded" checked> Embedded (recommended)</label>
-            <label><input type="radio" name="broker_mode" value="external"> Use my own broker</label>
-            <div id="broker_external" class="hidden">
-              <label>Broker host<input name="broker_host" placeholder="mqtt.internal"></label>
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>Certificates</legend>
-            <label><input type="radio" name="tls_mode" value="cloudflare_acme" checked> Cloudflare DNS-01 auto-renew</label>
-            <label><input type="radio" name="tls_mode" value="provided"> Bring my own certificate</label>
-            <div id="tls_cloudflare">
-              <label>Base domain / DNS zone<input name="base_domain" placeholder="example.com"></label>
-              <label>ACME account email<input name="email" placeholder="acme@example.com"></label>
-              <label>Cloudflare API token<input name="cloudflare_token" type="password"></label>
-              <label>Certificate authority
-                <select name="acme_server">
-                  <option value="zerossl" selected>ZeroSSL (recommended)</option>
-                  <option value="actalis">Actalis</option>
-                </select>
-              </label>
-              <div id="acme_actalis" class="hidden">
-                <label>Actalis EAB KID<input name="acme_eab_kid"></label>
-                <label>Actalis EAB HMAC key<input name="acme_eab_hmac_key" type="password"></label>
+    return (
+        dedent(
+            """\
+            <!doctype html><html><head><meta charset="utf-8">
+            <title>Roborock Local Server Setup</title>
+            """
+        )
+        + HEAD_ASSETS
+        + dedent(
+            """\
+            </head><body>
+            """
+        )
+        + NAV_HTML
+        + dedent(
+            """\
+            <div class="container">
+            <p class="rls-muted">This runs once, the first time the stack boots without a config.toml. Fill
+            this in, submit, and the container will restart into the full HTTPS/MQTT stack.</p>
+            <form id="setup">
+              <h5 class="header orange-text">Network</h5>
+              <div class="row">
+                <div class="input-field col s12">
+                  <input id="stack_fqdn" name="stack_fqdn" type="text" required>
+                  <label for="stack_fqdn">Stack FQDN (must start with api-)</label>
+                </div>
               </div>
+              <div class="row">
+                <div class="input-field col s6">
+                  <input id="https_port" name="https_port" type="number" value="555" required>
+                  <label for="https_port" class="active">HTTPS port</label>
+                </div>
+                <div class="input-field col s6">
+                  <input id="mqtt_tls_port" name="mqtt_tls_port" type="number" value="8881" required>
+                  <label for="mqtt_tls_port" class="active">MQTT TLS port</label>
+                </div>
+              </div>
+              <div class="divider"></div>
+
+              <h5 class="header orange-text">MQTT Broker</h5>
+              <p>
+                <label><input class="with-gap" name="broker_mode" type="radio" value="embedded" checked /><span>Embedded (recommended)</span></label>
+              </p>
+              <p>
+                <label><input class="with-gap" name="broker_mode" type="radio" value="external" /><span>Use my own broker</span></label>
+              </p>
+              <div id="broker_external" class="row hidden">
+                <div class="input-field col s12">
+                  <input id="broker_host" name="broker_host" type="text">
+                  <label for="broker_host">Broker host</label>
+                </div>
+              </div>
+              <div class="divider"></div>
+
+              <h5 class="header orange-text">Certificates</h5>
+              <p>
+                <label><input class="with-gap" name="tls_mode" type="radio" value="cloudflare_acme" checked /><span>Cloudflare DNS-01 auto-renew</span></label>
+              </p>
+              <p>
+                <label><input class="with-gap" name="tls_mode" type="radio" value="provided" /><span>Bring my own certificate</span></label>
+              </p>
+              <div id="tls_cloudflare">
+                <div class="row">
+                  <div class="input-field col s12">
+                    <input id="base_domain" name="base_domain" type="text">
+                    <label for="base_domain">Base domain / DNS zone</label>
+                  </div>
+                </div>
+                <div class="row">
+                  <div class="input-field col s6">
+                    <input id="email" name="email" type="email">
+                    <label for="email">ACME account email</label>
+                  </div>
+                  <div class="input-field col s6">
+                    <input id="cloudflare_token" name="cloudflare_token" type="password">
+                    <label for="cloudflare_token">Cloudflare API token</label>
+                  </div>
+                </div>
+                <div class="row">
+                  <div class="input-field col s12">
+                    <select name="acme_server" id="acme_server">
+                      <option value="zerossl" selected>ZeroSSL (recommended)</option>
+                      <option value="actalis">Actalis</option>
+                    </select>
+                    <label>Certificate authority</label>
+                  </div>
+                </div>
+                <div id="acme_actalis" class="row hidden">
+                  <div class="input-field col s6">
+                    <input id="acme_eab_kid" name="acme_eab_kid" type="text">
+                    <label for="acme_eab_kid">Actalis EAB KID</label>
+                  </div>
+                  <div class="input-field col s6">
+                    <input id="acme_eab_hmac_key" name="acme_eab_hmac_key" type="password">
+                    <label for="acme_eab_hmac_key">Actalis EAB HMAC key</label>
+                  </div>
+                </div>
+              </div>
+              <p id="tls_provided" class="hidden rls-muted">
+                Place your certificate at <code>data/certs/fullchain.pem</code> and key at
+                <code>data/certs/privkey.pem</code> (relative to the compose file) before starting the stack.
+              </p>
+              <div class="divider"></div>
+
+              <h5 class="header orange-text">Admin Access</h5>
+              <div class="row">
+                <div class="input-field col s6">
+                  <input id="admin_password" name="admin_password" type="password" required>
+                  <label for="admin_password">Admin password</label>
+                </div>
+                <div class="input-field col s6">
+                  <input id="admin_password_confirm" name="admin_password_confirm" type="password" required>
+                  <label for="admin_password_confirm">Confirm admin password</label>
+                </div>
+              </div>
+              <div class="divider"></div>
+
+              <h5 class="header orange-text">App / Home Assistant Login</h5>
+              <div class="row">
+                <div class="input-field col s12">
+                  <input id="protocol_login_email" name="protocol_login_email" type="email" required>
+                  <label for="protocol_login_email">Protocol login email</label>
+                </div>
+              </div>
+              <div class="row">
+                <div class="input-field col s6">
+                  <input id="protocol_login_pin" name="protocol_login_pin" type="text" inputmode="numeric" maxlength="6" required>
+                  <label for="protocol_login_pin">Protocol login PIN (6 digits)</label>
+                </div>
+                <div class="input-field col s6">
+                  <input id="protocol_login_pin_confirm" name="protocol_login_pin_confirm" type="text" inputmode="numeric" maxlength="6" required>
+                  <label for="protocol_login_pin_confirm">Confirm PIN</label>
+                </div>
+              </div>
+
+              <button class="btn waves-effect waves-light" type="submit">
+                Save and start the stack<i class="material-icons right">rocket_launch</i>
+              </button>
+            </form>
+            <div id="result" class="alert-banner error"></div>
+            <div id="success" class="alert-banner success"></div>
             </div>
-            <div id="tls_provided" class="hidden">
-              <p>Place your certificate at <code>data/certs/fullchain.pem</code> and key at
-              <code>data/certs/privkey.pem</code> (relative to the compose file) before starting the stack.</p>
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>Admin Access</legend>
-            <label>Admin password<input name="admin_password" type="password" required></label>
-            <label>Confirm admin password<input name="admin_password_confirm" type="password" required></label>
-          </fieldset>
-
-          <fieldset>
-            <legend>App / Home Assistant Login</legend>
-            <label>Protocol login email<input name="protocol_login_email" placeholder="user@example.com" required></label>
-            <label>Protocol login PIN (6 digits)<input name="protocol_login_pin" inputmode="numeric" maxlength="6" required></label>
-            <label>Confirm PIN<input name="protocol_login_pin_confirm" inputmode="numeric" maxlength="6" required></label>
-          </fieldset>
-
-          <button type="submit">Save and start the stack</button>
-        </form>
-        <pre id="result"></pre>
-        <pre id="success" class="hidden"></pre>
-        <script>
-        const form = document.getElementById("setup");
-        const resultEl = document.getElementById("result");
-        const successEl = document.getElementById("success");
-
-        function toggle(radioName, mapping) {
-          for (const radio of document.getElementsByName(radioName)) {
-            radio.addEventListener("change", () => {
-              for (const [value, elementId] of Object.entries(mapping)) {
-                document.getElementById(elementId).classList.toggle("hidden", radio.value !== value && radio.checked);
-              }
-              for (const other of document.getElementsByName(radioName)) {
-                if (other.checked) {
-                  for (const [value, elementId] of Object.entries(mapping)) {
-                    document.getElementById(elementId).classList.toggle("hidden", other.value !== value);
-                  }
-                }
-              }
+            """
+        )
+        + SCRIPT_ASSETS
+        + "\n"
+        + _WIZARD_SCRIPT_HEAD
+        + dedent(
+            """\
+            document.addEventListener("DOMContentLoaded", () => {
+              M.FormSelect.init(document.querySelectorAll("select"));
+              M.updateTextFields();
             });
-          }
-        }
-        toggle("broker_mode", {external: "broker_external"});
-        toggle("tls_mode", {cloudflare_acme: "tls_cloudflare", provided: "tls_provided"});
-        document.querySelector('select[name="acme_server"]').addEventListener("change", (event) => {
-          document.getElementById("acme_actalis").classList.toggle("hidden", event.target.value !== "actalis");
-        });
 
-        form.addEventListener("submit", async (event) => {
-          event.preventDefault();
-          resultEl.textContent = "";
-          successEl.classList.add("hidden");
+            function toggle(radioName, mapping) {
+              for (const radio of document.getElementsByName(radioName)) {
+                radio.addEventListener("change", () => {
+                  for (const other of document.getElementsByName(radioName)) {
+                    if (other.checked) {
+                      for (const [value, elementId] of Object.entries(mapping)) {
+                        document.getElementById(elementId).classList.toggle("hidden", other.value !== value);
+                      }
+                    }
+                  }
+                });
+              }
+            }
+            toggle("broker_mode", {external: "broker_external"});
+            toggle("tls_mode", {cloudflare_acme: "tls_cloudflare", provided: "tls_provided"});
+            document.getElementById("acme_server").addEventListener("change", (event) => {
+              document.getElementById("acme_actalis").classList.toggle("hidden", event.target.value !== "actalis");
+            });
 
-          const data = Object.fromEntries(new FormData(form).entries());
-          if (data.admin_password !== data.admin_password_confirm) {
-            resultEl.textContent = "Admin password and confirmation do not match.";
-            return;
-          }
-          if (data.protocol_login_pin !== data.protocol_login_pin_confirm) {
-            resultEl.textContent = "PIN and confirmation do not match.";
-            return;
-          }
-
-          const response = await fetch("/admin/api/setup", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify(data),
-          });
-          const payload = await response.json().catch(() => ({error: "Invalid response"}));
-          if (!response.ok) {
-            resultEl.textContent = payload.error || "Setup failed.";
-            return;
-          }
-          form.classList.add("hidden");
-          successEl.classList.remove("hidden");
-          successEl.textContent = "Saved. The stack is restarting into the full HTTPS/MQTT service - " +
-            "give it a minute, then reload this page.";
-        });
-        </script>
-        </body></html>
-        """
+            """
+        )
+        + _WIZARD_SCRIPT_SUBMIT_COMMON
+        + "</body></html>\n"
     )
 
 
 def _admin_only_wizard_html() -> str:
-    return dedent(
-        """\
-        <!doctype html><html><head><meta charset="utf-8">
-        <title>Roborock Local Server Setup</title>
-        <style>
-          body{font-family:Segoe UI,sans-serif;max-width:640px;margin:4vh auto;padding:0 16px}
-          fieldset{margin-bottom:16px;border:1px solid #ccc;border-radius:6px}
-          label{display:block;margin-top:8px}
-          input{width:100%;padding:8px;box-sizing:border-box}
-          button{padding:10px 16px;margin-top:16px}
-          #result{white-space:pre-wrap;color:#b00020}
-          #success{white-space:pre-wrap;color:#0a7a2c}
-          .hidden{display:none}
-        </style>
-        </head><body>
-        <h1>Roborock Local Server Setup</h1>
-        <p>Network, broker, and certificate settings are already set (from environment variables).
-        Just add admin credentials to finish setup.</p>
-        <form id="setup">
-          <fieldset>
-            <legend>Admin Access</legend>
-            <label>Admin password<input name="admin_password" type="password" required></label>
-            <label>Confirm admin password<input name="admin_password_confirm" type="password" required></label>
-          </fieldset>
+    return (
+        dedent(
+            """\
+            <!doctype html><html><head><meta charset="utf-8">
+            <title>Roborock Local Server Setup</title>
+            """
+        )
+        + HEAD_ASSETS
+        + dedent(
+            """\
+            </head><body>
+            """
+        )
+        + NAV_HTML
+        + dedent(
+            """\
+            <div class="container">
+            <p class="rls-muted">Network, broker, and certificate settings are already set (from environment
+            variables). Just add admin credentials to finish setup.</p>
+            <form id="setup">
+              <h5 class="header orange-text">Admin Access</h5>
+              <div class="row">
+                <div class="input-field col s6">
+                  <input id="admin_password" name="admin_password" type="password" required>
+                  <label for="admin_password">Admin password</label>
+                </div>
+                <div class="input-field col s6">
+                  <input id="admin_password_confirm" name="admin_password_confirm" type="password" required>
+                  <label for="admin_password_confirm">Confirm admin password</label>
+                </div>
+              </div>
+              <div class="divider"></div>
 
-          <fieldset>
-            <legend>App / Home Assistant Login</legend>
-            <label>Protocol login email<input name="protocol_login_email" placeholder="user@example.com" required></label>
-            <label>Protocol login PIN (6 digits)<input name="protocol_login_pin" inputmode="numeric" maxlength="6" required></label>
-            <label>Confirm PIN<input name="protocol_login_pin_confirm" inputmode="numeric" maxlength="6" required></label>
-          </fieldset>
+              <h5 class="header orange-text">App / Home Assistant Login</h5>
+              <div class="row">
+                <div class="input-field col s12">
+                  <input id="protocol_login_email" name="protocol_login_email" type="email" required>
+                  <label for="protocol_login_email">Protocol login email</label>
+                </div>
+              </div>
+              <div class="row">
+                <div class="input-field col s6">
+                  <input id="protocol_login_pin" name="protocol_login_pin" type="text" inputmode="numeric" maxlength="6" required>
+                  <label for="protocol_login_pin">Protocol login PIN (6 digits)</label>
+                </div>
+                <div class="input-field col s6">
+                  <input id="protocol_login_pin_confirm" name="protocol_login_pin_confirm" type="text" inputmode="numeric" maxlength="6" required>
+                  <label for="protocol_login_pin_confirm">Confirm PIN</label>
+                </div>
+              </div>
 
-          <button type="submit">Save and start the stack</button>
-        </form>
-        <pre id="result"></pre>
-        <pre id="success" class="hidden"></pre>
-        <script>
-        const form = document.getElementById("setup");
-        const resultEl = document.getElementById("result");
-        const successEl = document.getElementById("success");
-
-        form.addEventListener("submit", async (event) => {
-          event.preventDefault();
-          resultEl.textContent = "";
-          successEl.classList.add("hidden");
-
-          const data = Object.fromEntries(new FormData(form).entries());
-          if (data.admin_password !== data.admin_password_confirm) {
-            resultEl.textContent = "Admin password and confirmation do not match.";
-            return;
-          }
-          if (data.protocol_login_pin !== data.protocol_login_pin_confirm) {
-            resultEl.textContent = "PIN and confirmation do not match.";
-            return;
-          }
-
-          const response = await fetch("/admin/api/setup", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify(data),
-          });
-          const payload = await response.json().catch(() => ({error: "Invalid response"}));
-          if (!response.ok) {
-            resultEl.textContent = payload.error || "Setup failed.";
-            return;
-          }
-          form.classList.add("hidden");
-          successEl.classList.remove("hidden");
-          successEl.textContent = "Saved. The stack is restarting into the full HTTPS/MQTT service - " +
-            "give it a minute, then reload this page.";
-        });
-        </script>
-        </body></html>
-        """
+              <button class="btn waves-effect waves-light" type="submit">
+                Save and start the stack<i class="material-icons right">rocket_launch</i>
+              </button>
+            </form>
+            <div id="result" class="alert-banner error"></div>
+            <div id="success" class="alert-banner success"></div>
+            </div>
+            """
+        )
+        + SCRIPT_ASSETS
+        + "\n"
+        + _WIZARD_SCRIPT_HEAD
+        + _WIZARD_SCRIPT_SUBMIT_COMMON
+        + "</body></html>\n"
     )
 
 
@@ -425,6 +522,7 @@ def create_management_app(
     on_configured: Callable[[], None] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Roborock Local Server Setup", docs_url=None, redoc_url=None, openapi_url=None)
+    register_theme_routes(app)
 
     @app.get("/", response_class=HTMLResponse)
     @app.get("/admin", response_class=HTMLResponse)
