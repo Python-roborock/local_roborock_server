@@ -122,9 +122,11 @@ from .routes.user.scene.device import build as _build_get_scenes
 from .routes.user.scene.device import match as _match_get_scenes
 from .routes.user.scene.home import build as _build_get_home_scenes
 from .routes.user.scene.home import match as _match_get_home_scenes
+from .routes.user.scene.item import build_delete as _build_delete_scene
 from .routes.user.scene.item import build_execute as _build_execute_scene
 from .routes.user.scene.item import build_put_name as _build_put_scene_name
 from .routes.user.scene.item import build_put_param as _build_put_scene_param
+from .routes.user.scene.item import match_delete as _match_delete_scene
 from .routes.user.scene.item import match_execute as _match_execute_scene
 from .routes.user.scene.item import match_put_name as _match_put_scene_name
 from .routes.user.scene.item import match_put_param as _match_put_scene_param
@@ -579,6 +581,7 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("put_scene_name", _match_put_scene_name, _build_put_scene_name),
         EndpointRule("put_scene_param", _match_put_scene_param, _build_put_scene_param),
         EndpointRule("execute_scene", _match_execute_scene, _build_execute_scene),
+        EndpointRule("delete_scene", _match_delete_scene, _build_delete_scene),
         EndpointRule("get_device", _match_get_device, _build_get_device),
         EndpointRule("get_device_extra", _match_get_device_extra, _build_get_device_extra),
         EndpointRule("get_schedules", _match_get_schedules, _build_get_schedules),

@@ -6,7 +6,7 @@ from typing import Any
 from shared.context import ServerContext
 from shared.http_helpers import wrap_response
 
-from .service import execute_scene, update_scene_name, update_scene_param
+from .service import delete_scene, execute_scene, update_scene_name, update_scene_param
 
 
 _SCENE_ITEM_RE = re.compile(r"/user/scene/(\d+)/(execute|name|param)")
@@ -66,3 +66,18 @@ def build_put_param(
     scene_id = _scene_id_from_path(clean_path)
     return wrap_response(update_scene_param(ctx, scene_id, body_params))
 
+
+
+def match_delete(path: str, method: str = "GET") -> bool:
+    clean = path.rstrip("/")
+    return method.upper() == "DELETE" and bool(re.fullmatch(r"/user/scene/\d+", clean))
+
+
+def build_delete(
+    ctx: ServerContext,
+    _query_params: dict[str, list[str]],
+    _body_params: dict[str, list[str]],
+    clean_path: str,
+) -> dict[str, Any]:
+    scene_id = int(clean_path.rstrip("/").split("/")[-1])
+    return wrap_response(delete_scene(ctx, scene_id))

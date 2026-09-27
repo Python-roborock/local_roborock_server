@@ -695,3 +695,31 @@ def update_scene_param(ctx: ServerContext, scene_id: int, body_params: dict[str,
 
     updated_scene, home_id = _replace_inventory_scene(ctx, scene_id=scene_id, scene_updater=apply_update)
     return build_scene_payload(updated_scene, home_id=home_id, include_device_context=True)
+
+
+def delete_scene(ctx: ServerContext, scene_id: int) -> None:
+    inventory = load_inventory(ctx)
+    if not isinstance(inventory, dict):
+        inventory = {}
+
+    def _keep(entry: Any) -> bool:
+        return not (isinstance(entry, dict) and as_int(get_value(entry, "id", default=0), 0) == scene_id)
+
+    scenes_source = inventory.get("scenes")
+    scenes = [dict(s) for s in scenes_source if isinstance(s, dict)] if isinstance(scenes_source, list) else []
+    remaining = [s for s in scenes if _keep(s)]
+    removed = len(scenes) - len(remaining)
+
+    inventory["scenes"] = remaining
+
+    home_scenes_source = inventory.get("home_scenes")
+    if isinstance(home_scenes_source, list):
+        inventory["home_scenes"] = [s for s in home_scenes_source if _keep(s)]
+
+    order_source = inventory.get("scene_order")
+    if isinstance(order_source, list):
+        inventory["scene_order"] = [v for v in order_source if as_int(v, 0) != scene_id]
+
+    write_inventory(ctx, inventory)
+    _LOGGER.info("Deleted scene %s (removed=%s)", scene_id, removed)
+    return None
