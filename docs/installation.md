@@ -139,6 +139,34 @@ If your model already has certificate notes on the tested-vacuums page, follow t
 
    For reverse proxy setups, keep `network.https_port` and `network.mqtt_tls_port` set to the backend listener ports and use `network.advertised_https_port` / `network.advertised_mqtt_tls_port` for the public ports.
 
+### Alternative: Environment Variables Only (No `uv` Toolchain)
+
+If you don't want to install `uv`/Python on the host just to run `configure`, you can set `ROBOROCK_SERVER_*` environment variables instead. On first boot, if `/data/config.toml` doesn't already exist, the container generates one from these variables and starts normally. If `config.toml` already exists (mounted or previously generated), it always wins and the env vars are ignored — this never overwrites a config you've already set up.
+
+Required variables:
+
+- `ROBOROCK_SERVER_STACK_FQDN`
+- `ROBOROCK_SERVER_ADMIN_PASSWORD`
+- `ROBOROCK_SERVER_PROTOCOL_LOGIN_EMAIL`
+- `ROBOROCK_SERVER_PROTOCOL_LOGIN_PIN` (6 digits)
+- Either `ROBOROCK_SERVER_CERT_FILE` + `ROBOROCK_SERVER_KEY_FILE` (bring your own certificate), or `ROBOROCK_SERVER_TLS_MODE=cloudflare_acme` + `ROBOROCK_SERVER_TLS_BASE_DOMAIN` + `ROBOROCK_SERVER_TLS_EMAIL` + `ROBOROCK_SERVER_CLOUDFLARE_TOKEN` (or `_CLOUDFLARE_TOKEN_FILE` for a Docker secret)
+
+Commonly-set optional variables: `ROBOROCK_SERVER_HTTPS_PORT`, `ROBOROCK_SERVER_MQTT_TLS_PORT`, `ROBOROCK_SERVER_ADVERTISED_HTTPS_PORT`, `ROBOROCK_SERVER_ADVERTISED_MQTT_TLS_PORT`, `ROBOROCK_SERVER_LISTENER_MODE`, `ROBOROCK_SERVER_BROKER_MODE` + `ROBOROCK_SERVER_BROKER_HOST`. See `env_config.py` for the full list.
+
+**Important:** if you go this route, remove (or comment out) the `./config.toml:/app/config.toml:ro` line from `compose.yaml`. Docker will otherwise bind-mount a nonexistent host path as an empty file, which the container treats as an existing (but invalid) config and never falls through to the env vars. Keep the `./data:/data` and `./secrets:/run/secrets:ro` mounts.
+
+```bash
+export ROBOROCK_SERVER_STACK_FQDN=api-roborock.example.com
+export ROBOROCK_SERVER_ADMIN_PASSWORD=super-secret-password
+export ROBOROCK_SERVER_PROTOCOL_LOGIN_EMAIL=user@example.com
+export ROBOROCK_SERVER_PROTOCOL_LOGIN_PIN=123456
+export ROBOROCK_SERVER_TLS_MODE=cloudflare_acme
+export ROBOROCK_SERVER_TLS_BASE_DOMAIN=example.com
+export ROBOROCK_SERVER_TLS_EMAIL=acme@example.com
+export ROBOROCK_SERVER_CLOUDFLARE_TOKEN=your-cloudflare-api-token
+docker compose up -d --build
+```
+
 ## Method 2: Home Assistant Add-on
 
 Use [Home Assistant](home_assistant.md) as the installation guide if you want to run the stack as a Home Assistant add-on instead of Docker Compose.
