@@ -162,20 +162,40 @@ If you don't want to install `uv`/Python on the host just to run `configure`, yo
 Required variables:
 
 - `ROBOROCK_SERVER_STACK_FQDN`
-- `ROBOROCK_SERVER_ADMIN_PASSWORD`
-- `ROBOROCK_SERVER_PROTOCOL_LOGIN_EMAIL`
-- `ROBOROCK_SERVER_PROTOCOL_LOGIN_PIN` (6 digits)
 - Either `ROBOROCK_SERVER_CERT_FILE` + `ROBOROCK_SERVER_KEY_FILE` (bring your own certificate), or `ROBOROCK_SERVER_TLS_MODE=cloudflare_acme` + `ROBOROCK_SERVER_TLS_BASE_DOMAIN` + `ROBOROCK_SERVER_TLS_EMAIL` + `ROBOROCK_SERVER_CLOUDFLARE_TOKEN` (or `_CLOUDFLARE_TOKEN_FILE` for a Docker secret)
+
+The admin credentials are optional as a group:
+
+- Set all three of `ROBOROCK_SERVER_ADMIN_PASSWORD`, `ROBOROCK_SERVER_PROTOCOL_LOGIN_EMAIL`, and
+  `ROBOROCK_SERVER_PROTOCOL_LOGIN_PIN` (6 digits) for a fully headless boot straight into the running stack.
+- Leave all three unset, and the container still generates `config.toml`'s network/broker/TLS settings from
+  the env vars above, then boots into the setup wizard at `/admin` - which notices the rest is already
+  configured and asks only for admin credentials. Handy if you're driving the network/TLS/reverse-proxy side
+  from env vars or IaC, but would still rather pick the admin password in a browser.
+- Setting some but not all three is rejected with a clear error, to avoid a half-set credential.
 
 Commonly-set optional variables: `ROBOROCK_SERVER_HTTPS_PORT`, `ROBOROCK_SERVER_MQTT_TLS_PORT`, `ROBOROCK_SERVER_ADVERTISED_HTTPS_PORT`, `ROBOROCK_SERVER_ADVERTISED_MQTT_TLS_PORT`, `ROBOROCK_SERVER_LISTENER_MODE`, `ROBOROCK_SERVER_BROKER_MODE` + `ROBOROCK_SERVER_BROKER_HOST`. See `env_config.py` for the full list.
 
 **Important:** if you go this route, remove (or comment out) the `./config.toml:/app/config.toml:ro` line from `compose.yaml`. Docker will otherwise bind-mount a nonexistent host path as an empty file, which the container treats as an existing (but invalid) config and never falls through to the env vars. Keep the `./data:/data` and `./secrets:/run/secrets:ro` mounts.
+
+Fully headless (no browser step at all):
 
 ```bash
 export ROBOROCK_SERVER_STACK_FQDN=api-roborock.example.com
 export ROBOROCK_SERVER_ADMIN_PASSWORD=super-secret-password
 export ROBOROCK_SERVER_PROTOCOL_LOGIN_EMAIL=user@example.com
 export ROBOROCK_SERVER_PROTOCOL_LOGIN_PIN=123456
+export ROBOROCK_SERVER_TLS_MODE=cloudflare_acme
+export ROBOROCK_SERVER_TLS_BASE_DOMAIN=example.com
+export ROBOROCK_SERVER_TLS_EMAIL=acme@example.com
+export ROBOROCK_SERVER_CLOUDFLARE_TOKEN=your-cloudflare-api-token
+docker compose up -d --build
+```
+
+Hybrid (network/TLS from env vars, admin credentials in the browser wizard at `/admin`):
+
+```bash
+export ROBOROCK_SERVER_STACK_FQDN=api-roborock.example.com
 export ROBOROCK_SERVER_TLS_MODE=cloudflare_acme
 export ROBOROCK_SERVER_TLS_BASE_DOMAIN=example.com
 export ROBOROCK_SERVER_TLS_EMAIL=acme@example.com
