@@ -138,3 +138,42 @@ def test_gui_poll_returns_unsupported_without_waiting(monkeypatch: pytest.Monkey
     assert outcome == "unsupported"
     assert latest["unsupported"] is True
     assert waits == []
+
+
+def test_gui_poll_shows_key_calculation_until_public_key_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    statuses = [
+        {"query_samples": 3, "has_public_key": False, "public_key_state": "recovering", "connected": False},
+        {"query_samples": 3, "has_public_key": True, "public_key_state": "ready", "connected": False},
+    ]
+
+    class RecoveringApi:
+        def get_session(self, *, session_id: str) -> dict:
+            assert session_id == "sess-1"
+            return {"session_id": session_id, **statuses.pop(0)}
+
+    waits: list[float] = []
+    phases: list[tuple[str, dict]] = []
+    monkeypatch.setattr("start_onboarding_gui.POLL_TIMEOUT_SECONDS", 20.0)
+    monkeypatch.setattr("start_onboarding_gui.POLL_INTERVAL_SECONDS", 5.0)
+    monkeypatch.setattr("start_onboarding_gui._set_phase", lambda phase, **fields: phases.append((phase, fields)))
+
+    class _ImmediateCond:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            return None
+
+    monkeypatch.setattr("start_onboarding_gui._state_cond", _ImmediateCond())
+
+    outcome, latest = _poll_until_progress(RecoveringApi(), "sess-1", 2, baseline_has_public_key=False)
+
+    assert outcome == "public_key_ready"
+    assert latest["has_public_key"] is True
+    assert waits == [5.0]
+    assert [phase for phase, _fields in phases] == ["recovering_key"]
+    assert phases[0][1]["key_recovery_seconds"] == 0

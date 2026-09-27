@@ -46,6 +46,7 @@ class MqttTlsProxy:
         runtime_credentials: RuntimeCredentialsStore | None = None,
         zone_ranges_store: ZoneRangesStore | None = None,
         tls_enabled: bool = True,
+        on_onboarding_credentials_learned: Callable[[], None] | None = None,
     ) -> None:
         self.cert_file = cert_file
         self.key_file = key_file
@@ -63,6 +64,7 @@ class MqttTlsProxy:
         self.runtime_state = runtime_state
         self.runtime_credentials = runtime_credentials
         self.zone_ranges_store = zone_ranges_store
+        self._on_onboarding_credentials_learned = on_onboarding_credentials_learned
         self._server_socket: socket.socket | None = None
         self._running = False
         self._counter = 0
@@ -355,6 +357,11 @@ class MqttTlsProxy:
             learned.get("duid", ""),
             candidate["username"],
         )
+        if self._on_onboarding_credentials_learned is not None:
+            try:
+                self._on_onboarding_credentials_learned()
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning("[conn %s] onboarding credentials callback failed: %s", conn_id, exc)
         return True
 
     @classmethod

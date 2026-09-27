@@ -631,6 +631,7 @@ def test_trace_packet_persists_confirmed_onboarding_device_mqtt_credentials(tmp_
         },
     )
     runtime_credentials = RuntimeCredentialsStore(runtime_credentials_path)
+    learned_callbacks: list[None] = []
     proxy = MqttTlsProxy(
         cert_file=tmp_path / "fullchain.pem",
         key_file=tmp_path / "privkey.pem",
@@ -643,6 +644,7 @@ def test_trace_packet_persists_confirmed_onboarding_device_mqtt_credentials(tmp_
         decoded_jsonl=tmp_path / "decoded.jsonl",
         cloud_snapshot_path=cloud_snapshot_path,
         runtime_credentials=runtime_credentials,
+        on_onboarding_credentials_learned=lambda: learned_callbacks.append(None),
     )
     proxy._set_pending_onboarding_auth(
         "1",
@@ -664,6 +666,7 @@ def test_trace_packet_persists_confirmed_onboarding_device_mqtt_credentials(tmp_
     assert persisted["device_mqtt_usr"] == "c25b14ceac358d2a"
     assert persisted["device_mqtt_pass"] == "ff8922d24a9a9af81f18f35dcee9a5a5"
     assert proxy._get_pending_onboarding_auth("1") is None
+    assert len(learned_callbacks) == 1
 
 
 def test_trace_packet_closes_provisional_onboarding_session_when_first_publish_topic_mismatches(tmp_path) -> None:

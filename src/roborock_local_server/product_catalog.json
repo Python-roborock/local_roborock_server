@@ -1,0 +1,221 @@
+{
+  "_comment": "Generated from the Roborock cloud product catalog (GET /api/v4/product, category 1: robot vacuums).",
+  "products": {
+    "roborock.vacuum.a08": {
+      "product_name": "Roborock S6 Pure",
+      "product_id": "5PHxDTl0lbtWBEi22ov6hj"
+    },
+    "roborock.vacuum.a10": {
+      "product_name": "Roborock S6 MaxV",
+      "product_id": "4StIrRPopvz0ZzPN2o1sWy"
+    },
+    "roborock.vacuum.a101": {
+      "product_name": "Roborock Qrevo Pro",
+      "product_id": "3rMctAN2h7gewWfZgLNOdz"
+    },
+    "roborock.vacuum.a104": {
+      "product_name": "Roborock Qrevo S",
+      "product_id": "7AQWqICyaBLKFcOiDtu8ky"
+    },
+    "roborock.vacuum.a117": {
+      "product_name": "Roborock Qrevo Master",
+      "product_id": "3hVxBJoGbDP2kv93Pcc1pb"
+    },
+    "roborock.vacuum.a123": {
+      "product_name": "Roborock Qrevo Plus",
+      "product_id": "15zrEeDGib2Rn15gviBrvv"
+    },
+    "roborock.vacuum.a125": {
+      "product_name": "Roborock Q5 Max+",
+      "product_id": "2BNKSSVJ0bsXHxTH3KLi6H"
+    },
+    "roborock.vacuum.a135": {
+      "product_name": "Roborock Qrevo Curv",
+      "product_id": "3D9rSKoTaOfI0gcf6zcbdu"
+    },
+    "roborock.vacuum.a140": {
+      "product_name": "Roborock Q5 DuoRoller+",
+      "product_id": "4JxyTGp7YrVk1rVGmHjNs1"
+    },
+    "roborock.vacuum.a144": {
+      "product_name": "Roborock Saros 10R",
+      "product_id": "5OY3uePAU3xCcBKUfFxcED"
+    },
+    "roborock.vacuum.a147": {
+      "product_name": "Roborock Saros 10",
+      "product_id": "585rv0Obq0bq7yzrcmEdVf"
+    },
+    "roborock.vacuum.a15": {
+      "product_name": "Roborock S7",
+      "product_id": "1YYW18rpgyAJTISwb1NM91"
+    },
+    "roborock.vacuum.a156": {
+      "product_name": "Roborock Qrevo Edge",
+      "product_id": "g0hm04CP4C1iT8sS0Bnpn"
+    },
+    "roborock.vacuum.a159": {
+      "product_name": "Roborock Qrevo Curv Series",
+      "product_id": "2j5VnNUMBJLRelsHF7Njmg"
+    },
+    "roborock.vacuum.a168": {
+      "product_name": "Roborock Qrevo L",
+      "product_id": "4ERRv6L8uw8POy0ueLjFxj"
+    },
+    "roborock.vacuum.a170": {
+      "product_name": "Roborock Qrevo C",
+      "product_id": "7M4dAzHEgGusWLXkvgbLbL"
+    },
+    "roborock.vacuum.a179": {
+      "product_name": "Roborock Saros Z70",
+      "product_id": "h53cll17CJO53LaiWx3vd"
+    },
+    "roborock.vacuum.a185": {
+      "product_name": "Roborock Qrevo CurvX",
+      "product_id": "6O6vtRc0hqwOUrgCla43LY"
+    },
+    "roborock.vacuum.a187": {
+      "product_name": "Roborock Qrevo Edge Series",
+      "product_id": "2CjvhDFL7Q9NdJQmhE86zn"
+    },
+    "roborock.vacuum.a19": {
+      "product_name": "Roborock S4 Max",
+      "product_id": "5fLhydOIblbngogVGdU8Jw"
+    },
+    "roborock.vacuum.a197": {
+      "product_name": "Roborock Qrevo EdgeT",
+      "product_id": "5BvMJHXT8IKv4x4l0LU0er"
+    },
+    "roborock.vacuum.a199": {
+      "product_name": "Roborock QV 35A",
+      "product_id": "3PWf17rt73QjM3F1DaZelu"
+    },
+    "roborock.vacuum.a205": {
+      "product_name": "Roborock QR 598",
+      "product_id": "3oaoyfO05M0tZoOXvtH2v6"
+    },
+    "roborock.vacuum.a21": {
+      "product_name": "Roborock Qrevo Slim",
+      "product_id": "1Gc3InagdnSm1JPhQ7TPiU"
+    },
+    "roborock.vacuum.a245": {
+      "product_name": "Roborock Qrevo Curv 2 Flow",
+      "product_id": "64Pgg7cwjxHqT2qQrEh7Ib"
+    },
+    "roborock.vacuum.a246": {
+      "product_name": "Roborock QX Revo Arc",
+      "product_id": "5PRz6otsXDMCowFVkOv7gf"
+    },
+    "roborock.vacuum.a27": {
+      "product_name": "Roborock S7 MaxV",
+      "product_id": "3FvTMilsXUPmxlqAeOsIrB"
+    },
+    "roborock.vacuum.a279": {
+      "product_name": "Roborock Saros 20 Sonic",
+      "product_id": "1yhOql5rqTWqyFtU4dg8O9"
+    },
+    "roborock.vacuum.a288": {
+      "product_name": "Roborock Saros 20",
+      "product_id": "1KuWrSJHhHe7lOvyuefM7x"
+    },
+    "roborock.vacuum.a294": {
+      "product_name": "Roborock Qrevo 2 Pro Series",
+      "product_id": "72bzD7888QqxdmRHNA74E7"
+    },
+    "roborock.vacuum.a296": {
+      "product_name": "Roborock Qrevo Edge 3 Pro",
+      "product_id": "RzNz70g002C6hAyIppc9Q"
+    },
+    "roborock.vacuum.a298": {
+      "product_name": "Roborock Qrevo Edge 2",
+      "product_id": "6Thza6zTK1AHOYGiNPugak"
+    },
+    "roborock.vacuum.a30": {
+      "product_name": "Roborock G10",
+      "product_id": "1v5nXqpWY8FiCfmsoIApP7"
+    },
+    "roborock.vacuum.a307": {
+      "product_name": "Roborock Saros 20 Flow",
+      "product_id": "4J89YHjAc2uUG9W0HLxKPP"
+    },
+    "roborock.vacuum.a326": {
+      "product_name": "Roborock Qrevo S Pro Series",
+      "product_id": "4Snq4xVLaWSyq2PjbSGV1j"
+    },
+    "roborock.vacuum.a34": {
+      "product_name": "Roborock Q5",
+      "product_id": "7Xu87e5b2z9wgXWiFBrFGy"
+    },
+    "roborock.vacuum.a38": {
+      "product_name": "Roborock Q7 Max",
+      "product_id": "63dnvWbeJYQ09VhrqvUJ4g"
+    },
+    "roborock.vacuum.a40": {
+      "product_name": "Roborock Q7",
+      "product_id": "uqdBrJSn1yke0E5AayqmE"
+    },
+    "roborock.vacuum.a51": {
+      "product_name": "Roborock S8",
+      "product_id": "2LwHTkAMUb3RKxUBFvQzgM"
+    },
+    "roborock.vacuum.a65": {
+      "product_name": "Roborock S7 Max Ultra",
+      "product_id": "1jWVq0qkthUqXggImMutvr"
+    },
+    "roborock.vacuum.a70": {
+      "product_name": "Roborock S8 Pro Ultra",
+      "product_id": "5sYzP4uUXS6dTMZPoTakvU"
+    },
+    "roborock.vacuum.a72": {
+      "product_name": "Roborock Q5 Pro",
+      "product_id": "1yyDvxjxA23iHkUtnq6k5D"
+    },
+    "roborock.vacuum.a73": {
+      "product_name": "Roborock Q8 Max",
+      "product_id": "1y5FvZEz6L6rtsFcFwWuGH"
+    },
+    "roborock.vacuum.a75": {
+      "product_name": "Roborock Q Revo",
+      "product_id": "1JaaBKwzW2RFF9XZmH04TJ"
+    },
+    "roborock.vacuum.a87": {
+      "product_name": "Roborock Qrevo MaxV",
+      "product_id": "5gUei3OIJIXVD3eD85Balg"
+    },
+    "roborock.vacuum.a95": {
+      "product_name": "Roborock S8 Max Ultra",
+      "product_id": "4CO3m8q3uF1h9s7n1FQ3dm"
+    },
+    "roborock.vacuum.a97": {
+      "product_name": "Roborock S8 MaxV Ultra",
+      "product_id": "FI9ykCmTQOgMLP1i1Xyww"
+    },
+    "roborock.vacuum.s4": {
+      "product_name": "Roborock S4",
+      "product_id": "NYgv2MvTxT7UjaAS0ujPh"
+    },
+    "roborock.vacuum.s5e": {
+      "product_name": "Roborock S5 Max",
+      "product_id": "73EnOOM2NhDujvnvb7hvvv"
+    },
+    "roborock.vacuum.s6": {
+      "product_name": "Roborock S6",
+      "product_id": "7G2eVYbclOehHcpTf7P2mF"
+    },
+    "roborock.vacuum.sc01": {
+      "product_name": "Roborock Q7 Series",
+      "product_id": "6yaImeCA2aoQAJQ5aAvwKD"
+    },
+    "roborock.vacuum.sc05": {
+      "product_name": "Roborock Q7 Series",
+      "product_id": "5ayEx3aKgStqZZ0v5IpMBP"
+    },
+    "roborock.vacuum.ss07": {
+      "product_name": "Roborock Q10 Series",
+      "product_id": "1O9BlCxWe4loekRE624qPv"
+    },
+    "roborock.vacuum.ss09": {
+      "product_name": "Roborock Q10 Series",
+      "product_id": "5SmbDEjAG5fpNlETF3jGK0"
+    }
+  }
+}

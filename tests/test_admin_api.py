@@ -3,10 +3,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from roborock.data import HomeData
 
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
 from roborock_local_server.server import ReleaseSupervisor, resolve_route
+from shared.constants import DEFAULT_PRODUCT_SCHEMA
 from shared.protocol_auth import ProtocolAuthStore, build_hawk_authorization
 
 
@@ -702,6 +704,268 @@ def test_region_v2_request_keeps_onboarding_in_progress(tmp_path: Path) -> None:
     assert session.json()["status"] == "in_progress"
     assert session.json()["unsupported"] is False
     assert session.json()["complete"] is False
+
+
+def test_new_vacuum_blind_session_autopersists_to_inventory(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    # Never-on-cloud scenario: empty inventory, no runtime credentials seeded.
+    paths.inventory_path.write_text(json.dumps({"devices": []}) + "\n", encoding="utf-8")
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+
+    # Start a blind "new vacuum" session with no known target.
+    session = supervisor.start_onboarding_session(new_vacuum=True)
+    session_id = session["session_id"]
+    assert session["active"] is True
+    assert session["target"]["did"] == ""
+
+    client = TestClient(supervisor.app)
+    # The vacuum presents its own did and walks the supported (v1) bootstrap: /region then /nc.
+    assert client.get("/region?did=1103835404427&pid=roborock.vacuum.a117").status_code == 200
+    assert client.get("/nc?did=1103835404427&pid=roborock.vacuum.a117").status_code == 200
+
+    # Polling the session adopts the did and auto-persists the device to inventory.
+    snapshot = supervisor.onboarding_session_snapshot(session_id=session_id)
+    assert snapshot["target"]["did"] == "1103835404427"
+    assert snapshot["target"]["model"] == "roborock.vacuum.a117"
+
+    inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    [persisted] = inventory["devices"]
+    assert persisted["duid"] == "1103835404427"
+    assert persisted["did"] == "1103835404427"
+    assert persisted["model"] == "roborock.vacuum.a117"
+    assert persisted["name"] == "Roborock Qrevo Master"
+    assert persisted["product_id"] == "3hVxBJoGbDP2kv93Pcc1pb"
+    assert persisted["source"] == "onboarding"
+    assert persisted["local_key"]
+    assert persisted.get("schema") is not None
+    codes = {item["code"] for item in persisted["schema"]}
+    assert {"battery", "state", "fan_power", "water_box_mode", "charge_status", "drying_status", "rpc_request"}.issubset(codes)
+
+    # The persisted localKey is the server-minted one handed to the vacuum via /nc.
+    record = supervisor.runtime_credentials.resolve_device(did="1103835404427")
+    assert record is not None
+    assert persisted["local_key"] == record["localkey"]
+
+    # Idempotent: polling again must not add a duplicate inventory entry.
+    supervisor.onboarding_session_snapshot(session_id=session_id)
+    inventory_again = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    assert len(inventory_again["devices"]) == 1
+
+
+def test_new_vacuum_persists_at_nc_without_session_polling(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(json.dumps({"devices": []}) + "\n", encoding="utf-8")
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    supervisor.start_onboarding_session(new_vacuum=True)
+
+    client = TestClient(supervisor.app)
+    assert client.get("/region?did=1103821560705&m=roborock.vacuum.a87").status_code == 200
+    # Nothing has polled the session yet (the onboarding client may have timed out or exited).
+    assert json.loads(paths.inventory_path.read_text(encoding="utf-8"))["devices"] == []
+    assert client.get("/nc?did=1103821560705&m=roborock.vacuum.a87").status_code == 200
+
+    inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    [persisted] = inventory["devices"]
+    assert persisted["duid"] == "1103821560705"
+    assert persisted["name"] == "Roborock Qrevo MaxV"
+    assert persisted["product_id"] == "5gUei3OIJIXVD3eD85Balg"
+    record = supervisor.runtime_credentials.resolve_device(did="1103821560705")
+    assert record is not None
+    assert persisted["local_key"] == record["localkey"]
+
+    # Later server-side triggers (e.g. the vacuum's first MQTT connect) stay idempotent.
+    supervisor.persist_active_onboarding_device()
+    assert len(json.loads(paths.inventory_path.read_text(encoding="utf-8"))["devices"]) == 1
+
+
+def test_onboarding_cloud_imported_vacuum_leaves_inventory_record_untouched(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    # Older cloud imports carry no product_name/schema/category on the device record.
+    cloud_device = {
+        "duid": "6HL2zfniaoYYV01CkVuhkO",
+        "did": "1103821560705",
+        "name": "Roborock Qrevo MaxV 2",
+        "model": "roborock.vacuum.a87",
+        "product_id": "5gUei3OIJIXVD3eD85Balg",
+        "local_key": "xPd5Dr8CGGqtdDlH",
+    }
+    paths.inventory_path.write_text(json.dumps({"devices": [cloud_device]}, indent=2) + "\n", encoding="utf-8")
+    before = paths.inventory_path.read_text(encoding="utf-8")
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    session = supervisor.start_onboarding_session(duid="6HL2zfniaoYYV01CkVuhkO")
+
+    client = TestClient(supervisor.app)
+    assert client.get("/region?did=1103821560705&m=roborock.vacuum.a87").status_code == 200
+    assert client.get("/nc?did=1103821560705&m=roborock.vacuum.a87").status_code == 200
+    supervisor.persist_active_onboarding_device()
+    supervisor.onboarding_session_snapshot(session_id=session["session_id"])
+
+    assert paths.inventory_path.read_text(encoding="utf-8") == before
+
+
+def test_new_vacuum_admin_api_custom_name_and_home_data_schema(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(json.dumps({"devices": []}) + "\n", encoding="utf-8")
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    # Login to admin API
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
+
+    # Start a blind "new vacuum" session via admin API with custom name
+    started = client.post(
+        "/admin/api/onboarding/sessions",
+        json={"new_vacuum": True, "name": "Living Room Bot"},
+    )
+    assert started.status_code == 200
+    session_payload = started.json()
+    session_id = session_payload["session_id"]
+    assert session_payload["target"]["name"] == "Living Room Bot"
+
+    # Vacuum connects and sends its did + model via query params (d and m)
+    assert client.get("/region?d=1103821560705&m=roborock.vacuum.a72").status_code == 200
+    assert client.get("/nc?d=1103821560705&m=roborock.vacuum.a72").status_code == 200
+
+    # Polling session adopts did and auto-persists to inventory with custom name and captured model
+    fetched = client.get(f"/admin/api/onboarding/sessions/{session_id}")
+    assert fetched.status_code == 200
+    snapshot = fetched.json()
+    assert snapshot["target"]["did"] == "1103821560705"
+    assert snapshot["target"]["model"] == "roborock.vacuum.a72"
+    assert snapshot["target"]["name"] == "Living Room Bot"
+
+    # Check inventory
+    inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    [persisted] = inventory["devices"]
+    assert persisted["duid"] == "1103821560705"
+    assert persisted["did"] == "1103821560705"
+    assert persisted["name"] == "Living Room Bot"
+    assert persisted["model"] == "roborock.vacuum.a72"
+    assert persisted["source"] == "onboarding"
+
+    # Verify default schema is present in inventory with correct Roborock DP IDs
+    schema = persisted.get("schema")
+    assert isinstance(schema, list)
+    dps_map = {item["code"]: item["id"] for item in schema}
+    assert {"battery", "state", "fan_power", "water_box_mode", "charge_status", "drying_status", "rpc_request", "main_brush_life", "side_brush_life", "filter_life"}.issubset(dps_map.keys())
+    assert dps_map["main_brush_life"] == 125
+    assert dps_map["side_brush_life"] == 126
+    assert dps_map["filter_life"] == 127
+    assert dps_map["charge_status"] == 133
+    assert dps_map["drying_status"] == 134
+
+    # Refresh supervisor inventory and test Home Assistant login and home data endpoint
+    supervisor.refresh_inventory_state()
+
+    # Home Assistant performs native local PIN login
+    code_send = client.post(
+        "/api/v5/email/code/send",
+        json={"email": "user@example.com", "baseUrl": supervisor.context.api_url()},
+    )
+    assert code_send.status_code == 200
+
+    code_login = client.post(
+        "/api/v5/auth/email/login/code",
+        json={"email": "user@example.com", "code": "123456", "baseUrl": supervisor.context.api_url()},
+    )
+    assert code_login.status_code == 200
+    auth_data = code_login.json()["data"]
+
+    # Home Assistant queries getHomeDetail using token to resolve the home ID
+    home_res = client.get(
+        "/api/v1/getHomeDetail",
+        headers={
+            "Authorization": str(auth_data["token"]),
+            "header_username": str(auth_data["rruid"]),
+        },
+    )
+    assert home_res.status_code == 200
+    home_id = home_res.json()["data"]["rrHomeId"]
+
+    # Home Assistant then queries /v3/user/homes/{home_id} using Hawk auth to retrieve products and devices
+    homes_path = f"/v3/user/homes/{home_id}"
+    user = supervisor.protocol_auth.availability().user
+    assert user is not None
+    hawk_headers = {
+        "Authorization": build_hawk_authorization(
+            user=user,
+            path=homes_path,
+            nonce="nonce-test-homes",
+        )
+    }
+    homes_res = client.get(homes_path, headers=hawk_headers)
+    assert homes_res.status_code == 200
+    home_payload = homes_res.json()["result"]
+    parsed_home = HomeData.from_dict(home_payload)
+    assert parsed_home is not None
+    assert len(parsed_home.products) >= 1
+    product = next(p for p in parsed_home.products if p.model == "roborock.vacuum.a72")
+    assert product.model == "roborock.vacuum.a72"
+    assert "battery" in product.supported_schema_codes
+    assert "state" in product.supported_schema_codes
+    assert "fan_power" in product.supported_schema_codes
+    assert "water_box_mode" in product.supported_schema_codes
+    assert "charge_status" in product.supported_schema_codes
+    assert "drying_status" in product.supported_schema_codes
+    assert "main_brush_life" in product.supported_schema_codes
+    assert "side_brush_life" in product.supported_schema_codes
+    assert "filter_life" in product.supported_schema_codes
+
+
+def test_product_registry_resolution_for_new_vacuum(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(json.dumps({"devices": []}) + "\n", encoding="utf-8")
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    login = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert login.status_code == 200
+
+    # Start a blind onboarding session for a never-on-cloud vacuum
+    started = client.post(
+        "/admin/api/onboarding/sessions",
+        json={"new_vacuum": True},
+    )
+    assert started.status_code == 200
+    session_id = started.json()["session_id"]
+
+    # Robot sends /region and /nc with m=roborock.vacuum.a87
+    assert client.get("/region?d=2203821560999&m=roborock.vacuum.a87").status_code == 200
+    assert client.get("/nc?d=2203821560999&m=roborock.vacuum.a87").status_code == 200
+
+    # Polling session adopts and persists from product registry
+    fetched = client.get(f"/admin/api/onboarding/sessions/{session_id}")
+    assert fetched.status_code == 200
+    snapshot = fetched.json()
+    assert snapshot["target"]["model"] == "roborock.vacuum.a87"
+
+    inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    [persisted] = inventory["devices"]
+    assert persisted["model"] == "roborock.vacuum.a87"
+    assert persisted["name"] == "Roborock Qrevo MaxV"
+    assert persisted["product_id"] == "5gUei3OIJIXVD3eD85Balg"
+    assert len(persisted["schema"]) == len(DEFAULT_PRODUCT_SCHEMA)
 
 
 def test_core_only_mode_disables_standalone_admin_routes(tmp_path: Path) -> None:

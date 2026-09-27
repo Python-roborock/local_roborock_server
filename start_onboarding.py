@@ -44,6 +44,8 @@ DEFAULT_STACK_HTTPS_PORT = 555
 MAX_STACK_SERVER_LENGTH = 32
 POLL_INTERVAL_SECONDS = 5.0
 POLL_TIMEOUT_SECONDS = 300.0
+# Public-key recovery runs on the server and can outlast the normal traffic timeout.
+KEY_RECOVERY_TIMEOUT_SECONDS = 1200.0
 
 # Mapping from IANA timezone to POSIX TZ string for the vacuum firmware.
 _IANA_TO_POSIX: dict[str, str] = {
@@ -316,8 +318,24 @@ class RemoteOnboardingApi:
         devices = payload.get("devices")
         return list(devices) if isinstance(devices, list) else []
 
-    def start_session(self, *, duid: str) -> dict[str, Any]:
-        return self._request_json("POST", "/admin/api/onboarding/sessions", payload={"duid": duid})
+    def start_session(
+        self,
+        *,
+        duid: str = "",
+        new_vacuum: bool = False,
+        name: str = "",
+        model: str = "",
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"duid": duid, "new_vacuum": new_vacuum}
+        if name:
+            payload["name"] = name
+        if model:
+            payload["model"] = model
+        return self._request_json(
+            "POST",
+            "/admin/api/onboarding/sessions",
+            payload=payload,
+        )
 
     def get_session(self, *, session_id: str) -> dict[str, Any]:
         return self._request_json("GET", f"/admin/api/onboarding/sessions/{parse.quote(session_id, safe='')}")
@@ -497,13 +515,16 @@ def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout) ->
         sock.close()
 
 
+def _new_vacuum_choice() -> dict[str, Any]:
+    return {"new_vacuum": True, "duid": "", "name": "New vacuum"}
+
+
 def choose_device(devices: list[dict[str, Any]], *, output: TextIO) -> dict[str, Any] | None:
     if not devices:
         output.write(
-            "No known vacuums are available for onboarding. "
-            "Finish the cloud import/fetch-data step first, then retry.\n"
+            "No vacuums are in the inventory yet (none imported from the cloud).\n"
+            "If this vacuum has never been on the cloud, choose 'New vacuum' below.\n"
         )
-        return None
 
     name_counts: dict[str, int] = {}
     for device in devices:
@@ -516,14 +537,27 @@ def choose_device(devices: list[dict[str, Any]], *, output: TextIO) -> dict[str,
             key = str(device.get("name") or device.get("duid") or "").strip().lower()
             disambiguator = str(device.get("duid") or "") if name_counts.get(key, 0) > 1 else ""
             output.write(f"  {index}. {format_device_label(device, disambiguator=disambiguator)}\n")
-        raw = input("Select a vacuum by number, or type 'quit': ").strip().lower()
+        new_vacuum_index = len(devices) + 1
+        output.write(
+            f"  {new_vacuum_index}. New vacuum (never on the cloud / not yet in inventory)\n"
+        )
+        raw = input("Select a vacuum by number, type 'new', or 'quit': ").strip().lower()
         if raw == "quit":
             return None
+        if raw in ("new", "n"):
+            return _new_vacuum_choice()
         if raw.isdigit():
             index = int(raw)
             if 1 <= index <= len(devices):
                 return devices[index - 1]
+            if index == new_vacuum_index:
+                return _new_vacuum_choice()
         output.write("Please enter a valid number.\n")
+
+
+def _format_elapsed(seconds: float) -> str:
+    minutes, secs = divmod(int(seconds), 60)
+    return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
 
 
 def poll_session_until_progress(
@@ -535,12 +569,14 @@ def poll_session_until_progress(
     output: TextIO,
     poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
     timeout_seconds: float = POLL_TIMEOUT_SECONDS,
+    recovery_timeout_seconds: float = KEY_RECOVERY_TIMEOUT_SECONDS,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> tuple[str, dict[str, Any]]:
     deadline = time.monotonic() + timeout_seconds
     latest = dict(baseline_status or {"session_id": session_id, "query_samples": baseline_samples})
     baseline_has_public_key = bool((baseline_status or {}).get("has_public_key"))
     waiting_for_reconnect = False
+    recovery_started_at: float | None = None
     while True:
         try:
             latest = api.get_session(session_id=session_id)
@@ -567,6 +603,20 @@ def poll_session_until_progress(
             return "connected", latest
         if bool(latest.get("has_public_key")) and not baseline_has_public_key:
             return "public_key_ready", latest
+        if str(latest.get("public_key_state") or "") == "recovering" and not baseline_has_public_key:
+            # Keep the user waiting here: another pairing cycle is pointless until the key is ready.
+            now = time.monotonic()
+            if recovery_started_at is None:
+                recovery_started_at = now
+            elapsed = now - recovery_started_at
+            if elapsed >= recovery_timeout_seconds:
+                return "timeout", latest
+            output.write(
+                f"Calculating public key... please wait ({_format_elapsed(elapsed)} elapsed). "
+                "Do not start the next pairing cycle yet.\n"
+            )
+            sleep_fn(poll_interval_seconds)
+            continue
         if int(latest.get("query_samples") or 0) > baseline_samples and not baseline_has_public_key:
             return "sample_increased", latest
         if time.monotonic() >= deadline:
@@ -602,7 +652,18 @@ def run_guided_onboarding(
         if selected is None:
             return 0
 
-        session = api.start_session(duid=str(selected.get("duid") or ""))
+        if selected.get("new_vacuum"):
+            output.write(
+                "Starting a session for a new vacuum. The server will adopt it from its own "
+                "onboarding traffic and add it to the inventory once it registers.\n"
+            )
+            session = api.start_session(new_vacuum=True)
+        else:
+            session = api.start_session(
+                duid=str(selected.get("duid") or ""),
+                name=str(selected.get("name") or ""),
+                model=str(selected.get("model") or ""),
+            )
         session_id = str(session.get("session_id") or "").strip()
         if not session_id:
             raise RuntimeError("Server did not return an onboarding session id.")
@@ -662,10 +723,14 @@ def run_guided_onboarding(
                     output.write("The vacuum is connected to the local server.\n")
                     return 0
                 if result == "public_key_ready":
-                    output.write("The public key is ready. Do one final pairing cycle to finish the connection.\n")
+                    output.write(
+                        "The public key is ready. Send the final pairing cycle now to finish the connection.\n"
+                    )
                     continue
                 if result == "sample_increased":
-                    output.write("The sample count increased. Repeat the pairing cycle to collect more onboarding data.\n")
+                    output.write(
+                        "The sample count increased. Send the next pairing cycle now to collect more onboarding data.\n"
+                    )
                     continue
                 if result == "unsupported":
                     output.write("This vacuum is not supported by the current onboarding flow.\n")
