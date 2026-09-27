@@ -114,7 +114,7 @@ STYLE_CSS = dedent(
         height: auto;
         min-height: 56px;
     }
-    .nav-wrapper { height: auto; min-height: 56px; }
+    .nav-wrapper { display: flex; align-items: center; height: auto; min-height: 56px; }
     nav .brand-logo {
         position: static; left: auto; transform: none;
         display: flex; align-items: center; flex-wrap: wrap; gap: .4em;
@@ -132,19 +132,35 @@ STYLE_CSS = dedent(
         box-shadow: 0 1px 3px rgba(26, 31, 41, .06);
     }
 
-    .header.orange-text, h4.header {
+    .header.rls-heading, h4.header {
         color: var(--rls-accent-dark) !important;
         font-weight: 600;
         font-size: 1.2rem;
         letter-spacing: .01em;
     }
 
+    .btn, .btn-large, .btn-small, .btn-flat {
+        display: inline-flex;
+        align-items: center;
+        gap: .4em;
+    }
+    /* Materialize's .right float on an icon inside a button breaks once the
+       button becomes a flex item (as it is in the nav bar) - floats inside
+       flex containers are unreliable across browsers. Use flex ordering
+       instead, which keeps the same "icon at the end" look everywhere. */
+    .btn .material-icons.right, .btn-large .material-icons.right,
+    .btn-small .material-icons.right, .btn-flat .material-icons.right {
+        float: none;
+        margin-left: auto;
+    }
+    .btn, .btn-large, .btn-small, .btn-flat {
+        text-transform: none;
+        font-weight: 500;
+    }
     .btn, .btn-large, .btn-small {
         background-color: var(--rls-accent);
         border-radius: 7px;
         box-shadow: none;
-        text-transform: none;
-        font-weight: 500;
     }
     .btn:hover, .btn-large:hover, .btn-small:hover {
         background-color: var(--rls-accent-dark);
@@ -164,6 +180,23 @@ STYLE_CSS = dedent(
     }
     .switch label input[type="checkbox"]:checked + .lever { background-color: rgba(47, 111, 237, .5); }
     .switch label input[type="checkbox"]:checked + .lever:after { background-color: var(--rls-accent-dark); }
+
+    /* Plain (non-switch) checkboxes: Materialize draws both the unchecked box
+       AND the checked checkmark tick using the SAME :before pseudo-element -
+       :checked repositions/rotates it into an L-shape (transparent top/left,
+       colored right/bottom). Retint each state's own colors instead of a
+       blanket border-color, or the checked state loses its transparent sides
+       and renders as a solid diamond instead of a checkmark. */
+    [type="checkbox"]:not(.filled-in) + span:not(.lever) { color: var(--rls-text); }
+    [type="checkbox"]:not(.filled-in):not(:checked) + span:not(.lever):before {
+        border-color: var(--rls-text-muted) !important;
+    }
+    [type="checkbox"]:checked:not(.filled-in) + span:not(.lever):before {
+        border-top-color: transparent !important;
+        border-left-color: transparent !important;
+        border-right-color: var(--rls-accent) !important;
+        border-bottom-color: var(--rls-accent) !important;
+    }
 
     table.highlight { border-collapse: collapse; }
     table.highlight thead th {
