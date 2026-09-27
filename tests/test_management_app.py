@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 import pytest
 
-from roborock_local_server.config import load_config
+from roborock_local_server.config import diagnose_config, load_config
 from roborock_local_server.management_app import (
     DEFAULT_BOOTSTRAP_HTTPS_PORT,
     bootstrap_port_from_env,
@@ -22,6 +22,44 @@ _VALID_PAYLOAD = {
     "protocol_login_email": "user@example.com",
     "protocol_login_pin": "123456",
 }
+
+_FULL_CONFIG = """
+[network]
+stack_fqdn = "api-roborock.example.com"
+
+[broker]
+mode = "embedded"
+
+[storage]
+data_dir = "data"
+
+[tls]
+mode = "provided"
+cert_file = "certs/fullchain.pem"
+key_file = "certs/privkey.pem"
+
+[admin]
+password_hash = "pbkdf2_sha256$600000$abc$def"
+session_secret = "abcdefghijklmnopqrstuvwxyz123456"
+protocol_login_email = "user@example.com"
+protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
+""".strip()
+
+_PARTIAL_CONFIG_MISSING_ADMIN = """
+[network]
+stack_fqdn = "api-roborock.example.com"
+
+[broker]
+mode = "embedded"
+
+[storage]
+data_dir = "data"
+
+[tls]
+mode = "provided"
+cert_file = "certs/fullchain.pem"
+key_file = "certs/privkey.pem"
+""".strip()
 
 
 def test_bootstrap_port_from_env_default() -> None:
@@ -49,7 +87,7 @@ def test_index_serves_setup_wizard_when_unconfigured(tmp_path: Path) -> None:
 
 def test_index_serves_status_page_when_configured(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
-    config_file.write_text("already = true\n", encoding="utf-8")
+    config_file.write_text(_FULL_CONFIG, encoding="utf-8")
     client = TestClient(create_management_app(config_file=config_file))
 
     response = client.get("/")
@@ -58,14 +96,29 @@ def test_index_serves_status_page_when_configured(tmp_path: Path) -> None:
     assert "Setup is complete" in response.text
 
 
-def test_setup_status_reflects_config_existence(tmp_path: Path) -> None:
+def test_index_serves_admin_only_wizard_when_only_admin_missing(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_PARTIAL_CONFIG_MISSING_ADMIN, encoding="utf-8")
+    client = TestClient(create_management_app(config_file=config_file))
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    assert "Just add admin credentials" in response.text
+    assert 'name="stack_fqdn"' not in response.text
+
+
+def test_setup_status_reflects_config_state(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     client = TestClient(create_management_app(config_file=config_file))
 
-    assert client.get("/admin/api/setup/status").json() == {"configured": False}
+    assert client.get("/admin/api/setup/status").json() == {"status": "invalid"}
 
-    config_file.write_text("done = true\n", encoding="utf-8")
-    assert client.get("/admin/api/setup/status").json() == {"configured": True}
+    config_file.write_text(_PARTIAL_CONFIG_MISSING_ADMIN, encoding="utf-8")
+    assert client.get("/admin/api/setup/status").json() == {"status": "missing_admin"}
+
+    config_file.write_text(_FULL_CONFIG, encoding="utf-8")
+    assert client.get("/admin/api/setup/status").json() == {"status": "ok"}
 
 
 def test_submit_setup_writes_bootable_config(tmp_path: Path) -> None:
@@ -120,15 +173,71 @@ def test_submit_setup_rejects_bad_stack_fqdn(tmp_path: Path) -> None:
     assert "must start with api-" in response.json()["error"]
 
 
-def test_submit_setup_refuses_to_overwrite_existing_config(tmp_path: Path) -> None:
+def test_submit_setup_refuses_to_overwrite_a_fully_configured_stack(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_FULL_CONFIG, encoding="utf-8")
+    client = TestClient(create_management_app(config_file=config_file))
+
+    response = client.post("/admin/api/setup", json=_VALID_PAYLOAD)
+
+    assert response.status_code == 409
+    assert config_file.read_text(encoding="utf-8") == _FULL_CONFIG
+
+
+def test_submit_setup_refuses_to_overwrite_an_existing_broken_config(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text("existing = true\n", encoding="utf-8")
     client = TestClient(create_management_app(config_file=config_file))
 
     response = client.post("/admin/api/setup", json=_VALID_PAYLOAD)
 
-    assert response.status_code == 409
+    assert response.status_code == 400
+    assert "Refusing to overwrite" in response.json()["error"]
     assert config_file.read_text(encoding="utf-8") == "existing = true\n"
+
+
+def test_submit_setup_completes_admin_only_config(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_PARTIAL_CONFIG_MISSING_ADMIN, encoding="utf-8")
+    calls: list[str] = []
+    client = TestClient(create_management_app(config_file=config_file, on_configured=lambda: calls.append("done")))
+
+    response = client.post(
+        "/admin/api/setup",
+        json={
+            "admin_password": "super-secret-password",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "123456",
+        },
+    )
+
+    assert response.status_code == 200
+    assert calls == ["done"]
+
+    config = load_config(config_file)
+    # Network/broker/storage/tls came from the pre-existing partial config, untouched.
+    assert config.network.stack_fqdn == "api-roborock.example.com"
+    assert config.admin.protocol_login_email == "user@example.com"
+    assert str(config.admin.password_hash).startswith("pbkdf2_sha256$")
+
+
+def test_submit_setup_admin_only_rejects_bad_pin(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_PARTIAL_CONFIG_MISSING_ADMIN, encoding="utf-8")
+    client = TestClient(create_management_app(config_file=config_file))
+
+    response = client.post(
+        "/admin/api/setup",
+        json={
+            "admin_password": "super-secret-password",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "12",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "6 digits" in response.json()["error"]
+    assert diagnose_config(config_file) == "missing_admin"
 
 
 def test_submit_setup_cloudflare_actalis_requires_eab(tmp_path: Path) -> None:

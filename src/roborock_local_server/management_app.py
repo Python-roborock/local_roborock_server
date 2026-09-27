@@ -20,6 +20,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from .config import diagnose_config
 from .configure import (
     ConfigureAnswers,
     _normalize_acme_server,
@@ -129,6 +130,56 @@ def _answers_from_payload(body: Mapping[str, Any]) -> ConfigureAnswers:
         protocol_login_email=protocol_login_email,
         protocol_login_pin_hash=hash_password(protocol_login_pin),
     )
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def _admin_fields_from_payload(body: Mapping[str, Any]) -> tuple[str, str, str]:
+    def s(key: str, default: str = "") -> str:
+        return str(body.get(key, default) or "").strip()
+
+    admin_password = s("admin_password")
+    if not admin_password:
+        raise ValueError("admin_password is required")
+    protocol_login_email = s("protocol_login_email")
+    if "@" not in protocol_login_email:
+        raise ValueError("protocol_login_email must be an email address")
+    protocol_login_pin = _validate_protocol_login_pin(s("protocol_login_pin"))
+    return admin_password, protocol_login_email, protocol_login_pin
+
+
+def complete_admin_section(
+    *,
+    config_file: Path,
+    admin_password: str,
+    protocol_login_email: str,
+    protocol_login_pin: str,
+) -> None:
+    """Append [admin] to a partial config.toml (network/broker/storage/tls
+    already written, e.g. by env_config.py) that's only missing credentials.
+
+    Appending is safe here because env_config.py never writes an [admin]
+    section itself when these vars are unset - there's nothing to collide
+    with or overwrite.
+    """
+    admin_block = "\n".join(
+        [
+            "",
+            "[admin]",
+            f"password_hash = {_toml_string(hash_password(admin_password))}",
+            f"session_secret = {_toml_string(secrets.token_urlsafe(32))}",
+            "session_ttl_seconds = 86400",
+            "protocol_auth_enabled = true",
+            "new_connections_enabled = true",
+            f"protocol_login_email = {_toml_string(protocol_login_email)}",
+            f"protocol_login_pin_hash = {_toml_string(hash_password(protocol_login_pin))}",
+            "",
+        ]
+    )
+    with config_file.open("a", encoding="utf-8") as handle:
+        handle.write(admin_block)
 
 
 def _status_html() -> str:
@@ -290,6 +341,84 @@ def _setup_wizard_html() -> str:
     )
 
 
+def _admin_only_wizard_html() -> str:
+    return dedent(
+        """\
+        <!doctype html><html><head><meta charset="utf-8">
+        <title>Roborock Local Server Setup</title>
+        <style>
+          body{font-family:Segoe UI,sans-serif;max-width:640px;margin:4vh auto;padding:0 16px}
+          fieldset{margin-bottom:16px;border:1px solid #ccc;border-radius:6px}
+          label{display:block;margin-top:8px}
+          input{width:100%;padding:8px;box-sizing:border-box}
+          button{padding:10px 16px;margin-top:16px}
+          #result{white-space:pre-wrap;color:#b00020}
+          #success{white-space:pre-wrap;color:#0a7a2c}
+          .hidden{display:none}
+        </style>
+        </head><body>
+        <h1>Roborock Local Server Setup</h1>
+        <p>Network, broker, and certificate settings are already set (from environment variables).
+        Just add admin credentials to finish setup.</p>
+        <form id="setup">
+          <fieldset>
+            <legend>Admin Access</legend>
+            <label>Admin password<input name="admin_password" type="password" required></label>
+            <label>Confirm admin password<input name="admin_password_confirm" type="password" required></label>
+          </fieldset>
+
+          <fieldset>
+            <legend>App / Home Assistant Login</legend>
+            <label>Protocol login email<input name="protocol_login_email" placeholder="user@example.com" required></label>
+            <label>Protocol login PIN (6 digits)<input name="protocol_login_pin" inputmode="numeric" maxlength="6" required></label>
+            <label>Confirm PIN<input name="protocol_login_pin_confirm" inputmode="numeric" maxlength="6" required></label>
+          </fieldset>
+
+          <button type="submit">Save and start the stack</button>
+        </form>
+        <pre id="result"></pre>
+        <pre id="success" class="hidden"></pre>
+        <script>
+        const form = document.getElementById("setup");
+        const resultEl = document.getElementById("result");
+        const successEl = document.getElementById("success");
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          resultEl.textContent = "";
+          successEl.classList.add("hidden");
+
+          const data = Object.fromEntries(new FormData(form).entries());
+          if (data.admin_password !== data.admin_password_confirm) {
+            resultEl.textContent = "Admin password and confirmation do not match.";
+            return;
+          }
+          if (data.protocol_login_pin !== data.protocol_login_pin_confirm) {
+            resultEl.textContent = "PIN and confirmation do not match.";
+            return;
+          }
+
+          const response = await fetch("/admin/api/setup", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(data),
+          });
+          const payload = await response.json().catch(() => ({error: "Invalid response"}));
+          if (!response.ok) {
+            resultEl.textContent = payload.error || "Setup failed.";
+            return;
+          }
+          form.classList.add("hidden");
+          successEl.classList.remove("hidden");
+          successEl.textContent = "Saved. The stack is restarting into the full HTTPS/MQTT service - " +
+            "give it a minute, then reload this page.";
+        });
+        </script>
+        </body></html>
+        """
+    )
+
+
 def create_management_app(
     *,
     config_file: Path,
@@ -300,27 +429,45 @@ def create_management_app(
     @app.get("/", response_class=HTMLResponse)
     @app.get("/admin", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
-        return HTMLResponse(_status_html() if config_file.exists() else _setup_wizard_html())
+        status = diagnose_config(config_file)
+        if status == "ok":
+            return HTMLResponse(_status_html())
+        if status == "missing_admin":
+            return HTMLResponse(_admin_only_wizard_html())
+        return HTMLResponse(_setup_wizard_html())
 
     @app.get("/admin/api/setup/status")
     async def setup_status() -> JSONResponse:
-        return JSONResponse({"configured": config_file.exists()})
+        return JSONResponse({"status": diagnose_config(config_file)})
 
     @app.post("/admin/api/setup")
     async def submit_setup(request: Request) -> JSONResponse:
-        if config_file.exists():
+        status = diagnose_config(config_file)
+        if status == "ok":
             return JSONResponse({"error": "Already configured."}, status_code=409)
+
         try:
             raw_body = await request.body()
             body = json.loads(raw_body or b"{}")
             if not isinstance(body, dict):
                 raise ValueError("Request body must be a JSON object.")
-            answers = _answers_from_payload(body)
-            result = write_config_setup(config_file=config_file, answers=answers)
+
+            if status == "missing_admin":
+                admin_password, protocol_login_email, protocol_login_pin = _admin_fields_from_payload(body)
+                complete_admin_section(
+                    config_file=config_file,
+                    admin_password=admin_password,
+                    protocol_login_email=protocol_login_email,
+                    protocol_login_pin=protocol_login_pin,
+                )
+                result_config_file = config_file
+            else:
+                answers = _answers_from_payload(body)
+                result_config_file = write_config_setup(config_file=config_file, answers=answers).config_file
         except (ValueError, FileExistsError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         if on_configured is not None:
             on_configured()
-        return JSONResponse({"ok": True, "config_file": str(result.config_file)})
+        return JSONResponse({"ok": True, "config_file": str(result_config_file)})
 
     return app
