@@ -63,7 +63,7 @@ Make sure you have the following installed:
 
 - [apk-mitm](https://github.com/nicbarker/apk-mitm) (`npm install -g apk-mitm`)
 - [apktool](https://apktool.org/)
-- [apksigner](https://developer.android.com/tools/apksigner) (part of Android SDK build-tools)
+- [zipalign](https://developer.android.com/tools/zipalign) and [apksigner](https://developer.android.com/tools/apksigner) (part of Android SDK build-tools)
 - [keytool](https://docs.oracle.com/en/java/javase/17/docs/specs/man/keytool.html) (part of JDK)
 - [Python 3](https://www.python.org/downloads/)
 
@@ -102,10 +102,18 @@ Make sure you have the following installed:
 5. Rebuild the APK:
 
    ```bash
-      apktool b roborock_work -o roborock_final.apk
+      apktool b roborock_work -o roborock_unaligned.apk
    ```
 
-6. Sign the APK. You have two options:
+6. Align the APK using `zipalign`:
+
+   Android 11+ (API level 30+) requires uncompressed native libraries (`.so` files) to be 4-byte page-aligned inside the APK. Running `zipalign` must be done **before** signing with `apksigner`. Skipping this step will cause installation to fail with an uncompressed/alignment error (`INSTALL_FAILED_INVALID_APK: Failed to extract native libraries, res=-124` / `Failed parse`).
+
+   ```bash
+      zipalign -p -f 4 roborock_unaligned.apk roborock_final.apk
+   ```
+
+7. Sign the APK. You have two options:
 
    **Option A** — Create a new signing key and sign:
 
@@ -119,14 +127,15 @@ Make sure you have the following installed:
    ```bash
       apksigner sign --ks my-key.jks --v1-signing-enabled true --v2-signing-enabled true roborock_final.apk
    ```
-7. Uninstall the original Roborock app from your phone (required because the signing key is different), then install the patched APK:
+
+8. Uninstall the original Roborock app from your phone (required because the signing key is different), then install the patched APK:
 
    ```bash
       adb uninstall com.roborock.smart
       adb install roborock_final.apk
    ```
 
-8. On a machine that is not running the server, run the MITM script:
+9. On a machine that is not running the server, run the MITM script:
 
    ```bash
       uv run mitm_redirect.py --local-api api-roborock.example.com --sync-secret YOUR_ADMIN_SESSION_SECRET
@@ -146,11 +155,11 @@ Make sure you have the following installed:
 
    The `--local-api` hostname must resolve from the MITM machine and match the HTTPS certificate served by your local stack. A raw IP such as `127.0.0.1` will fail unless your certificate is valid for that IP.
 
-9. Install the WireGuard app on your phone. Then tap the plus button in WireGuard, choose to add from QR code, and scan the code at `http://127.0.0.1:8081/#/capture`.
+10. Install the WireGuard app on your phone. Then tap the plus button in WireGuard, choose to add from QR code, and scan the code at `http://127.0.0.1:8081/#/capture`.
 
-10. Open `mitm.it` in your web browser (Android). Follow the instructions there for your device. In Chrome, complete all device-specific steps, including installing and trusting the certificate.
+11. Open `mitm.it` in your web browser (Android). Follow the instructions there for your device. In Chrome, complete all device-specific steps, including installing and trusting the certificate.
 
-11. Once the MITM setup is working, open the Roborock app, log back in, enter your verification code, and the server should automatically show the vacuums already known to your local stack. Then close the Roborock app, turn off WireGuard, disable or delete the MITM certificate, reopen the Roborock app, and select your device or devices to confirm the map loads.
+12. Once the MITM setup is working, open the Roborock app, log back in, enter your verification code, and the server should automatically show the vacuums already known to your local stack. Then close the Roborock app, turn off WireGuard, disable or delete the MITM certificate, reopen the Roborock app, and select your device or devices to confirm the map loads.
 
 
 #### What the patch does
