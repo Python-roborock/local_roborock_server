@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
-from roborock_local_server.server import PROTOCOL_AUTH_SYNC_PATH, ReleaseSupervisor
+from roborock_local_server.server import MITM_ACTIVITY_SYNC_PATH, PROTOCOL_AUTH_SYNC_PATH, ReleaseSupervisor
 from https_server.routes.auth.service import load_cloud_user_data
 from shared.protocol_auth import ProtocolAuthStore, build_hawk_authorization
 
@@ -448,6 +448,75 @@ def test_protocol_sync_route_persists_additional_sessions_and_redacts_logs(tmp_p
     assert sync_entry["body_redacted"] is True
     assert "body_text" not in sync_entry
     assert sync_entry["headers"]["x-local-sync-secret"] == "<redacted>"
+
+
+def test_mitm_activity_sync_route_appends_entries_and_redacts_http_log(tmp_path: Path) -> None:
+    supervisor, paths = _build_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    response = client.post(
+        MITM_ACTIVITY_SYNC_PATH,
+        json={
+            "entries": [
+                {
+                    "host": "usiot.roborock.com",
+                    "method": "GET",
+                    "path": "/api/v1/userinfo",
+                    "status": 200,
+                    "rewritten": False,
+                    "request_headers": {"authorization": "real-cloud-token-999"},
+                }
+            ]
+        },
+        headers={"X-Local-Sync-Secret": "abcdefghijklmnopqrstuvwxyz123456"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["stored"] == 1
+    assert paths.mitm_activity_jsonl_path.exists()
+
+    stored_entries = [
+        json.loads(line) for line in paths.mitm_activity_jsonl_path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    assert len(stored_entries) == 1
+    assert stored_entries[0]["source"] == "mitm"
+    assert stored_entries[0]["host"] == "usiot.roborock.com"
+    assert "time" in stored_entries[0]
+
+    # The sync request's own body (which can carry real Roborock account
+    # tokens) must not leak unredacted into the regular HTTP activity log.
+    log_entries = [
+        json.loads(line) for line in paths.http_jsonl_path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    sync_entry = next(entry for entry in log_entries if entry.get("route") == "mitm_activity_sync")
+    assert sync_entry["body_redacted"] is True
+    assert "body_text" not in sync_entry
+
+
+def test_mitm_activity_sync_route_rejects_invalid_secret(tmp_path: Path) -> None:
+    supervisor, _paths = _build_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    response = client.post(
+        MITM_ACTIVITY_SYNC_PATH,
+        json={"entries": [{"host": "usiot.roborock.com"}]},
+        headers={"X-Local-Sync-Secret": "wrong-secret"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_mitm_activity_sync_route_rejects_missing_entries(tmp_path: Path) -> None:
+    supervisor, _paths = _build_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    response = client.post(
+        MITM_ACTIVITY_SYNC_PATH,
+        json={"entries": []},
+        headers={"X-Local-Sync-Secret": "abcdefghijklmnopqrstuvwxyz123456"},
+    )
+
+    assert response.status_code == 400
 
 
 def test_local_issued_and_imported_sessions_coexist(tmp_path: Path) -> None:

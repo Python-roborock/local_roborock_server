@@ -113,6 +113,7 @@ class AppPaths:
     device_key_state_path: Path
     http_jsonl_path: Path
     mqtt_jsonl_path: Path
+    mitm_activity_jsonl_path: Path
     cloudflare_token_file: Path
     acme_eab_kid_file: Path
     acme_eab_hmac_key_file: Path
@@ -490,6 +491,7 @@ def resolve_paths(config_file: str | Path, config: AppConfig) -> AppPaths:
         device_key_state_path=state_dir / "device_key_state.json",
         http_jsonl_path=runtime_dir / "decompiled_http.jsonl",
         mqtt_jsonl_path=runtime_dir / "decompiled_mqtt.jsonl",
+        mitm_activity_jsonl_path=runtime_dir / "mitm_activity.jsonl",
         cloudflare_token_file=cloudflare_token_file,
         acme_eab_kid_file=acme_eab_kid_file,
         acme_eab_hmac_key_file=acme_eab_hmac_key_file,

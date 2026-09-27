@@ -70,6 +70,7 @@ from .security import AdminSessionManager, verify_password
 ALL_HTTP_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
 PROTOCOL_AUTH_SYNC_PATH = "/internal/protocol/user-data"
 PROTOCOL_AUTH_SYNC_SECRET_HEADER = "x-local-sync-secret"
+MITM_ACTIVITY_SYNC_PATH = "/internal/protocol/mitm-activity"
 _REGION_COUNTRY_CODE = {
     "US": "1",
     "CN": "86",
@@ -851,6 +852,10 @@ class ReleaseSupervisor:
     def _is_protocol_sync_path(cls, clean_path: str) -> bool:
         return cls._normalized_path(clean_path) == PROTOCOL_AUTH_SYNC_PATH
 
+    @classmethod
+    def _is_mitm_activity_sync_path(cls, clean_path: str) -> bool:
+        return cls._normalized_path(clean_path) == MITM_ACTIVITY_SYNC_PATH
+
     @staticmethod
     def _protocol_sync_success_payload(*, source: str) -> dict[str, Any]:
         return {
@@ -907,6 +912,56 @@ class ReleaseSupervisor:
             )
 
         return "protocol_auth_sync", 200, self._protocol_sync_success_payload(source=source)
+
+    async def _handle_mitm_activity_sync_route(
+        self,
+        *,
+        method: str,
+        clean_path: str,
+        headers: dict[str, str],
+        body_params: dict[str, list[str]],
+    ) -> tuple[str, int, dict[str, Any]] | None:
+        """Accepts activity entries from mitm_redirect.py's optional --activity-sync.
+
+        Reuses the same admin.session_secret-based auth as the existing
+        protocol auth sync (_sync_secret_matches) - no new trust mechanism.
+        Entries are appended as-is (mitm_redirect.py sends full detail, same
+        as it already does for login-credential sync); activity_log.py is
+        what decides whether to redact them for display.
+        """
+        if not self._is_mitm_activity_sync_path(clean_path):
+            return None
+        if method.upper() != "POST":
+            return "mitm_activity_sync_method_not_allowed", 405, self._protocol_sync_failure_payload(
+                reason="method_not_allowed"
+            )
+        if not self._sync_secret_matches(headers):
+            return "mitm_activity_sync_unauthorized", 401, self._protocol_sync_failure_payload(
+                reason="invalid_sync_secret"
+            )
+
+        payload = _request_json_object(body_params)
+        entries = payload.get("entries")
+        if not isinstance(entries, list) or not entries:
+            return "mitm_activity_sync_invalid_payload", 400, self._protocol_sync_failure_payload(
+                reason="missing_entries"
+            )
+
+        stored = 0
+        for candidate in entries:
+            if not isinstance(candidate, dict):
+                continue
+            record = dict(candidate)
+            record.setdefault("time", utcnow_iso())
+            record["source"] = "mitm"
+            append_jsonl(self.paths.mitm_activity_jsonl_path, record)
+            stored += 1
+        if stored == 0:
+            return "mitm_activity_sync_invalid_payload", 400, self._protocol_sync_failure_payload(
+                reason="missing_entries"
+            )
+
+        return "mitm_activity_sync", 200, {"code": 200, "msg": "success", "data": {"stored": stored}}
 
     async def _handle_protocol_login_route(
         self,
@@ -974,7 +1029,9 @@ class ReleaseSupervisor:
         query_params = _request_query_params(request)
         body_text, body_params = await _request_body_params(request, raw_body)
         body_sha256 = hashlib.sha256(raw_body).hexdigest()
-        is_protocol_sync_request = self._is_protocol_sync_path(clean_path)
+        is_protocol_sync_request = self._is_protocol_sync_path(clean_path) or self._is_mitm_activity_sync_path(
+            clean_path
+        )
 
         if host:
             host_authority = host.strip()
@@ -1117,6 +1174,43 @@ class ReleaseSupervisor:
         )
         if custom_sync is not None:
             route_name, status_code, response_payload = custom_sync
+            entry["route"] = route_name
+            entry["response_json"] = response_payload
+            try:
+                self.runtime_state.record_http_event(
+                    event_time=str(entry["time"]),
+                    route_name=route_name,
+                    clean_path=clean_path,
+                    raw_path=raw_path,
+                    method=request.method,
+                    host=host,
+                    remote=str(entry["remote"]),
+                    did=explicit_did or None,
+                    pid=explicit_pid or None,
+                    model=explicit_model or None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("runtime_state record_http_event failed: %s", exc)
+            append_jsonl(self.context.http_jsonl, entry)
+            logger.info(
+                "%s %s host=%s route=%s status=%d body_sha256=%s",
+                request.method,
+                clean_path,
+                host or "-",
+                route_name,
+                status_code,
+                body_sha256[:16],
+            )
+            return JSONResponse(response_payload, status_code=status_code)
+
+        custom_mitm_activity = await self._handle_mitm_activity_sync_route(
+            method=request.method,
+            clean_path=clean_path,
+            headers=dict(request.headers),
+            body_params=body_params,
+        )
+        if custom_mitm_activity is not None:
+            route_name, status_code, response_payload = custom_mitm_activity
             entry["route"] = route_name
             entry["response_json"] = response_payload
             try:
@@ -1498,6 +1592,7 @@ class ReleaseSupervisor:
         entries = read_recent_activity(
             http_jsonl_path=self.paths.http_jsonl_path,
             mqtt_jsonl_path=self.paths.mqtt_jsonl_path,
+            mitm_jsonl_path=self.paths.mitm_activity_jsonl_path,
             limit=limit,
             raw=raw,
         )
