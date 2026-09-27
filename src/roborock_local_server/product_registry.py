@@ -124,6 +124,9 @@ BUILTIN_PRODUCT_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 
+_DEVICE_IDENTIFIER_KEYS = ("duid", "did", "device_id", "deviceId", "local_key", "localKey", "sn")
+
+
 def normalize_model_string(model: str | None) -> str:
     """Normalize a model name into canonical roborock.<category>.<code format."""
     trimmed = str(model or "").strip().lower()
@@ -200,21 +203,42 @@ def export_sanitized_device_profile(raw_device: dict[str, Any]) -> dict[str, Any
     if not model:
         return None
 
-    name = str(raw_device.get("product_name") or raw_device.get("name") or "").strip()
+    # Device records carry identifiers, and their "name"/"id" are the user's nickname or the
+    # device id (blind-onboarded vacuums are named after their DUID), so only product
+    # records may fall back to those fields.
+    identifiers = {
+        str(raw_device.get(key) or "").strip()
+        for key in _DEVICE_IDENTIFIER_KEYS
+        if str(raw_device.get(key) or "").strip()
+    }
+    is_device_record = bool(identifiers)
+
+    name = str(raw_device.get("product_name") or "").strip()
+    if not name and not is_device_record:
+        name = str(raw_device.get("name") or "").strip()
+    if name in identifiers:
+        name = ""
+    registry_meta = resolve_product_metadata(model)
+    if not name:
+        name = registry_meta["product_name"]
     category = str(raw_device.get("category") or "robot.vacuum.cleaner").strip()
     if category.startswith("RoborockCategory."):
         cat_suffix = category.split(".")[-1].lower()
         category = "roborock.washer" if cat_suffix == "washer" else "robot.vacuum.cleaner"
 
-    product_id = str(raw_device.get("product_id") or raw_device.get("id") or "").strip()
+    product_id = str(raw_device.get("product_id") or "").strip()
+    if not product_id and not is_device_record:
+        product_id = str(raw_device.get("id") or "").strip()
+    if product_id in identifiers:
+        product_id = ""
     capability = raw_device.get("capability")
     schema = raw_device.get("schema")
 
     profile: dict[str, Any] = {
         "model": model,
-        "product_name": name or f"Roborock {model.split('.')[-1].upper()}",
+        "product_name": name,
         "category": category,
-        "product_id": product_id or model.split(".")[-1],
+        "product_id": product_id or registry_meta["product_id"],
     }
 
     if capability is not None:

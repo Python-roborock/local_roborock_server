@@ -1504,3 +1504,59 @@ def test_execute_scene_hydrates_missing_zone_ranges_from_mqtt(tmp_path: Path) ->
     persisted_outer = json.loads(scene["param"])
     persisted_step = json.loads(persisted_outer["action"]["items"][0]["param"])
     assert persisted_step["params"]["data"][0]["zones"][0]["range"] == [32800, 22750, 34550, 25350]
+
+
+def test_product_registry_export_never_leaks_device_names_or_ids(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps(
+            {
+                "devices": [
+                    # Blind-onboarded vacuum: name is its DUID, no product_id/product_name.
+                    {
+                        "duid": "1103821560705",
+                        "did": "1103821560705",
+                        "name": "1103821560705",
+                        "local_key": "890c74e7395a59de",
+                        "model": "roborock.vacuum.a87",
+                        "product_id": "",
+                    },
+                    # Cloud-imported vacuum with a user nickname and no product_name.
+                    {
+                        "duid": "6HL2zfniaoYYV2i2DMqDxH",
+                        "name": "Luke's Vacuum",
+                        "local_key": "abcdefabcdef1234",
+                        "model": "roborock.vacuum.zz99",
+                    },
+                ],
+                "products": [
+                    {"id": "prod-abc", "name": "Roborock S8", "model": "roborock.vacuum.a51"},
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+    assert client.post("/admin/api/login", json={"password": "correct horse battery staple"}).status_code == 200
+
+    export_res = client.get("/admin/api/product-registry/export")
+    assert export_res.status_code == 200
+    profiles = {profile["model"]: profile for profile in export_res.json()["profiles"]}
+
+    assert profiles["roborock.vacuum.a87"]["product_name"] == "Roborock Qrevo MaxV"
+    assert profiles["roborock.vacuum.a87"]["product_id"] == "5gUei3OIJIXVD3eD85Balg"
+    assert profiles["roborock.vacuum.zz99"]["product_name"] == "Roborock ZZ99"
+    assert profiles["roborock.vacuum.zz99"]["product_id"] == "zz99"
+    # Product records still use their own name/id.
+    assert profiles["roborock.vacuum.a51"]["product_name"] == "Roborock S8"
+    assert profiles["roborock.vacuum.a51"]["product_id"] == "prod-abc"
+
+    exported = json.dumps(export_res.json())
+    for leaked in ("1103821560705", "890c74e7395a59de", "6HL2zfniaoYYV2i2DMqDxH", "Luke's Vacuum", "abcdefabcdef1234"):
+        assert leaked not in exported
