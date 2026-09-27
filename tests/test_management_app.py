@@ -8,6 +8,8 @@ import pytest
 from roborock_local_server.config import diagnose_config, load_config
 from roborock_local_server.management_app import (
     DEFAULT_BOOTSTRAP_HTTPS_PORT,
+    _setup_wizard_html,
+    _wizard_prefill_from_env,
     bootstrap_port_from_env,
     create_management_app,
 )
@@ -256,3 +258,61 @@ def test_submit_setup_cloudflare_actalis_requires_eab(tmp_path: Path) -> None:
 
     assert response.status_code == 400
     assert "Actalis" in response.json()["error"]
+
+
+def test_wizard_prefill_from_env_ignores_secrets() -> None:
+    env = {
+        "ROBOROCK_SERVER_STACK_FQDN": "api-rr.example.com",
+        "ROBOROCK_SERVER_ADMIN_PASSWORD": "super-secret",
+        "ROBOROCK_SERVER_PROTOCOL_LOGIN_PIN": "123456",
+        "ROBOROCK_SERVER_CLOUDFLARE_TOKEN": "cf-secret-token",
+    }
+
+    prefill = _wizard_prefill_from_env(env)
+
+    assert prefill == {"stack_fqdn": "api-rr.example.com"}
+
+
+def test_wizard_prefill_from_env_only_includes_set_values() -> None:
+    assert _wizard_prefill_from_env({}) == {}
+
+
+def test_setup_wizard_html_prefills_stack_fqdn_and_defaults_ports() -> None:
+    html = _setup_wizard_html(prefill={"stack_fqdn": "api-rr.binarycow.io"})
+
+    assert 'value="api-rr.binarycow.io"' in html
+    assert 'value="555"' in html
+    assert 'value="8881"' in html
+
+
+def test_setup_wizard_html_reveals_external_broker_section_when_prefilled() -> None:
+    html = _setup_wizard_html(prefill={"broker_mode": "external", "broker_host": "mqtt.internal"})
+
+    assert 'value="mqtt.internal"' in html
+    assert 'id="broker_external" class="row hidden"' not in html
+    assert 'name="broker_mode" type="radio" value="external" checked' in html
+
+
+def test_setup_wizard_html_reveals_provided_cert_section_when_prefilled() -> None:
+    html = _setup_wizard_html(prefill={"tls_mode": "provided"})
+
+    assert 'id="tls_cloudflare" class="hidden"' in html
+    assert 'name="tls_mode" type="radio" value="provided" checked' in html
+
+
+def test_setup_wizard_html_reveals_actalis_fields_when_prefilled() -> None:
+    html = _setup_wizard_html(prefill={"acme_server": "actalis"})
+
+    assert 'id="acme_actalis" class="row hidden"' not in html
+    assert 'value="actalis" selected' in html
+
+
+def test_setup_wizard_html_with_no_prefill_matches_original_defaults() -> None:
+    html = _setup_wizard_html()
+
+    assert 'input id="stack_fqdn" name="stack_fqdn" type="text" value="" required' in html
+    assert 'id="broker_external" class="row hidden"' in html
+    assert 'id="tls_cloudflare" class="">' in html
+    assert 'id="acme_actalis" class="row hidden"' in html
+    assert 'name="broker_mode" type="radio" value="embedded" checked' in html
+    assert 'name="tls_mode" type="radio" value="cloudflare_acme" checked' in html
