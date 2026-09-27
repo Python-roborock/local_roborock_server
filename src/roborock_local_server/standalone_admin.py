@@ -10,33 +10,63 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .security import verify_password
+from .web_theme import HEAD_ASSETS, NAV_HTML, SCRIPT_ASSETS, register_theme_routes
 
 
 def _admin_login_html() -> str:
-    return dedent(
-        """\
-        <!doctype html><html><body style="font-family:Segoe UI,sans-serif;max-width:420px;margin:12vh auto">
-        <h1>Roborock Local Server</h1>
-        <p>Sign in to manage the stack.</p>
-        <input id="password" type="password" placeholder="Admin password" style="width:100%;padding:10px" />
-        <button id="login" style="width:100%;padding:10px;margin-top:8px">Sign In</button>
-        <pre id="result"></pre>
-        <script>
-        document.getElementById("login").addEventListener("click", async () => {
-          const response = await fetch("/admin/api/login", {
-            method: "POST",
-            headers: {"Content-Type":"application/json"},
-            body: JSON.stringify({password: document.getElementById("password").value})
-          });
-          const payload = await response.json().catch(() => ({error: "Invalid response"}));
-          if (!response.ok) {
-            document.getElementById("result").textContent = payload.error || "Sign-in failed";
-            return;
-          }
-          window.location.reload();
-        });
-        </script></body></html>
-        """
+    return (
+        dedent(
+            """\
+            <!doctype html><html><head><meta charset="utf-8">
+            <title>Roborock Local Server</title>
+            """
+        )
+        + HEAD_ASSETS
+        + dedent(
+            """\
+            </head><body>
+            """
+        )
+        + NAV_HTML
+        + dedent(
+            """\
+            <div class="container" style="max-width:420px">
+              <p class="rls-muted">Sign in to manage the stack.</p>
+              <div class="row">
+                <div class="input-field col s12">
+                  <input id="password" type="password">
+                  <label for="password">Admin password</label>
+                </div>
+              </div>
+              <button id="login" class="btn waves-effect waves-light" style="width:100%">
+                Sign In<i class="material-icons right">login</i>
+              </button>
+              <div id="result" class="alert-banner error"></div>
+            </div>
+            """
+        )
+        + SCRIPT_ASSETS
+        + dedent(
+            """\
+            <script>
+            const resultEl = document.getElementById("result");
+            document.getElementById("login").addEventListener("click", async () => {
+              const response = await fetch("/admin/api/login", {
+                method: "POST",
+                headers: {"Content-Type":"application/json"},
+                body: JSON.stringify({password: document.getElementById("password").value})
+              });
+              const payload = await response.json().catch(() => ({error: "Invalid response"}));
+              if (!response.ok) {
+                resultEl.textContent = payload.error || "Sign-in failed";
+                resultEl.classList.add("shown");
+                return;
+              }
+              window.location.reload();
+            });
+            </script></body></html>
+            """
+        )
     )
 
 
@@ -44,44 +74,92 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
     support_payload = json.dumps(project_support)
     return dedent(
         f"""\
-        <!doctype html><html><body style="font-family:Segoe UI,sans-serif;max-width:1100px;margin:20px auto;padding:0 12px">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <h1>Roborock Local Server</h1>
-          <div><span id="overall">Loading</span> <button id="logout">Sign Out</button></div>
-        </div>
-        <section><h2>Vacuums</h2><div id="vacuumSummary" style="display:grid;gap:12px">Loading vacuums...</div></section>
-        <section><h2 id="supportTitle"></h2><p id="supportText"></p><div id="supportLinks" style="display:flex;gap:12px;flex-wrap:wrap"></div></section>
-        <section><h2>Cloud Import</h2>
-          <input id="email" placeholder="email@example.com" />
-          <button id="sendCode">Send Code</button>
-          <input id="code" placeholder="Email code" style="margin-top:8px" />
-          <button id="fetchData">Fetch Data</button>
-          <pre id="cloudResult">No cloud request yet.</pre>
-        </section>
-        <section><h2>New Connections</h2>
-          <label><input id="newConnectionsEnabled" type="checkbox" /> Allow new app logins, onboarding, and first-time vacuum connections</label>
-          <button id="saveConnections" style="margin-left:8px">Save</button>
-          <div id="authMeta" style="margin-top:8px;color:#333">Loading connection state...</div>
-          <div style="margin-top:12px">
-            <div style="font-weight:600">Protocol Sync Secret</div>
-            <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-              <input id="adminSessionSecret" readonly style="flex:1;min-width:320px;padding:8px" />
-              <button id="copySessionSecret">Copy</button>
-            </div>
-            <div id="syncSecretMeta" style="margin-top:6px;color:#555">Use this with <code>mitm_redirect.py --sync-secret ...</code>.</div>
+        <!doctype html><html><head><meta charset="utf-8">
+        <title>Roborock Local Server</title>
+        {HEAD_ASSETS}
+        </head><body>
+        <nav>
+          <div class="nav-wrapper container">
+            <a href="#" class="brand-logo"><i class="material-icons">smart_toy</i>Roborock Local Server</a>
+            <span style="flex:1"></span>
+            <span id="overall" style="color:#fff;margin-right:16px">Loading</span>
+            <button id="logout" class="btn-flat" style="color:#fff">Sign Out<i class="material-icons right">logout</i></button>
           </div>
-          <div id="pendingRecovery" style="margin-top:8px"></div>
-          <div style="margin-top:12px;font-weight:600">Protocol Sessions</div>
+        </nav>
+
+        <div class="container">
+          <h4 class="header orange-text">Vacuums</h4>
+          <div id="vacuumSummary" style="display:grid;gap:12px">Loading vacuums...</div>
+        </div>
+
+        <div class="container">
+          <h4 id="supportTitle" class="header orange-text"></h4>
+          <p id="supportText" class="rls-muted"></p>
+          <div id="supportLinks" style="display:flex;gap:12px;flex-wrap:wrap"></div>
+        </div>
+
+        <div class="container">
+          <h4 class="header orange-text">Cloud Import</h4>
+          <div class="row" style="margin-bottom:0">
+            <div class="input-field col s12 m6">
+              <input id="email" type="email">
+              <label for="email">Roborock account email</label>
+            </div>
+            <div class="input-field col s12 m6">
+              <button id="sendCode" class="btn waves-effect waves-light">Send Code</button>
+            </div>
+          </div>
+          <div class="row">
+            <div class="input-field col s12 m6">
+              <input id="code" type="text">
+              <label for="code">Email code</label>
+            </div>
+            <div class="input-field col s12 m6">
+              <button id="fetchData" class="btn waves-effect waves-light">Fetch Data</button>
+            </div>
+          </div>
+          <pre id="cloudResult" class="rls-pre">No cloud request yet.</pre>
+        </div>
+
+        <div class="container">
+          <h4 class="header orange-text">New Connections</h4>
+          <p>
+            <label><input id="newConnectionsEnabled" type="checkbox" /><span>Allow new app logins, onboarding, and first-time vacuum connections</span></label>
+          </p>
+          <button id="saveConnections" class="btn waves-effect waves-light">Save</button>
+          <div id="authMeta" class="rls-muted" style="margin-top:10px">Loading connection state...</div>
+          <div style="margin-top:18px">
+            <div style="font-weight:600">Protocol Sync Secret</div>
+            <div class="row" style="margin-top:6px;margin-bottom:0">
+              <div class="input-field col s12 m9">
+                <input id="adminSessionSecret" readonly>
+              </div>
+              <div class="input-field col s12 m3">
+                <button id="copySessionSecret" class="btn-flat waves-effect">Copy<i class="material-icons right">content_copy</i></button>
+              </div>
+            </div>
+            <div id="syncSecretMeta" class="rls-muted">Use this with <code>mitm_redirect.py --sync-secret ...</code>.</div>
+          </div>
+          <div id="pendingRecovery" class="rls-muted" style="margin-top:10px"></div>
+          <div style="margin-top:16px;font-weight:600">Protocol Sessions</div>
           <div id="sessionList" style="display:grid;gap:8px;margin-top:12px">Loading sessions...</div>
-        </section>
+        </div>
 
-        <section><h2>Activity</h2>
-          <div id="activityMeta" style="margin-bottom:8px;color:#555"></div>
-          <div id="activityList" style="display:grid;gap:6px;max-height:480px;overflow:auto"></div>
-        </section>
+        <div class="container">
+          <h4 class="header orange-text">Activity</h4>
+          <div id="activityMeta" class="rls-muted" style="margin-bottom:10px"></div>
+          <div id="activityList" class="rls-activity-list"></div>
+        </div>
 
-        <section><h2>Health</h2><pre id="health"></pre></section>
-        <section><h2>Vacuums</h2><pre id="vacuums"></pre></section>
+        <div class="container">
+          <h4 class="header orange-text">Health</h4>
+          <pre id="health" class="rls-pre"></pre>
+        </div>
+        <div class="container">
+          <h4 class="header orange-text">Vacuums (raw)</h4>
+          <pre id="vacuums" class="rls-pre"></pre>
+        </div>
+        {SCRIPT_ASSETS}
         <script>
         const support = {support_payload};
         let cloudSessionId = "";
@@ -96,7 +174,8 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           anchor.textContent = link.label || link.url;
           anchor.style.display = "inline-block";
           anchor.style.padding = "8px 12px";
-          anchor.style.border = "1px solid #999";
+          anchor.style.border = "1px solid var(--rls-border)";
+          anchor.style.borderRadius = "7px";
           anchor.style.textDecoration = "none";
           anchor.style.color = "inherit";
           supportLinks.appendChild(anchor);
@@ -118,7 +197,7 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           if (!items.length) {{
             const empty = document.createElement("div");
             empty.textContent = "No vacuums yet.";
-            empty.style.color = "#555";
+            empty.style.color = "var(--rls-text-muted)";
             container.appendChild(empty);
             return;
           }}
@@ -130,10 +209,10 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           }};
           for (const vacuum of items) {{
             const card = document.createElement("div");
-            card.style.border = "1px solid #ddd";
-            card.style.borderRadius = "6px";
+            card.style.border = "1px solid var(--rls-border)";
+            card.style.borderRadius = "8px";
             card.style.padding = "12px";
-            card.style.background = "#fafafa";
+            card.style.background = "var(--rls-bg)";
 
             const name = document.createElement("div");
             name.textContent = vacuum.name || vacuum.did || vacuum.duid || "Unknown vacuum";
@@ -151,9 +230,10 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
               alert.textContent = onboarding.guidance || "This vacuum is not supported by the current onboarding flow.";
               alert.style.marginTop = "10px";
               alert.style.padding = "8px";
-              alert.style.border = "1px solid #c2410c";
-              alert.style.background = "#fff7ed";
-              alert.style.color = "#7c2d12";
+              alert.style.borderRadius = "6px";
+              alert.style.border = "1px solid var(--rls-warn-border)";
+              alert.style.background = "var(--rls-warn-bg)";
+              alert.style.color = "var(--rls-warn-text)";
               card.appendChild(alert);
             }}
             container.appendChild(card);
@@ -186,16 +266,16 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           if (!sessions.length) {{
             const empty = document.createElement("div");
             empty.textContent = "No persisted protocol sessions.";
-            empty.style.color = "#555";
+            empty.style.color = "var(--rls-text-muted)";
             sessionList.appendChild(empty);
             return;
           }}
           for (const session of sessions) {{
             const card = document.createElement("div");
-            card.style.border = "1px solid #ddd";
-            card.style.borderRadius = "6px";
+            card.style.border = "1px solid var(--rls-border)";
+            card.style.borderRadius = "8px";
             card.style.padding = "10px";
-            card.style.background = "#fafafa";
+            card.style.background = "var(--rls-bg)";
             const label = document.createElement("div");
             label.textContent = session.rruid || session.hawk_id || "Protocol session";
             label.style.fontWeight = "600";
@@ -209,7 +289,9 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
 
             const remove = document.createElement("button");
             remove.textContent = "Remove";
+            remove.className = "btn-flat waves-effect";
             remove.style.marginTop = "8px";
+            remove.style.padding = "0 8px";
             remove.addEventListener("click", async () => {{
               try {{
                 await fetchJson(
@@ -236,44 +318,53 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           if (!entries.length) {{
             const empty = document.createElement("div");
             empty.textContent = "No recent activity.";
-            empty.style.color = "#555";
+            empty.style.color = "var(--rls-text-muted)";
             list.appendChild(empty);
             return;
           }}
+          const makeBadge = (source) => {{
+            const span = document.createElement("span");
+            span.className = `rls-badge ${{source}}`;
+            span.textContent = source;
+            return span;
+          }};
+          const appendText = (parent, text) => {{
+            parent.appendChild(document.createTextNode(text));
+          }};
           for (const entry of entries) {{
             const row = document.createElement("div");
-            row.style.border = "1px solid #ddd";
-            row.style.borderRadius = "6px";
-            row.style.padding = "8px";
-            row.style.background =
-              entry.source === "mqtt" ? "#f0f7ff" : entry.source === "mitm" ? "#fff7ed" : "#fafafa";
-            row.style.fontSize = "12px";
-            const summary = document.createElement("div");
+            row.className = "rls-activity-entry";
+            const time = document.createElement("span");
+            time.className = "rls-activity-time";
+            time.textContent = entry.time || "";
+            row.appendChild(time);
+            const detail = document.createElement("span");
+            detail.className = "rls-activity-detail";
             if (payload.raw) {{
-              summary.textContent = `${{entry.time || ""}} [${{entry.source}}]`;
+              detail.appendChild(makeBadge(entry.source || "http"));
+              row.appendChild(detail);
               const pre = document.createElement("pre");
-              pre.style.whiteSpace = "pre-wrap";
-              pre.style.marginTop = "4px";
+              pre.className = "rls-activity-raw";
               pre.textContent = JSON.stringify(entry, null, 2);
-              row.appendChild(summary);
               row.appendChild(pre);
             }} else if (entry.source === "mqtt") {{
               const methods = (entry.rpc_methods || []).join(", ");
-              summary.textContent =
-                `${{entry.time || ""}} [MQTT ${{entry.direction || ""}}] ${{entry.topic || ""}}` +
-                (methods ? ` - ${{methods}}` : "");
-              row.appendChild(summary);
+              detail.appendChild(makeBadge("mqtt"));
+              appendText(detail, ` ${{entry.direction || ""}} ${{entry.topic || ""}}` + (methods ? ` - ${{methods}}` : ""));
+              row.appendChild(detail);
             }} else if (entry.source === "mitm") {{
-              summary.textContent =
-                `${{entry.time || ""}} [MITM] ${{entry.method || ""}} ${{entry.host || ""}}${{entry.path || ""}}` +
-                (entry.status ? ` -> ${{entry.status}}` : "") +
-                (entry.rewritten ? " (rewritten to local)" : "");
-              row.appendChild(summary);
+              detail.appendChild(makeBadge("mitm"));
+              appendText(
+                detail,
+                ` ${{entry.method || ""}} ${{entry.host || ""}}${{entry.path || ""}}` +
+                  (entry.status ? ` -> ${{entry.status}}` : "") +
+                  (entry.rewritten ? " (rewritten to local)" : "")
+              );
+              row.appendChild(detail);
             }} else {{
-              summary.textContent =
-                `${{entry.time || ""}} [HTTP] ${{entry.method || ""}} ${{entry.path || ""}}` +
-                (entry.route ? ` (${{entry.route}})` : "");
-              row.appendChild(summary);
+              detail.appendChild(makeBadge("http"));
+              appendText(detail, ` ${{entry.method || ""}} ${{entry.path || ""}}` + (entry.route ? ` (${{entry.route}})` : ""));
+              row.appendChild(detail);
             }}
             list.appendChild(row);
           }}
@@ -368,6 +459,8 @@ def register_standalone_admin_routes(
     supervisor: Any,
     project_support: dict[str, Any],
 ) -> None:
+    register_theme_routes(app)
+
     @app.get("/admin", response_class=HTMLResponse)
     async def admin_page(request: Request) -> HTMLResponse:
         if not supervisor._authenticated(request):
