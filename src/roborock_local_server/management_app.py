@@ -11,7 +11,9 @@ with TLS if local_tls) takes over that same port for good.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import html
 import json
+import os
 from pathlib import Path
 import secrets
 from textwrap import dedent
@@ -29,6 +31,7 @@ from .configure import (
     hash_password,
     write_config_setup,
 )
+from .env_config import ENV_PREFIX
 from .web_theme import HEAD_ASSETS, NAV_HTML, SCRIPT_ASSETS, register_theme_routes
 
 DEFAULT_BOOTSTRAP_HTTPS_PORT = 555
@@ -266,7 +269,64 @@ _WIZARD_SCRIPT_SUBMIT_COMMON = dedent(
 )
 
 
-def _setup_wizard_html() -> str:
+def _wizard_prefill_from_env(env: Mapping[str, str]) -> dict[str, str]:
+    """Values already set via ROBOROCK_SERVER_* env vars, to pre-fill the wizard with.
+
+    Only covers non-secret fields (never cloudflare_token/admin_password/PIN -
+    those are exactly what the wizard exists to collect in the browser rather
+    than a compose file). Used when env-var generation fails partway through
+    (see container_entrypoint.py) so whatever *was* set doesn't have to be
+    retyped.
+    """
+
+    def get(name: str) -> str:
+        return str(env.get(f"{ENV_PREFIX}{name}", "") or "").strip()
+
+    prefill = {
+        "stack_fqdn": get("STACK_FQDN"),
+        "https_port": get("HTTPS_PORT"),
+        "mqtt_tls_port": get("MQTT_TLS_PORT"),
+        "broker_mode": get("BROKER_MODE").lower(),
+        "broker_host": get("BROKER_HOST"),
+        "tls_mode": get("TLS_MODE").lower(),
+        "base_domain": get("TLS_BASE_DOMAIN"),
+        "email": get("TLS_EMAIL"),
+        "acme_server": get("ACME_SERVER").lower(),
+    }
+    return {key: value for key, value in prefill.items() if value}
+
+
+def _checked(prefill: Mapping[str, str], field: str, value: str, *, default: str) -> str:
+    return "checked" if prefill.get(field, default) == value else ""
+
+
+def _selected(prefill: Mapping[str, str], field: str, value: str, *, default: str) -> str:
+    return "selected" if prefill.get(field, default) == value else ""
+
+
+def _hidden_unless(prefill: Mapping[str, str], field: str, value: str, *, default: str) -> str:
+    return "" if prefill.get(field, default) == value else "hidden"
+
+
+def _setup_wizard_html(prefill: Mapping[str, str] | None = None) -> str:
+    prefill = prefill or {}
+    stack_fqdn_value = html.escape(prefill.get("stack_fqdn", ""))
+    https_port_value = html.escape(prefill.get("https_port", "") or "555")
+    mqtt_tls_port_value = html.escape(prefill.get("mqtt_tls_port", "") or "8881")
+    broker_host_value = html.escape(prefill.get("broker_host", ""))
+    base_domain_value = html.escape(prefill.get("base_domain", ""))
+    email_value = html.escape(prefill.get("email", ""))
+    broker_embedded_checked = _checked(prefill, "broker_mode", "embedded", default="embedded")
+    broker_external_checked = _checked(prefill, "broker_mode", "external", default="embedded")
+    broker_external_hidden = _hidden_unless(prefill, "broker_mode", "external", default="embedded")
+    tls_cloudflare_checked = _checked(prefill, "tls_mode", "cloudflare_acme", default="cloudflare_acme")
+    tls_provided_checked = _checked(prefill, "tls_mode", "provided", default="cloudflare_acme")
+    tls_cloudflare_hidden = _hidden_unless(prefill, "tls_mode", "cloudflare_acme", default="cloudflare_acme")
+    tls_provided_hidden = _hidden_unless(prefill, "tls_mode", "provided", default="cloudflare_acme")
+    acme_zerossl_selected = _selected(prefill, "acme_server", "zerossl", default="zerossl")
+    acme_actalis_selected = _selected(prefill, "acme_server", "actalis", default="zerossl")
+    acme_actalis_hidden = _hidden_unless(prefill, "acme_server", "actalis", default="zerossl")
+
     return (
         dedent(
             """\
@@ -282,25 +342,26 @@ def _setup_wizard_html() -> str:
         )
         + NAV_HTML
         + dedent(
-            """\
+            f"""\
             <div class="container">
             <p class="rls-muted">This runs once, the first time the stack boots without a config.toml. Fill
-            this in, submit, and the container will restart into the full HTTPS/MQTT stack.</p>
+            this in, submit, and the container will restart into the full HTTPS/MQTT stack. Fields already
+            set via ROBOROCK_SERVER_* env vars are pre-filled below.</p>
             <form id="setup">
               <h5 class="header rls-heading">Network</h5>
               <div class="row">
                 <div class="input-field col s12">
-                  <input id="stack_fqdn" name="stack_fqdn" type="text" required>
-                  <label for="stack_fqdn">Stack FQDN (must start with api-)</label>
+                  <input id="stack_fqdn" name="stack_fqdn" type="text" value="{stack_fqdn_value}" required>
+                  <label for="stack_fqdn" class="{'active' if stack_fqdn_value else ''}">Stack FQDN (must start with api-)</label>
                 </div>
               </div>
               <div class="row">
                 <div class="input-field col s6">
-                  <input id="https_port" name="https_port" type="number" value="555" required>
+                  <input id="https_port" name="https_port" type="number" value="{https_port_value}" required>
                   <label for="https_port" class="active">HTTPS port</label>
                 </div>
                 <div class="input-field col s6">
-                  <input id="mqtt_tls_port" name="mqtt_tls_port" type="number" value="8881" required>
+                  <input id="mqtt_tls_port" name="mqtt_tls_port" type="number" value="{mqtt_tls_port_value}" required>
                   <label for="mqtt_tls_port" class="active">MQTT TLS port</label>
                 </div>
               </div>
@@ -308,37 +369,37 @@ def _setup_wizard_html() -> str:
 
               <h5 class="header rls-heading">MQTT Broker</h5>
               <p>
-                <label><input class="with-gap" name="broker_mode" type="radio" value="embedded" checked /><span>Embedded (recommended)</span></label>
+                <label><input class="with-gap" name="broker_mode" type="radio" value="embedded" {broker_embedded_checked} /><span>Embedded (recommended)</span></label>
               </p>
               <p>
-                <label><input class="with-gap" name="broker_mode" type="radio" value="external" /><span>Use my own broker</span></label>
+                <label><input class="with-gap" name="broker_mode" type="radio" value="external" {broker_external_checked} /><span>Use my own broker</span></label>
               </p>
-              <div id="broker_external" class="row hidden">
+              <div id="broker_external" class="row {broker_external_hidden}">
                 <div class="input-field col s12">
-                  <input id="broker_host" name="broker_host" type="text">
-                  <label for="broker_host">Broker host</label>
+                  <input id="broker_host" name="broker_host" type="text" value="{broker_host_value}">
+                  <label for="broker_host" class="{'active' if broker_host_value else ''}">Broker host</label>
                 </div>
               </div>
               <div class="divider"></div>
 
               <h5 class="header rls-heading">Certificates</h5>
               <p>
-                <label><input class="with-gap" name="tls_mode" type="radio" value="cloudflare_acme" checked /><span>Cloudflare DNS-01 auto-renew</span></label>
+                <label><input class="with-gap" name="tls_mode" type="radio" value="cloudflare_acme" {tls_cloudflare_checked} /><span>Cloudflare DNS-01 auto-renew</span></label>
               </p>
               <p>
-                <label><input class="with-gap" name="tls_mode" type="radio" value="provided" /><span>Bring my own certificate</span></label>
+                <label><input class="with-gap" name="tls_mode" type="radio" value="provided" {tls_provided_checked} /><span>Bring my own certificate</span></label>
               </p>
-              <div id="tls_cloudflare">
+              <div id="tls_cloudflare" class="{tls_cloudflare_hidden}">
                 <div class="row">
                   <div class="input-field col s12">
-                    <input id="base_domain" name="base_domain" type="text">
-                    <label for="base_domain">Base domain / DNS zone</label>
+                    <input id="base_domain" name="base_domain" type="text" value="{base_domain_value}">
+                    <label for="base_domain" class="{'active' if base_domain_value else ''}">Base domain / DNS zone</label>
                   </div>
                 </div>
                 <div class="row">
                   <div class="input-field col s6">
-                    <input id="email" name="email" type="email">
-                    <label for="email">ACME account email</label>
+                    <input id="email" name="email" type="email" value="{email_value}">
+                    <label for="email" class="{'active' if email_value else ''}">ACME account email</label>
                   </div>
                   <div class="input-field col s6">
                     <input id="cloudflare_token" name="cloudflare_token" type="password">
@@ -348,13 +409,13 @@ def _setup_wizard_html() -> str:
                 <div class="row">
                   <div class="input-field col s12">
                     <select name="acme_server" id="acme_server">
-                      <option value="zerossl" selected>ZeroSSL (recommended)</option>
-                      <option value="actalis">Actalis</option>
+                      <option value="zerossl" {acme_zerossl_selected}>ZeroSSL (recommended)</option>
+                      <option value="actalis" {acme_actalis_selected}>Actalis</option>
                     </select>
                     <label>Certificate authority</label>
                   </div>
                 </div>
-                <div id="acme_actalis" class="row hidden">
+                <div id="acme_actalis" class="row {acme_actalis_hidden}">
                   <div class="input-field col s6">
                     <input id="acme_eab_kid" name="acme_eab_kid" type="text">
                     <label for="acme_eab_kid">Actalis EAB KID</label>
@@ -365,11 +426,15 @@ def _setup_wizard_html() -> str:
                   </div>
                 </div>
               </div>
-              <p id="tls_provided" class="hidden rls-muted">
+              <p id="tls_provided" class="{tls_provided_hidden} rls-muted">
                 Place your certificate at <code>data/certs/fullchain.pem</code> and key at
                 <code>data/certs/privkey.pem</code> (relative to the compose file) before starting the stack.
               </p>
-              <div class="divider"></div>
+              <div class="divider"></div>"""
+        )
+        + dedent(
+            """\
+
 
               <h5 class="header rls-heading">Admin Access</h5>
               <div class="row">
@@ -532,7 +597,7 @@ def create_management_app(
             return HTMLResponse(_status_html())
         if status == "missing_admin":
             return HTMLResponse(_admin_only_wizard_html())
-        return HTMLResponse(_setup_wizard_html())
+        return HTMLResponse(_setup_wizard_html(prefill=_wizard_prefill_from_env(os.environ)))
 
     @app.get("/admin/api/setup/status")
     async def setup_status() -> JSONResponse:
