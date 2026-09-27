@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import secrets
 import signal
@@ -31,6 +32,7 @@ from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIR
 from .cloud import CloudImportManager
 from .config import AppConfig, AppPaths, load_config, resolve_paths
 from .log_retention import configure_jsonl_logging
+from .management_app import bootstrap_port_from_env, create_management_app
 from .turn_relay import EmbeddedTurnRelay
 from .standalone_admin import register_standalone_admin_routes
 from .backend import (
@@ -2049,8 +2051,59 @@ class ReleaseSupervisor:
         return 0
 
 
+async def _run_setup_wizard_only(*, config_file: Path) -> int:
+    """Serve only /admin's setup wizard, in plain HTTP, until config.toml exists.
+
+    Listens on the same https_port the real stack will use once configured
+    (ROBOROCK_SERVER_HTTPS_PORT, same env var as the compose port mapping).
+    Exits (0) once the wizard writes a config, or on SIGINT/SIGTERM. Either
+    way, Docker's restart policy is what brings the full stack - and its own
+    TLS'd /admin - up on the next boot, once load_config() succeeds.
+    """
+    logger = logging.getLogger(__name__)
+    port = bootstrap_port_from_env(os.environ)
+    stop_event = asyncio.Event()
+    configured_event = asyncio.Event()
+
+    app = create_management_app(config_file=config_file, on_configured=configured_event.set)
+    bootstrap_server = ManagedFastApiServer(
+        app=app,
+        bind_host="0.0.0.0",
+        port=port,
+        tls_enabled=False,
+    )
+    await bootstrap_server.start()
+    logger.warning(
+        "%s not found. Open http://<this host>:%d/admin to finish setup.",
+        config_file,
+        port,
+    )
+
+    def request_shutdown() -> None:
+        stop_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, request_shutdown)
+        except NotImplementedError:
+            pass
+
+    await asyncio.wait(
+        {asyncio.create_task(stop_event.wait()), asyncio.create_task(configured_event.wait())},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    await bootstrap_server.stop()
+    return 0
+
+
 async def run_server(*, config_file: Path, enable_standalone_admin: bool = True) -> int:
-    config = load_config(config_file)
+    try:
+        config = load_config(config_file)
+    except (OSError, ValueError) as exc:
+        logging.getLogger(__name__).warning("Could not load %s: %s", config_file, exc)
+        return await _run_setup_wizard_only(config_file=config_file)
+
     paths = resolve_paths(config_file, config)
     supervisor = ReleaseSupervisor(
         config=config,
