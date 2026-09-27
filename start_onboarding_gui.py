@@ -55,6 +55,8 @@ DEFAULT_STACK_HTTPS_PORT = 555
 MAX_STACK_SERVER_LENGTH = 32
 POLL_INTERVAL_SECONDS = 5.0
 POLL_TIMEOUT_SECONDS = 300.0
+# Public-key recovery runs on the server and can outlast the normal traffic timeout.
+KEY_RECOVERY_TIMEOUT_SECONDS = 1200.0
 
 # Mapping from IANA timezone to POSIX TZ string for the vacuum firmware.
 _IANA_TO_POSIX: dict[str, str] = {
@@ -530,6 +532,7 @@ class _SharedState:
     result_detail: str | None = None
     can_continue: bool = False
     error_message: str | None = None
+    key_recovery_seconds: int = 0
     pending_command: str | None = None
     pending_payload: dict[str, Any] = field(default_factory=dict)
 
@@ -660,6 +663,7 @@ def _poll_until_progress(
 ) -> tuple[str, dict[str, Any]]:
     deadline = time.monotonic() + POLL_TIMEOUT_SECONDS
     latest: dict[str, Any] = {}
+    recovery_started_at: float | None = None
     while True:
         if _SHUTDOWN_EVENT.is_set():
             return "timeout", latest
@@ -676,6 +680,22 @@ def _poll_until_progress(
             return "connected", latest
         if bool(latest.get("has_public_key")) and not baseline_has_public_key:
             return "public_key_ready", latest
+        if str(latest.get("public_key_state") or "") == "recovering" and not baseline_has_public_key:
+            # Keep the user waiting here: another pairing cycle is pointless until the key is ready.
+            now = time.monotonic()
+            if recovery_started_at is None:
+                recovery_started_at = now
+            elapsed = now - recovery_started_at
+            if elapsed >= KEY_RECOVERY_TIMEOUT_SECONDS:
+                return "timeout", latest
+            _set_phase("recovering_key", key_recovery_seconds=int(elapsed), status=_serialize_status(latest))
+            _log.info(
+                f"Calculating public key... please wait ({int(elapsed)}s elapsed). "
+                "Do not start the next pairing cycle yet."
+            )
+            with _state_cond:
+                _state_cond.wait(timeout=POLL_INTERVAL_SECONDS)
+            continue
         if int(latest.get("query_samples") or 0) > baseline_samples and not baseline_has_public_key:
             return "sample_increased", latest
         if time.monotonic() >= deadline:
@@ -826,12 +846,12 @@ def _run_onboarding_for_device(
             elif outcome == "public_key_ready":
                 _set_phase("done", status=status_serialized,
                            result_message="Public key is ready.",
-                           result_detail="Run one more pairing cycle to finish the connection.",
+                           result_detail="Send the final pairing cycle now to finish the connection.",
                            can_continue=True)
             elif outcome == "sample_increased":
                 _set_phase("done", status=status_serialized,
                            result_message="Sample count increased.",
-                           result_detail="Repeat the pairing cycle to collect more onboarding data.",
+                           result_detail="Send the next pairing cycle now to collect more onboarding data.",
                            can_continue=True)
             elif outcome == "conflict":
                 _set_phase("done", status=status_serialized,
@@ -992,6 +1012,7 @@ async def get_state(request: Request) -> JSONResponse:
             "result_detail": _state.result_detail,
             "can_continue": _state.can_continue,
             "error_message": _state.error_message,
+            "key_recovery_seconds": _state.key_recovery_seconds,
             "timezones": sorted(_IANA_TO_POSIX.keys()),
             "default_timezone": DEFAULT_TIMEZONE,
             "log": _log.snapshot(),

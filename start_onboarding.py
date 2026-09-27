@@ -44,6 +44,8 @@ DEFAULT_STACK_HTTPS_PORT = 555
 MAX_STACK_SERVER_LENGTH = 32
 POLL_INTERVAL_SECONDS = 5.0
 POLL_TIMEOUT_SECONDS = 300.0
+# Public-key recovery runs on the server and can outlast the normal traffic timeout.
+KEY_RECOVERY_TIMEOUT_SECONDS = 1200.0
 
 # Mapping from IANA timezone to POSIX TZ string for the vacuum firmware.
 _IANA_TO_POSIX: dict[str, str] = {
@@ -553,6 +555,11 @@ def choose_device(devices: list[dict[str, Any]], *, output: TextIO) -> dict[str,
         output.write("Please enter a valid number.\n")
 
 
+def _format_elapsed(seconds: float) -> str:
+    minutes, secs = divmod(int(seconds), 60)
+    return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
+
+
 def poll_session_until_progress(
     api: Any,
     *,
@@ -562,12 +569,14 @@ def poll_session_until_progress(
     output: TextIO,
     poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
     timeout_seconds: float = POLL_TIMEOUT_SECONDS,
+    recovery_timeout_seconds: float = KEY_RECOVERY_TIMEOUT_SECONDS,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> tuple[str, dict[str, Any]]:
     deadline = time.monotonic() + timeout_seconds
     latest = dict(baseline_status or {"session_id": session_id, "query_samples": baseline_samples})
     baseline_has_public_key = bool((baseline_status or {}).get("has_public_key"))
     waiting_for_reconnect = False
+    recovery_started_at: float | None = None
     while True:
         try:
             latest = api.get_session(session_id=session_id)
@@ -594,6 +603,20 @@ def poll_session_until_progress(
             return "connected", latest
         if bool(latest.get("has_public_key")) and not baseline_has_public_key:
             return "public_key_ready", latest
+        if str(latest.get("public_key_state") or "") == "recovering" and not baseline_has_public_key:
+            # Keep the user waiting here: another pairing cycle is pointless until the key is ready.
+            now = time.monotonic()
+            if recovery_started_at is None:
+                recovery_started_at = now
+            elapsed = now - recovery_started_at
+            if elapsed >= recovery_timeout_seconds:
+                return "timeout", latest
+            output.write(
+                f"Calculating public key... please wait ({_format_elapsed(elapsed)} elapsed). "
+                "Do not start the next pairing cycle yet.\n"
+            )
+            sleep_fn(poll_interval_seconds)
+            continue
         if int(latest.get("query_samples") or 0) > baseline_samples and not baseline_has_public_key:
             return "sample_increased", latest
         if time.monotonic() >= deadline:
@@ -700,10 +723,14 @@ def run_guided_onboarding(
                     output.write("The vacuum is connected to the local server.\n")
                     return 0
                 if result == "public_key_ready":
-                    output.write("The public key is ready. Do one final pairing cycle to finish the connection.\n")
+                    output.write(
+                        "The public key is ready. Send the final pairing cycle now to finish the connection.\n"
+                    )
                     continue
                 if result == "sample_increased":
-                    output.write("The sample count increased. Repeat the pairing cycle to collect more onboarding data.\n")
+                    output.write(
+                        "The sample count increased. Send the next pairing cycle now to collect more onboarding data.\n"
+                    )
                     continue
                 if result == "unsupported":
                     output.write("This vacuum is not supported by the current onboarding flow.\n")

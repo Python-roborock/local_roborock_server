@@ -607,3 +607,66 @@ def test_remote_onboarding_api_uses_custom_port_base_url() -> None:
         "https://api-roborock.example.com:8443/admin/api/login",
         "https://api-roborock.example.com:8443/admin/api/onboarding/devices",
     ]
+
+
+class _SequenceApi:
+    def __init__(self, statuses: list[dict]) -> None:
+        self._statuses = list(statuses)
+
+    def get_session(self, *, session_id: str) -> dict:
+        assert session_id == "sess-1"
+        return {"session_id": session_id, **self._statuses.pop(0)}
+
+
+def test_poll_session_waits_while_public_key_is_calculating() -> None:
+    api = _SequenceApi(
+        [
+            {"query_samples": 3, "has_public_key": False, "public_key_state": "recovering"},
+            {"query_samples": 3, "has_public_key": False, "public_key_state": "recovering"},
+            {"query_samples": 3, "has_public_key": True, "public_key_state": "ready"},
+        ]
+    )
+    output = StringIO()
+    sleeps: list[float] = []
+
+    result, status = poll_session_until_progress(
+        api,
+        session_id="sess-1",
+        baseline_samples=2,
+        baseline_status={"session_id": "sess-1", "query_samples": 2, "has_public_key": False},
+        output=output,
+        poll_interval_seconds=5.0,
+        timeout_seconds=20.0,
+        sleep_fn=sleeps.append,
+    )
+
+    # The sample count rose, but the user is not told to send another cycle until the key is ready.
+    assert result == "public_key_ready"
+    assert status["has_public_key"] is True
+    assert sleeps == [5.0, 5.0]
+    assert output.getvalue().count("Calculating public key... please wait") == 2
+    assert "Do not start the next pairing cycle yet." in output.getvalue()
+
+
+def test_poll_session_asks_for_another_cycle_when_key_calculation_fails() -> None:
+    api = _SequenceApi(
+        [
+            {"query_samples": 3, "has_public_key": False, "public_key_state": "recovering"},
+            {"query_samples": 3, "has_public_key": False, "public_key_state": "collecting"},
+        ]
+    )
+    sleeps: list[float] = []
+
+    result, _status = poll_session_until_progress(
+        api,
+        session_id="sess-1",
+        baseline_samples=2,
+        baseline_status={"session_id": "sess-1", "query_samples": 2, "has_public_key": False},
+        output=StringIO(),
+        poll_interval_seconds=5.0,
+        timeout_seconds=20.0,
+        sleep_fn=sleeps.append,
+    )
+
+    assert result == "sample_increased"
+    assert sleeps == [5.0]
