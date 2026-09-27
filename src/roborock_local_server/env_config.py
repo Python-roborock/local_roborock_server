@@ -3,9 +3,14 @@
 This lets Docker Compose (and similar) deployments boot straight from
 environment variables, without running the host-side `configure` wizard
 first. It intentionally covers only the deployment/infrastructure-shaped
-settings (network, broker, storage, tls) plus the admin credentials needed
-to produce a bootable config; it is not meant to grow a variable for every
-config.toml key.
+settings (network, broker, storage, tls); it is not meant to grow a
+variable for every config.toml key.
+
+The [admin] credentials (password, protocol login email/PIN) are optional
+as a group: set none of them and the container boots straight into the
+Setup Wizard (/admin) with network/broker/storage/tls already filled in
+from these env vars - only the credentials are still asked for. Set all
+of them for a fully headless boot with no browser step at all.
 """
 
 from __future__ import annotations
@@ -263,20 +268,21 @@ def render_config_toml_from_env(
             cert_file = _require_non_empty(_get(env, "CERT_FILE"), field_name="CERT_FILE")
             key_file = _require_non_empty(_get(env, "KEY_FILE"), field_name="KEY_FILE")
 
-    admin_password = _require_non_empty(_get(env, "ADMIN_PASSWORD"), field_name="ADMIN_PASSWORD")
-    admin_session_secret = (
-        _get(env, "ADMIN_SESSION_SECRET")
-        or _load_existing_admin_session_secret(config_path)
-        or secrets.token_urlsafe(32)
-    )
-    if len(admin_session_secret) < 24:
-        raise ValueError(f"{ENV_PREFIX}ADMIN_SESSION_SECRET must be at least 24 characters when set")
-    new_connections_enabled = _as_bool(_get(env, "NEW_CONNECTIONS_ENABLED"), default=True)
-    protocol_login_email = _require_email(_get(env, "PROTOCOL_LOGIN_EMAIL"), field_name="PROTOCOL_LOGIN_EMAIL")
-    protocol_login_pin = _require_pin(_get(env, "PROTOCOL_LOGIN_PIN"), field_name="PROTOCOL_LOGIN_PIN")
-
-    password_hash = hash_password(admin_password)
-    protocol_login_pin_hash = hash_password(protocol_login_pin)
+    # The [admin] fields are optional as a group: set none of them to leave
+    # credentials to the Setup Wizard (it fills in just [admin] on top of
+    # this network/broker/storage/tls config), or set all of them for a
+    # fully headless, no-browser-step boot.
+    raw_admin_password = _get(env, "ADMIN_PASSWORD")
+    raw_protocol_login_email = _get(env, "PROTOCOL_LOGIN_EMAIL")
+    raw_protocol_login_pin = _get(env, "PROTOCOL_LOGIN_PIN")
+    admin_fields_present = (bool(raw_admin_password), bool(raw_protocol_login_email), bool(raw_protocol_login_pin))
+    if any(admin_fields_present) and not all(admin_fields_present):
+        raise ValueError(
+            f"Set all of {ENV_PREFIX}ADMIN_PASSWORD, {ENV_PREFIX}PROTOCOL_LOGIN_EMAIL, and "
+            f"{ENV_PREFIX}PROTOCOL_LOGIN_PIN together, or none of them (and finish setup in the "
+            "Setup Wizard at /admin instead)."
+        )
+    include_admin = all(admin_fields_present)
 
     lines = [
         "[network]",
@@ -336,20 +342,34 @@ def render_config_toml_from_env(
             ]
         )
 
-    lines.extend(
-        [
-            "",
-            "[admin]",
-            f"password_hash = {_toml_string(password_hash)}",
-            f"session_secret = {_toml_string(admin_session_secret)}",
-            "session_ttl_seconds = 86400",
-            "protocol_auth_enabled = true",
-            f"new_connections_enabled = {_toml_bool(new_connections_enabled)}",
-            f"protocol_login_email = {_toml_string(protocol_login_email)}",
-            f"protocol_login_pin_hash = {_toml_string(protocol_login_pin_hash)}",
-            "",
-        ]
-    )
+    if include_admin:
+        admin_session_secret = (
+            _get(env, "ADMIN_SESSION_SECRET")
+            or _load_existing_admin_session_secret(config_path)
+            or secrets.token_urlsafe(32)
+        )
+        if len(admin_session_secret) < 24:
+            raise ValueError(f"{ENV_PREFIX}ADMIN_SESSION_SECRET must be at least 24 characters when set")
+        new_connections_enabled = _as_bool(_get(env, "NEW_CONNECTIONS_ENABLED"), default=True)
+        protocol_login_email = _require_email(raw_protocol_login_email, field_name="PROTOCOL_LOGIN_EMAIL")
+        protocol_login_pin = _require_pin(raw_protocol_login_pin, field_name="PROTOCOL_LOGIN_PIN")
+        password_hash = hash_password(raw_admin_password)
+        protocol_login_pin_hash = hash_password(protocol_login_pin)
+
+        lines.extend(
+            [
+                "",
+                "[admin]",
+                f"password_hash = {_toml_string(password_hash)}",
+                f"session_secret = {_toml_string(admin_session_secret)}",
+                "session_ttl_seconds = 86400",
+                "protocol_auth_enabled = true",
+                f"new_connections_enabled = {_toml_bool(new_connections_enabled)}",
+                f"protocol_login_email = {_toml_string(protocol_login_email)}",
+                f"protocol_login_pin_hash = {_toml_string(protocol_login_pin_hash)}",
+                "",
+            ]
+        )
     return "\n".join(lines), secrets_to_write
 
 

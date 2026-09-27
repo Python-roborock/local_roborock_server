@@ -190,13 +190,39 @@ def test_write_config_from_env_actalis_writes_eab(tmp_path: Path) -> None:
     assert hmac_path.read_text(encoding="utf-8") == "hmac-456"
 
 
-def test_write_config_from_env_requires_admin_password(tmp_path: Path) -> None:
+def test_write_config_from_env_rejects_partial_admin_fields(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     env = dict(_BASE_ENV)
     del env["ROBOROCK_SERVER_ADMIN_PASSWORD"]
 
-    with pytest.raises(ValueError, match="ADMIN_PASSWORD is required"):
+    with pytest.raises(ValueError, match="Set all of .*ADMIN_PASSWORD.*or none of them"):
         write_config_from_env(env, config_path=config_path)
+
+
+def test_write_config_from_env_omits_admin_section_when_all_admin_fields_absent(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    env = dict(_BASE_ENV)
+    del env["ROBOROCK_SERVER_ADMIN_PASSWORD"]
+    del env["ROBOROCK_SERVER_PROTOCOL_LOGIN_EMAIL"]
+    del env["ROBOROCK_SERVER_PROTOCOL_LOGIN_PIN"]
+
+    write_config_from_env(env, config_path=config_path)
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert "admin" not in parsed
+    # Network/broker/storage/tls are still fully written - the Setup Wizard
+    # only needs to fill in [admin] on top of this.
+    assert parsed["network"]["stack_fqdn"] == "api-roborock.example.com"
+    assert parsed["tls"]["mode"] == "provided"
+
+
+def test_write_config_from_env_writes_admin_section_when_all_admin_fields_present(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+
+    write_config_from_env(_BASE_ENV, config_path=config_path)
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["admin"]["protocol_login_email"] == "user@example.com"
 
 
 def test_write_config_from_env_requires_api_prefix(tmp_path: Path) -> None:
