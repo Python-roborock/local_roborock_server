@@ -9,7 +9,7 @@ from pathlib import Path
 import secrets
 import threading
 import time
-from typing import Any
+from typing import Any, Literal
 
 import aiohttp
 from roborock.web_api import RoborockApiClient
@@ -51,8 +51,9 @@ class PendingCloudSession:
     session_id: str
     email: str
     base_url: str
-    country: str
+    country: str | None
     country_code: int | None
+    login_method: Literal["v1", "v4"]
     device_identifier: str
     expires_at_ts: float
 
@@ -86,9 +87,17 @@ class CloudImportManager:
             )
             await api.request_code_v4()
             resolved_base_url = str(await api.base_url)
-            resolved_country = str(await api.country)
-            resolved_country_code_raw = str(await api.country_code)
-            resolved_country_code = int(resolved_country_code_raw) if resolved_country_code_raw.isdigit() else None
+            resolved_country = await api.country
+            raw_country_code = await api.country_code
+            if raw_country_code is None:
+                resolved_country_code = None
+            else:
+                raw_country_code_str = str(raw_country_code)
+                resolved_country_code = int(raw_country_code_str) if raw_country_code_str.isdigit() else None
+            # Mirrors request_code_v4()'s own v1 fallback rule, so submit_code() can replay it.
+            login_method: Literal["v1", "v4"] = (
+                "v1" if resolved_country_code is None or resolved_country is None else "v4"
+            )
             device_identifier = str(getattr(api, "_device_identifier", "") or "")
 
         session_id = secrets.token_urlsafe(18)
@@ -99,6 +108,7 @@ class CloudImportManager:
             base_url=resolved_base_url,
             country=resolved_country,
             country_code=resolved_country_code,
+            login_method=login_method,
             device_identifier=device_identifier,
             expires_at_ts=expires_at_ts,
         )
@@ -139,11 +149,14 @@ class CloudImportManager:
             )
             if session_data.device_identifier:
                 setattr(api, "_device_identifier", session_data.device_identifier)
-            user_data = await api.code_login_v4(
-                normalized_code,
-                country=session_data.country or None,
-                country_code=session_data.country_code,
-            )
+            if session_data.login_method == "v1":
+                user_data = await api.code_login(normalized_code)
+            else:
+                user_data = await api.code_login_v4(
+                    normalized_code,
+                    country=session_data.country,
+                    country_code=session_data.country_code,
+                )
             home_data = await _fetch_cloud_home_data_with_api(api, user_data)
             web_cache = await _fetch_additional_web_cache(api, user_data, home_data)
 
