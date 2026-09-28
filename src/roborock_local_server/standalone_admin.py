@@ -88,18 +88,18 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
         </nav>
 
         <div class="container">
-          <h4 class="header orange-text">Vacuums</h4>
+          <h4 class="header rls-heading">Vacuums</h4>
           <div id="vacuumSummary" style="display:grid;gap:12px">Loading vacuums...</div>
         </div>
 
         <div class="container">
-          <h4 id="supportTitle" class="header orange-text"></h4>
+          <h4 id="supportTitle" class="header rls-heading"></h4>
           <p id="supportText" class="rls-muted"></p>
           <div id="supportLinks" style="display:flex;gap:12px;flex-wrap:wrap"></div>
         </div>
 
         <div class="container">
-          <h4 class="header orange-text">Cloud Import</h4>
+          <h4 class="header rls-heading">Cloud Import</h4>
           <div class="row" style="margin-bottom:0">
             <div class="input-field col s12 m6">
               <input id="email" type="email">
@@ -122,7 +122,7 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
         </div>
 
         <div class="container">
-          <h4 class="header orange-text">New Connections</h4>
+          <h4 class="header rls-heading">New Connections</h4>
           <p>
             <label><input id="newConnectionsEnabled" type="checkbox" /><span>Allow new app logins, onboarding, and first-time vacuum connections</span></label>
           </p>
@@ -138,7 +138,7 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
                 <button id="copySessionSecret" class="btn-flat waves-effect">Copy<i class="material-icons right">content_copy</i></button>
               </div>
             </div>
-            <div id="syncSecretMeta" class="rls-muted">Use this with <code>mitm_redirect.py --sync-secret ...</code>.</div>
+            <div id="syncSecretMeta" class="rls-muted">Use this with <code>mitm_redirect.py --local-api YOUR_SERVER_HOST --sync-secret &lt;secret above&gt; --activity-sync</code>.</div>
           </div>
           <div id="pendingRecovery" class="rls-muted" style="margin-top:10px"></div>
           <div style="margin-top:16px;font-weight:600">Protocol Sessions</div>
@@ -146,17 +146,17 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
         </div>
 
         <div class="container">
-          <h4 class="header orange-text">Activity</h4>
+          <h4 class="header rls-heading">Activity</h4>
           <div id="activityMeta" class="rls-muted" style="margin-bottom:10px"></div>
           <div id="activityList" class="rls-activity-list"></div>
         </div>
 
         <div class="container">
-          <h4 class="header orange-text">Health</h4>
+          <h4 class="header rls-heading">Health</h4>
           <pre id="health" class="rls-pre"></pre>
         </div>
         <div class="container">
-          <h4 class="header orange-text">Vacuums (raw)</h4>
+          <h4 class="header rls-heading">Vacuums (raw)</h4>
           <pre id="vacuums" class="rls-pre"></pre>
         </div>
         {SCRIPT_ASSETS}
@@ -247,7 +247,7 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           const sessionSecret = String(auth.admin_session_secret || "");
           document.getElementById("adminSessionSecret").value = sessionSecret;
           document.getElementById("syncSecretMeta").textContent = sessionSecret
-            ? "Use this with mitm_redirect.py --sync-secret ..."
+            ? `Use this with mitm_redirect.py --local-api YOUR_SERVER_HOST --sync-secret ${{sessionSecret}} --activity-sync`
             : "No protocol sync secret is configured.";
 
           const pendingContainer = document.getElementById("pendingRecovery");
