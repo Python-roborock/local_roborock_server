@@ -4,6 +4,8 @@ Reverse proxy support is mainly useful when public or LAN clients reach the stac
 
 Whatever endpoint a vacuum or the Roborock app connects to **must present a valid, trusted TLS certificate** — vacuums refuse to connect otherwise. That endpoint can be the server itself or the proxy in front of it; the rest of this page is about choosing which one terminates TLS.
 
+I do not use a reverse proxy, I have consolodated this information from other users who do, if you are knowledgeable about reverse proxies and notice anything here could be clearer or is incorrect, please send a PR!
+
 ## Advertised Ports
 
 Use these when the proxy maps public ports to different backend listener ports. The server binds the `*_port` listeners but advertises the `advertised_*` ports to the Roborock app, vacuums, and Home Assistant.
@@ -84,6 +86,37 @@ api-roborock.example.com {
         proxy {
             upstream roborock-local-server:8881
         }
+    }
+}
+```
+
+Example Nginx config (HTTPS via the standard `http` block, MQTT via the top-level `stream` block):
+
+```nginx
+# Top-level block in /etc/nginx/nginx.conf (OUTSIDE the http {} block):
+stream {
+    server {
+        listen 8883 ssl;
+        proxy_pass roborock-local-server:8881;
+
+        ssl_certificate /path/to/fullchain.pem;
+        ssl_certificate_key /path/to/privkey.pem;
+    }
+}
+
+# Inside your http {} block:
+server {
+    listen 443 ssl;
+    server_name api-roborock.example.com;
+
+    ssl_certificate /path/to/fullchain.pem;
+    ssl_certificate_key /path/to/privkey.pem;
+
+    location / {
+        proxy_pass https://roborock-local-server:555; # Use http:// if listener_mode is external_tls
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```

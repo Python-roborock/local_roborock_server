@@ -175,6 +175,7 @@ Everything in "What To Expect" above still applies. Some vacuums need 2-4 cycles
 - **"No known vacuums are available for onboarding."** Go back and finish the cloud import/fetch-data step first so the server has the vacuum inventory.
 - **"Could not reach the server after leaving the vacuum hotspot."** Your machine did not rejoin your normal Wi-Fi within two minutes. Check your network and click Retry.
 - **The UI is stuck on "Polling...".** Give it the full five-minute timeout. Some vacuums are especially slow on the final cycle after the public key is already ready. If nothing changes, check the log pane for errors, then click Retry or Pick another vacuum.
+- **Server stalls or hangs during key recovery without errors.** Check your container host's resource usage. If running with tight CPU/memory limits, cryptographic recovery can max out resources and hang. Ensure the container has at least 1 CPU core and 1 GB RAM allocated. On lower resource machines, be prepared to wait longer for the public key to be determined.
 
 ---
  

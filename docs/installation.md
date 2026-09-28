@@ -14,6 +14,7 @@ After the stack is running, continue with [Onboarding](onboarding.md) to pair a 
 - A second machine for onboarding later. It needs Python 3.11+ and `uv` if you run the onboarding scripts there.
 - A network that can host the stack's HTTPS and MQTT TLS ports internally. The defaults are `555` and `8881`.
 - A Cloudflare API token with DNS edit access for the zone if you want Cloudflare DNS-01 auto-renew. See [Cloudflare setup](cloudflare_setup.md).
+- Sufficient container resources: Allocate at least 1 CPU core and 1 GB of RAM. The server performs cryptographic operations during onboarding, and resource starvation can cause the handshake to silently stall or time out. You can reduce resources after you complete onboarding. If you do not allocate enough resources, just wait a little bit longer when it says "calculating public key".
 
 ## Credential Names
 

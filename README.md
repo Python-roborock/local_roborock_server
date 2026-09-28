@@ -1,44 +1,52 @@
 # Roborock Local Server
 
 [![GHCR][badge-ghcr]][link-ghcr]
+[![Docs](https://img.shields.io/badge/docs-read%20now-success)](https://python-roborock.github.io/local_roborock_server/)
+[![GitHub stars](https://img.shields.io/github/stars/Python-roborock/local_roborock_server?style=social)](https://github.com/Python-roborock/local_roborock_server/stargazers)
 
-The best way to support this project is the next time you are buying a Roborock device come back here and use one of my affiliate links where I will receive a commission.
+Run Roborock's cloud backend on your own local network. Your vacuum keeps live maps and local controls on an isolated LAN without internet access, requiring no hardware modifications or firmware rooting.
 
-[![Amazon Affiliate][badge-amazon]][link-amazon]
-[![Roborock Affiliate][badge-roborock-affiliate]][link-roborock-affiliate]
+---
 
-You can also support via BMAC or paypal:
+## Why this exists
 
-[![Buy Me a Coffee][badge-bmac]][link-bmac]
-[![PayPal][badge-paypal]][link-paypal]
+While Home Assistant communicates with Roborock vacuums over a local protocol, two constraints previously prevented running them completely offline:
 
-Roborock Local Server is a private Roborock HTTPS and MQTT stack you run on your own system without any rooting needed!
+1. **Cloud-locked maps:** Roborock routes all map data strictly through their cloud servers (despite the vacuum storing the map locally).
+2. **Cloud health checks:** If a vacuum cannot reach Roborock's servers, it repeatedly restarts its network interface, dropping local communication.
 
-This service is meant to stay private. Point your own DNS at your server's LAN IP. If you want this to work away from your home network, the server does handle auth and lets you disable new devices from connecting. BUT there is ALWAYS a risk when you make a self-hosted service publicly accessible, so please only do it if you know what you are doing. If your workflow is fine with local-only access, that will always be better. If you find any vulnerabilities, please let me know.
+Upstream cloud authentication changes are also the most frequent point of failure for third-party integrations.
 
-## Container Image
+Roborock Local Server provides an on-premises HTTPS and MQTT stack. By redirecting DNS and completing an initial onboarding handshake, the vacuum connects to your local server instead of the official cloud.
 
-Published image:
+---
 
-```sh
-docker pull ghcr.io/python-roborock/local_roborock_server:latest
-```
+## Features
 
-## Contributing
+- **Local map streaming:** Live maps and room cleanups work without cloud access.
+- **No hardware modifications:** No disassembly, soldering, or bootloader unlocking required.
+- **Greenfield onboarding:** Supports new vacuums out of the box without prior cloud registration.
+- **Reversible:** Resetting the vacuum's Wi-Fi returns it to factory pairing mode.
+- **Frontend options:** Works with Home Assistant (Add-on available), [LocalRock](https://github.com/DonSidro/LocalRock) (open-source mobile app), or the official app (via Android APK patch or iOS MITM profile).
 
-If you would like to contribute there are a few ways that would be great!
+---
 
-1. Code is always welcome that you have fully tested.
-2. Video walkthroughs of how to actually set this up would be great.
-3. Documentation. I hate documentation and it's something I find myself often pushing off to AI so that I can focus more on the harder problems. But I find that human written documentation always 'feels' better.
+## Compatibility
+
+- **Supported:** Most Roborock vacuums, including modern v2 protocol models (based on firmware research by Dennis Giese).
+- **Currently unsupported:** The entry-level Q series (such as the Q7; not to be confused with QRevo) due to differences in certificate validation.
+- See the [Tested Vacuums List](https://python-roborock.github.io/local_roborock_server/tested_vacuums/) for specific model reports.
+
+---
 
 ## Requirements
 
-- a domain you control
-- a place to run the stack on your LAN
-- either Docker Compose or a Home Assistant installation that supports add-ons
-- a second machine for onboarding later
-- a Cloudflare API token with DNS edit access for the zone if you want automatic certificate renewal
+- A domain you control with local DNS rewriting (Pi-hole, AdGuard Home, or router DNS).
+- A place to run the stack on your LAN (Docker Compose or Home Assistant installation that supports add-ons).
+- A valid SSL certificate for your domain (automated via Cloudflare DNS-01 or generated manually).
+- A secondary computer with Wi-Fi for initial onboarding.
+
+---
 
 ## Getting Started
 
@@ -53,25 +61,64 @@ Start here if this is your first time setting up the stack:
 Before choosing a certificate path, check [Tested vacuums](docs/tested_vacuums.md). Different models do not all accept the same certificate chains. For most users, start with ZeroSSL. Use Actalis mainly for older vacuums or models that are already known to trust that chain more reliably.
 
 Additional docs:
-
 - [Docs index](docs/index.md)
+- [Technical Writeup: How Reverse Engineering Works](https://python-roborock.github.io/local_roborock_server/technical_writeup/)
 - [Known limitations](docs/known_limitations.md)
 - [Tested vacuums](docs/tested_vacuums.md)
-- [Home Assistant](docs/home_assistant.md) for the add-on install path and Home Assistant integration rewiring
+- [Home Assistant](docs/home_assistant.md) for the add-on install path and integration setup
 - [Mobile App Options](docs/roborock_app.md)
-- [Updating](docs/updating.md)
 - [Custom MQTT](docs/custom_mqtt.md)
 - [Custom certificate management](docs/custom_cert_management.md)
 
+---
+
+## Container Image
+
+Published image:
+
+```sh
+docker pull ghcr.io/python-roborock/local_roborock_server:latest
+```
+
+---
+
+## Contributing
+
+If you would like to contribute, help in these areas is especially welcome:
+
+1. Code is always welcome that you have fully tested.
+2. Video walkthroughs and setup tutorials.
+3. Documentation improvements and network configuration guides.
+
+---
+
 ## Acknowledgements
 
-- [Dennis Giese (@dgiese)](https://dontvacuum.me/) whose research and papers inspired much of the work on reverse-engineering Roborock vacuums
+- [Dennis Giese (@dgiese)](https://dontvacuum.me/) whose research and papers inspired much of the work on reverse-engineering Roborock vacuums.
 - [Sören Beye (@Hypfer)](https://github.com/Hypfer) creator of [Valetudo](https://valetudo.cloud/), whose work on cloud-free vacuum control has been foundational for this whole space.
 - [@rovo89](https://github.com/rovo89) who has been VERY helpful through this process, giving lots of tips and advice.
 - [python-miio](https://github.com/rytilahti/python-miio) - Their repo was the basis for a lot of python-roborock's logic.
 - [@humbertogontijo](https://github.com/humbertogontijo) who first created the python-roborock repo.
 - [@allenporter](https://github.com/allenporter) who has taken up a significant role in the maintenance of the python-roborock library as well as the Roborock integration. The improvements Allen has made to the repository cannot be overstated.
 - [@rccoleman](https://github.com/rccoleman) who was the first beta tester and helped work out some kinks!
+
+---
+
+## Support the Project
+
+If this repository worked for you, consider giving it a star on GitHub to help others find it!
+
+If you are purchasing a Roborock device and want to support continued development, consider using an affiliate link:
+
+[![Amazon Affiliate][badge-amazon]][link-amazon]
+[![Roborock Affiliate][badge-roborock-affiliate]][link-roborock-affiliate]
+
+Direct donations:
+
+[![Buy Me a Coffee][badge-bmac]][link-bmac]
+[![PayPal][badge-paypal]][link-paypal]
+
+---
 
 ## Disclaimer
 
@@ -80,8 +127,6 @@ This software is provided "as is", without warranty of any kind. Running this st
 ## License
 
 This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
-
-If this repository worked for you, consider giving it a star to help other find it!
 
 [link-bmac]: https://buymeacoffee.com/lashl
 [badge-bmac]: https://img.shields.io/badge/Buy%20Me%20a%20Coffee-donate-yellow?style=for-the-badge&logo=buymeacoffee&logoColor=black
