@@ -33,9 +33,15 @@ ENV_PREFIX = "ROBOROCK_SERVER_"
 _HOST_RE = re.compile(r"^[a-z0-9.-]+$")
 
 DEFAULT_CONFIG_PATH = Path("/data/config.toml")
-DEFAULT_CLOUDFLARE_TOKEN_PATH = Path("/run/secrets/cloudflare_token")
-DEFAULT_ACME_EAB_KID_PATH = Path("/run/secrets/acme_eab_kid")
-DEFAULT_ACME_EAB_HMAC_KEY_PATH = Path("/run/secrets/acme_eab_hmac_key")
+# Under /data (the volume this module's own docs tell you to keep mounted),
+# not /run/secrets - these are written by this module itself at container
+# boot, and /run/secrets has no persistence unless a deployer separately
+# bind-mounts a host directory there, which this env-var-only flow doesn't
+# ask for. The /run/secrets convention only makes sense for the host-run CLI
+# configure wizard, which relies on exactly that separate bind mount.
+DEFAULT_CLOUDFLARE_TOKEN_PATH = Path("/data/secrets/cloudflare_token")
+DEFAULT_ACME_EAB_KID_PATH = Path("/data/secrets/acme_eab_kid")
+DEFAULT_ACME_EAB_HMAC_KEY_PATH = Path("/data/secrets/acme_eab_hmac_key")
 
 
 def _toml_string(value: str) -> str:

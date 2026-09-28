@@ -176,7 +176,7 @@ The admin credentials are optional as a group:
 
 Commonly-set optional variables: `ROBOROCK_SERVER_HTTPS_PORT`, `ROBOROCK_SERVER_MQTT_TLS_PORT`, `ROBOROCK_SERVER_ADVERTISED_HTTPS_PORT`, `ROBOROCK_SERVER_ADVERTISED_MQTT_TLS_PORT`, `ROBOROCK_SERVER_LISTENER_MODE`, `ROBOROCK_SERVER_BROKER_MODE` + `ROBOROCK_SERVER_BROKER_HOST`. See `env_config.py` for the full list.
 
-**Important:** if you go this route, remove (or comment out) the `./config.toml:/app/config.toml:ro` line from `compose.yaml`. Docker will otherwise bind-mount a nonexistent host path as an empty file, which the container treats as an existing (but invalid) config and never falls through to the env vars. Keep the `./data:/data` and `./secrets:/run/secrets:ro` mounts.
+**Important:** if you go this route, remove (or comment out) both the `./config.toml:/app/config.toml:ro` and `./secrets:/run/secrets:ro` lines from `compose.yaml`. Docker will otherwise bind-mount a nonexistent host path as an empty file, which the container treats as an existing (but invalid) config and never falls through to the env vars. Keep the `./data:/data` mount - a plaintext `ROBOROCK_SERVER_CLOUDFLARE_TOKEN` (or EAB credential) is written to `/data/secrets/` at boot, no separate secrets mount needed. Use `ROBOROCK_SERVER_CLOUDFLARE_TOKEN_FILE` instead if you'd rather point at a secret file you manage yourself.
 
 Fully headless (no browser step at all):
 
