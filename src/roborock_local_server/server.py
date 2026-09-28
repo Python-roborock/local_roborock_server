@@ -1474,7 +1474,10 @@ class ReleaseSupervisor:
             # /nc just handed the vacuum its localKey; persist now instead of relying on an
             # onboarding client still polling the session (it may have timed out or exited).
             self.persist_active_onboarding_device()
-        append_jsonl(self.context.http_jsonl, entry)
+        if route_name != "catchall":
+            # Truly unmatched requests (favicon probes, health checks, random scans) aren't
+            # meaningful onboarding/protocol activity - keep them out of the Activity feed.
+            append_jsonl(self.context.http_jsonl, entry)
         if key_cache is not None and key_capture_did:
             try:
                 key_cache.maybe_recover_async(key_capture_did)
