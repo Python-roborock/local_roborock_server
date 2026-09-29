@@ -5,12 +5,15 @@ from io import StringIO
 import pytest
 
 from start_onboarding import (
+    _IANA_TO_COUNTRY,
     ApiReachabilityError,
     GuidedOnboardingConfig,
     RemoteOnboardingApi,
     choose_device,
+    country_from_iana,
     normalize_api_base_url,
     poll_session_until_progress,
+    posix_tz_from_iana,
     run_guided_onboarding,
     sanitize_stack_server,
 )
@@ -670,3 +673,50 @@ def test_poll_session_asks_for_another_cycle_when_key_calculation_fails() -> Non
 
     assert result == "sample_increased"
     assert sleeps == [5.0]
+
+
+@pytest.mark.parametrize(
+    "tz",
+    [
+        "Europe/London",
+        "Europe/Berlin",
+        "Europe/Paris",
+        "Europe/Amsterdam",
+        "Europe/Vienna",
+        "Europe/Rome",
+        "Europe/Madrid",
+        "Europe/Warsaw",
+        "Europe/Stockholm",
+        "Europe/Zurich",
+        "Europe/Brussels",
+    ],
+)
+def test_country_from_iana_european_timezones_map_to_eu(tz: str) -> None:
+    assert _IANA_TO_COUNTRY[tz] == "eu"
+    assert country_from_iana(tz) == "eu"
+    assert country_from_iana(f"  {tz}  ") == "eu"
+
+
+def test_country_from_iana_russian_timezones_map_to_ru() -> None:
+    assert _IANA_TO_COUNTRY["Europe/Moscow"] == "ru"
+    assert country_from_iana("Europe/Moscow") == "ru"
+    assert country_from_iana("Europe/Kaliningrad") == "ru"
+
+
+def test_country_from_iana_global_regions() -> None:
+    assert country_from_iana("America/New_York") == "us"
+    assert country_from_iana("Asia/Shanghai") == "cn"
+
+
+def test_country_from_iana_unknown_and_fallback() -> None:
+    # Unmapped European timezone falls back to 'eu'
+    assert country_from_iana("Europe/Helsinki") == "eu"
+    # Unknown timezone returns empty string
+    assert country_from_iana("Unknown/Region") == ""
+    assert country_from_iana("") == ""
+
+
+def test_posix_tz_from_iana_supports_extended_european_timezones() -> None:
+    assert posix_tz_from_iana("Europe/Vienna") == "CET-1CEST,M3.5.0,M10.5.0/3"
+    assert posix_tz_from_iana("Europe/Rome") == "CET-1CEST,M3.5.0,M10.5.0/3"
+    assert posix_tz_from_iana("Europe/Moscow") == "MSK-3"

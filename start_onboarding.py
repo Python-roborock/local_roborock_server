@@ -64,6 +64,14 @@ _IANA_TO_POSIX: dict[str, str] = {
     "Europe/Berlin": "CET-1CEST,M3.5.0,M10.5.0/3",
     "Europe/Paris": "CET-1CEST,M3.5.0,M10.5.0/3",
     "Europe/Amsterdam": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "Europe/Vienna": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "Europe/Rome": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "Europe/Madrid": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "Europe/Warsaw": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "Europe/Stockholm": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "Europe/Zurich": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "Europe/Brussels": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "Europe/Moscow": "MSK-3",
     "Asia/Shanghai": "CST-8",
     "Asia/Tokyo": "JST-9",
     "Asia/Kolkata": "IST-5:30",
@@ -92,10 +100,25 @@ _IANA_TO_COUNTRY: dict[str, str] = {
     "America/Vancouver": "us",
     "America/Winnipeg": "us",
     "America/Edmonton": "us",
-    "Europe/London": "gb",
-    "Europe/Berlin": "de",
-    "Europe/Paris": "fr",
-    "Europe/Amsterdam": "nl",
+    "Europe/London": "eu",
+    "Europe/Berlin": "eu",
+    "Europe/Paris": "eu",
+    "Europe/Amsterdam": "eu",
+    "Europe/Vienna": "eu",
+    "Europe/Rome": "eu",
+    "Europe/Madrid": "eu",
+    "Europe/Warsaw": "eu",
+    "Europe/Stockholm": "eu",
+    "Europe/Zurich": "eu",
+    "Europe/Brussels": "eu",
+    "Europe/Moscow": "ru",
+    "Europe/Kaliningrad": "ru",
+    "Europe/Samara": "ru",
+    "Europe/Volgograd": "ru",
+    "Europe/Kirov": "ru",
+    "Europe/Astrakhan": "ru",
+    "Europe/Saratov": "ru",
+    "Europe/Ulyanovsk": "ru",
     "Asia/Shanghai": "cn",
     "Asia/Tokyo": "jp",
     "Asia/Kolkata": "in",
@@ -107,7 +130,14 @@ _IANA_TO_COUNTRY: dict[str, str] = {
 
 def country_from_iana(iana: str) -> str:
     """Return a country domain for the given IANA timezone, or empty string if unknown."""
-    return _IANA_TO_COUNTRY.get(iana.strip(), "")
+    cleaned = (iana or "").strip()
+    if not cleaned:
+        return ""
+    if cleaned in _IANA_TO_COUNTRY:
+        return _IANA_TO_COUNTRY[cleaned]
+    if cleaned.startswith("Europe/"):
+        return "eu"
+    return ""
 
 
 def crc32(data: bytes) -> int:

@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from start_onboarding_gui import _poll_until_progress, normalize_api_base_url, sanitize_stack_server
+from start_onboarding_gui import (
+    _IANA_TO_COUNTRY,
+    _poll_until_progress,
+    country_from_iana,
+    normalize_api_base_url,
+    posix_tz_from_iana,
+    sanitize_stack_server,
+)
 
 
 @pytest.mark.parametrize(
@@ -177,3 +184,42 @@ def test_gui_poll_shows_key_calculation_until_public_key_ready(monkeypatch: pyte
     assert waits == [5.0]
     assert [phase for phase, _fields in phases] == ["recovering_key"]
     assert phases[0][1]["key_recovery_seconds"] == 0
+
+
+@pytest.mark.parametrize(
+    "tz",
+    [
+        "Europe/London",
+        "Europe/Berlin",
+        "Europe/Paris",
+        "Europe/Amsterdam",
+        "Europe/Vienna",
+        "Europe/Rome",
+        "Europe/Madrid",
+        "Europe/Warsaw",
+        "Europe/Stockholm",
+        "Europe/Zurich",
+        "Europe/Brussels",
+    ],
+)
+def test_gui_country_from_iana_european_timezones_map_to_eu(tz: str) -> None:
+    assert _IANA_TO_COUNTRY[tz] == "eu"
+    assert country_from_iana(tz) == "eu"
+    assert country_from_iana(f"  {tz}  ") == "eu"
+
+
+def test_gui_country_from_iana_russian_timezones_map_to_ru() -> None:
+    assert _IANA_TO_COUNTRY["Europe/Moscow"] == "ru"
+    assert country_from_iana("Europe/Moscow") == "ru"
+    assert country_from_iana("Europe/Kaliningrad") == "ru"
+
+
+def test_gui_country_from_iana_unknown_or_fallback() -> None:
+    assert country_from_iana("Europe/Dublin") == "eu"
+    assert country_from_iana("Unknown/Region") == ""
+    assert country_from_iana("") == ""
+
+
+def test_gui_posix_tz_from_iana_supports_extended_timezones() -> None:
+    assert posix_tz_from_iana("Europe/Vienna") == "CET-1CEST,M3.5.0,M10.5.0/3"
+    assert posix_tz_from_iana("Europe/Moscow") == "MSK-3"

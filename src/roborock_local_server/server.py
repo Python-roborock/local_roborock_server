@@ -461,6 +461,7 @@ class ReleaseSupervisor:
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self._init_zone_ranges_store(),
+            timezone=self.config.network.timezone or None,
         )
         self.endpoint_rules = default_endpoint_rules()
         self.app = self._create_app()
@@ -2038,6 +2039,7 @@ def repair_runtime_identities(*, config_file: Path, links: list[str]) -> int:
             bootstrap_encryption_enabled=False,
             runtime_state=None,
             runtime_credentials=runtime_credentials,
+            timezone=config.network.timezone or None,
         ),
         inventory,
     )

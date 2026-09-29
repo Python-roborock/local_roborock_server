@@ -26,6 +26,7 @@ class NetworkConfig:
     mqtt_password: str
     mqtt_client_id: str
     trusted_proxies: tuple[str, ...] = ("127.0.0.1", "::1")
+    timezone: str = ""
 
 
 @dataclass(frozen=True)
@@ -186,6 +187,19 @@ def _as_trusted_proxies(value: object, field_name: str, default: tuple[str, ...]
     return tuple(entries)
 
 
+def _as_timezone(value: object, field_name: str) -> str:
+    if value is None:
+        return ""
+    tz = str(value).strip()
+    if not tz:
+        return ""
+    if "/" not in tz and tz not in ("UTC", "GMT"):
+        raise ValueError(
+            f"{field_name} must be a valid timezone name such as 'Europe/Berlin' or 'America/New_York'"
+        )
+    return tz
+
+
 def _as_bool(value: object, default: bool) -> bool:
     if value is None:
         return default
@@ -256,6 +270,10 @@ def load_config(path: str | Path) -> AppConfig:
                 network.get("trusted_proxies"),
                 "network.trusted_proxies",
                 NetworkConfig.trusted_proxies,
+            ),
+            timezone=_as_timezone(
+                network.get("timezone", "") or parsed.get("timezone", ""),
+                "network.timezone",
             ),
         ),
         broker=BrokerConfig(
