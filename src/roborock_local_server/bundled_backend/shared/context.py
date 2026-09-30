@@ -70,6 +70,7 @@ class ServerContext:
     runtime_state: RuntimeState | None = None
     runtime_credentials: RuntimeCredentialsStore | None = None
     zone_ranges_store: ZoneRangesStore | None = None
+    timezone: str | None = None
     _bootstrap_encryptor: BootstrapEncryptor | None = field(init=False, default=None, repr=False)
     _device_key_cache: DeviceKeyCache | None = field(init=False, default=None, repr=False)
 
