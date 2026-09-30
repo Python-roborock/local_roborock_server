@@ -67,6 +67,8 @@ class MqttTopicBridge:
         *,
         host: str,
         port: int,
+        username: str = "",
+        password: str = "",
         logger: logging.Logger,
         fixed_device_did: str = "",
         fixed_device_duid: str = "",
@@ -76,6 +78,8 @@ class MqttTopicBridge:
     ) -> None:
         self._host = host
         self._port = port
+        self._username = username
+        self._password = password
         self._logger = logger
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -440,10 +444,18 @@ class MqttTopicBridge:
             )
 
     async def _run(self) -> None:
+        auth: dict[str, str] = {}
+        if self._username:
+            auth["username"] = self._username
+            auth["password"] = self._password
+            self._logger.info(
+                "MQTT topic bridge auth attempt with username:password (%s:REDACTED)",
+                self._username
+            )
         retry_delay_seconds = 2.0
         while not self._stop_event.is_set():
             try:
-                async with aiomqtt.Client(hostname=self._host, port=self._port) as client:
+                async with aiomqtt.Client(hostname=self._host, port=self._port, **auth) as client:
                     await client.subscribe("rr/m/i/#")
                     await client.subscribe("rr/d/i/#")
                     self._logger.info(
