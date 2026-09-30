@@ -168,6 +168,22 @@ class ServerContext:
     def device_key_cache(self) -> DeviceKeyCache | None:
         return self._device_key_cache
 
+    def device_public_key(self, did: str) -> Any | None:
+        """Return the device's recovered RSA public key, or None if unknown.
+
+        This is the same key used to encrypt the /region bootstrap response, so a
+        device that onboarded through this server always has one available.
+        """
+        if not did:
+            return None
+        if self._device_key_cache is not None:
+            pub = self._device_key_cache.get_pubkey(did)
+            if pub is not None:
+                return pub
+        if self._bootstrap_encryptor is not None:
+            return self._bootstrap_encryptor.get_pubkey(did)
+        return None
+
     def resolve_device_localkey(
         self,
         *,

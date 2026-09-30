@@ -82,6 +82,9 @@ class BootstrapEncryptor:
     def known_dids(self) -> list[str]:
         return sorted(self._pubkeys.keys())
 
+    def get_pubkey(self, did: str) -> Any | None:
+        return self._pubkeys.get(did)
+
     def encrypt_for_did(self, did: str, payload: dict[str, Any] | list[Any] | str) -> str | None:
         pub = self._pubkeys.get(did)
         if pub is None:
