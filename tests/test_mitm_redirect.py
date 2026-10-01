@@ -210,6 +210,19 @@ def test_request_routes_to_custom_api_port(monkeypatch) -> None:
     assert flow.request.headers["Host"] == "api-roborock.example.com:8443"
 
 
+def test_request_routes_v4_home_detail_to_local_api(monkeypatch) -> None:
+    mitm_redirect = _load_mitm_redirect(monkeypatch)
+    mitm_redirect.LOCAL_API = "api-roborock.example.com:555"
+    mitm_redirect.LOCAL_API_HOST = "api-roborock.example.com"
+    mitm_redirect.LOCAL_API_PORT = 555
+    flow = _FakeFlow("api-us.roborock.com", "/v4/user/homes/123456")
+
+    mitm_redirect.request(flow)
+
+    assert flow.request.host == "api-roborock.example.com"
+    assert flow.request.port == 555
+
+
 def test_parse_endpoint_defaults_to_new_stack_ports(monkeypatch) -> None:
     mitm_redirect = _load_mitm_redirect(monkeypatch)
 
