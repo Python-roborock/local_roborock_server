@@ -148,6 +148,7 @@ LOCAL_ROUTE_PREFIXES = (
     "/user/",
     "/v2/user/",
     "/v3/user/",
+    "/v4/user/",
 )
 
 PROTOCOL_AUTH_SYNC_PATH = "/internal/protocol/user-data"
