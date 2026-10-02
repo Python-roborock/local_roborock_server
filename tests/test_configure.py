@@ -189,3 +189,43 @@ def test_collect_configure_answers_hides_actalis_hmac_prompt(monkeypatch: pytest
     assert answers.acme_eab_kid == "kid-123"
     assert answers.acme_eab_hmac_key == "hmac-456"
     assert "Actalis EAB HMAC key (input hidden): " in prompts
+
+
+def test_secret_prompt_retries_after_undecodable_input(monkeypatch, capsys) -> None:
+    attempts = iter(
+        [
+            UnicodeDecodeError("utf-8", b"\xe2\x80", 0, 2, "unexpected end of data"),
+            "cloudflare-token",
+        ]
+    )
+
+    def fake_getpass(prompt: str) -> str:
+        value = next(attempts)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(configure_module, "getpass", fake_getpass)
+
+    assert configure_module._prompt_non_empty_secret("Token: ") == "cloudflare-token"
+    assert "Please retype it." in capsys.readouterr().out
+
+
+def test_line_prompt_retries_after_undecodable_input(monkeypatch, capsys) -> None:
+    attempts = iter(
+        [
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+            "8443",
+        ]
+    )
+
+    def fake_input(prompt: str) -> str:
+        value = next(attempts)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr("builtins.input", fake_input)
+
+    assert configure_module._prompt_port("HTTPS port", default=443) == 8443
+    assert "Please retype it." in capsys.readouterr().out

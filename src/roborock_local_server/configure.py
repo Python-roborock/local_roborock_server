@@ -97,9 +97,31 @@ def _normalize_hostname(raw_value: str, *, field_name: str, require_api_prefix: 
     return normalized
 
 
+_UNDECODABLE_INPUT_MESSAGE = (
+    "Could not read that input as UTF-8 (likely a stray character from a paste). "
+    "Please retype it."
+)
+
+
+def _read_line(prompt: str) -> str:
+    while True:
+        try:
+            return input(prompt).strip()
+        except UnicodeDecodeError:
+            print(_UNDECODABLE_INPUT_MESSAGE)
+
+
+def _read_secret(prompt: str) -> str:
+    while True:
+        try:
+            return getpass(prompt).strip()
+        except UnicodeDecodeError:
+            print(_UNDECODABLE_INPUT_MESSAGE)
+
+
 def _prompt_non_empty(prompt: str) -> str:
     while True:
-        value = input(prompt).strip()
+        value = _read_line(prompt)
         if value:
             return value
         print("A value is required.")
@@ -107,7 +129,7 @@ def _prompt_non_empty(prompt: str) -> str:
 
 def _prompt_non_empty_secret(prompt: str) -> str:
     while True:
-        value = getpass(prompt).strip()
+        value = _read_secret(prompt)
         if value:
             return value
         print("A value is required.")
@@ -128,7 +150,7 @@ def _prompt_hostname(prompt: str, *, field_name: str) -> str:
 
 def _prompt_port(prompt: str, *, default: int) -> int:
     while True:
-        raw_value = input(f"{prompt} [{default}]: ").strip()
+        raw_value = _read_line(f"{prompt} [{default}]: ")
         if not raw_value:
             return default
         try:
@@ -144,7 +166,7 @@ def _prompt_port(prompt: str, *, default: int) -> int:
 def _prompt_yes_no(prompt: str, *, default: bool) -> bool:
     suffix = "Y/n" if default else "y/N"
     while True:
-        raw_value = input(f"{prompt} [{suffix}]: ").strip().lower()
+        raw_value = _read_line(f"{prompt} [{suffix}]: ").lower()
         if not raw_value:
             return default
         if raw_value in {"y", "yes"}:
@@ -175,13 +197,13 @@ def _validate_protocol_login_pin(pin: str) -> str:
 
 def _prompt_protocol_login_pin() -> str:
     while True:
-        pin = getpass("Protocol login PIN (6 digits, input hidden): ").strip()
+        pin = _read_secret("Protocol login PIN (6 digits, input hidden): ")
         try:
             normalized_pin = _validate_protocol_login_pin(pin)
         except ValueError as exc:
             print(exc)
             continue
-        confirmation = getpass("Confirm protocol login PIN: ").strip()
+        confirmation = _read_secret("Confirm protocol login PIN: ")
         if normalized_pin != confirmation:
             print("PIN entries did not match.")
             continue
