@@ -31,6 +31,7 @@ from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIR
 from .cloud import CloudImportManager
 from .config import AppConfig, AppPaths, load_config, resolve_paths
 from .standalone_admin import register_standalone_admin_routes
+from .routine_schedules import RoutineScheduler
 from .backend import (
     MqttTlsProxy,
     MqttTopicBridge,
@@ -51,6 +52,9 @@ from .backend import (
     strip_roborock_prefix,
 )
 from shared.protocol_auth import ProtocolAuthStore
+from shared.data_helpers import as_bool
+from shared.routine_runner import commands_for_step, parse_scene_steps, scene_device_id
+from https_server.routes.user.scene.service import get_scene_for_execution, _routine_runner_for_context
 from https_server.routes.auth.service import (
     build_login_data_response,
     cloud_login_data_required_response,
@@ -463,8 +467,24 @@ class ReleaseSupervisor:
             zone_ranges_store=self._init_zone_ranges_store(),
             timezone=self.config.network.timezone or None,
         )
+        self.routine_scheduler = RoutineScheduler(
+            self.paths.state_dir / "routine_schedules.sqlite3",
+            load_scene=self._scheduled_scene,
+            dispatch=lambda scene: _routine_runner_for_context(self.context).start_scene(scene, scheduled=True),
+        )
         self.endpoint_rules = default_endpoint_rules()
         self.app = self._create_app()
+
+    def _scheduled_scene(self, scene_id: int) -> dict[str, Any]:
+        scene = get_scene_for_execution(self.context, scene_id)
+        device_id = scene_device_id(scene)
+        if not device_id:
+            raise ValueError(f"Scene {scene_id} is missing device_id")
+        for step in parse_scene_steps(scene):
+            commands_for_step(step)
+        scene["device_id"] = device_id
+        scene["enabled"] = as_bool(scene.get("enabled", True), True)
+        return scene
 
     def _init_zone_ranges_store(self) -> ZoneRangesStore:
         store = ZoneRangesStore(self.paths.http_jsonl_path.parent)
@@ -1944,9 +1964,14 @@ class ReleaseSupervisor:
 
         if self._uses_local_tls() and self.config.tls.mode == "cloudflare_acme":
             self._renew_task = asyncio.create_task(self._renew_loop(), name="tls-renew-loop")
+        self.routine_scheduler.start()
 
     async def stop(self) -> None:
         self._stop_event.set()
+        await self.routine_scheduler.stop()
+        runner = getattr(self.context, "_routine_runner", None)
+        if runner is not None:
+            await runner.stop_scheduled()
         if self._renew_task is not None:
             self._renew_task.cancel()
             try:

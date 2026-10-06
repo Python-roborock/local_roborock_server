@@ -102,7 +102,9 @@ def test_repeating_scene_execute_requests_cancel(tmp_path: Path, monkeypatch) ->
         hold = asyncio.Event()
         stop_calls: list[tuple[str, int, str]] = []
 
-        async def fake_run_scene(self: RoutineRunner, *, scene: dict[str, object], steps: list[object]) -> None:
+        async def fake_run_scene(
+            self: RoutineRunner, *, scene: dict[str, object], steps: list[object], require_ready: bool = False
+        ) -> None:
             _ = self, scene, steps
             started.set()
             await hold.wait()
@@ -147,7 +149,9 @@ def test_different_scene_on_busy_device_stays_in_progress(tmp_path: Path, monkey
         hold = asyncio.Event()
         stop_calls: list[tuple[str, int, str]] = []
 
-        async def fake_run_scene(self: RoutineRunner, *, scene: dict[str, object], steps: list[object]) -> None:
+        async def fake_run_scene(
+            self: RoutineRunner, *, scene: dict[str, object], steps: list[object], require_ready: bool = False
+        ) -> None:
             _ = self, scene, steps
             started.set()
             await hold.wait()
@@ -185,6 +189,127 @@ def test_different_scene_on_busy_device_stays_in_progress(tmp_path: Path, monkey
         await asyncio.sleep(0)
 
         assert stop_calls == []
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("active_scene_id", [7, 8])
+def test_scheduled_scene_never_cancels_active_routine(tmp_path, monkeypatch, active_scene_id):
+    async def exercise():
+        runner = RoutineRunner(_test_context(tmp_path))
+        hold = asyncio.Event()
+
+        async def run(self, *, scene, steps, require_ready=False):
+            await hold.wait()
+
+        monkeypatch.setattr(RoutineRunner, "_run_scene", run)
+        runner.start_scene(_scene(scene_id=active_scene_id, device_id="vacuum-1", name="Active"))
+        active = runner._tasks_by_device["vacuum-1"]
+        response = runner.start_scene(_scene(scene_id=7, device_id="vacuum-1", name="Scheduled"), scheduled=True)
+        assert response["status"] == "routine_in_progress"
+        assert response["accepted"] is False
+        assert not active.cancel_requested
+        assert not active.task.cancelling()
+        hold.set()
+        await active.task
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("state,in_cleaning,expected_start", [
+    (3, 0, True), (8, 0, True), (5, 1, False), (10, 2, False),
+    (8, 1, False), (22, 0, False), (8, None, False), (None, 0, False),
+])
+def test_scheduled_scene_checks_live_status_before_commands(
+    tmp_path, monkeypatch, state, in_cleaning, expected_start
+):
+    events = []
+
+    class Client:
+        def __init__(self, *args):
+            pass
+
+        async def connect(self):
+            events.append("connect")
+
+        async def close(self):
+            events.append("close")
+
+        async def get_status(self):
+            events.append("status")
+            return StatusV2.from_dict({"state": state, "in_cleaning": in_cleaning})
+
+        async def send_command(self, command, params=None):
+            events.append(command)
+
+    monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", Client)
+    scene = _scene(scene_id=7, device_id="vacuum-1", name="Scheduled")
+    payload = json.loads(scene["param"])
+    payload["action"]["items"][0]["finishDpIds"] = []
+    scene["param"] = json.dumps(payload)
+    runner = RoutineRunner(_test_context(tmp_path))
+    asyncio.run(runner._run_scene(scene=scene, steps=parse_scene_steps(scene), require_ready=True))
+    assert events[:2] == ["connect", "status"]
+    assert events[-1] == "close"
+    assert (RoborockCommand.APP_START in events) is expected_start
+    if not expected_start:
+        assert events == ["connect", "status", "close"]
+
+
+@pytest.mark.parametrize("failure_step", ["connect", "status"])
+def test_scheduled_scene_connection_failure_sends_no_cleaning_commands(tmp_path, monkeypatch, failure_step):
+    events = []
+
+    class Client:
+        def __init__(self, *args):
+            pass
+
+        async def connect(self):
+            if failure_step == "connect":
+                raise TimeoutError("offline")
+
+        async def close(self):
+            events.append("close")
+
+        async def get_status(self):
+            raise TimeoutError("offline")
+
+        async def send_command(self, *args):
+            pytest.fail("must not dispatch when status is unavailable")
+
+    monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", Client)
+    scene = _scene(scene_id=7, device_id="vacuum-1", name="Scheduled")
+    runner = RoutineRunner(_test_context(tmp_path))
+    with pytest.raises(TimeoutError):
+        asyncio.run(runner._run_scene(scene=scene, steps=parse_scene_steps(scene), require_ready=True))
+    assert events == ["close"]
+
+
+def test_stopping_scheduler_cleans_up_only_scheduled_routines(tmp_path, monkeypatch):
+    async def exercise():
+        runner = RoutineRunner(_test_context(tmp_path))
+        hold = asyncio.Event()
+        ready_checks = []
+        closed = []
+
+        async def run(self, *, scene, steps, require_ready=False):
+            ready_checks.append(require_ready)
+            try:
+                await hold.wait()
+            finally:
+                closed.append(scene["id"])
+
+        monkeypatch.setattr(RoutineRunner, "_run_scene", run)
+        runner.start_scene(_scene(scene_id=7, device_id="vacuum-1", name="Scheduled"), scheduled=True)
+        runner.start_scene(_scene(scene_id=8, device_id="vacuum-2", name="Manual"))
+        manual = runner._tasks_by_device["vacuum-2"].task
+        await asyncio.sleep(0)
+        await runner.stop_scheduled()
+        assert ready_checks == [True, False]
+        assert closed == [7]
+        assert not manual.done()
+        hold.set()
+        await manual
 
     asyncio.run(exercise())
 

@@ -101,6 +101,7 @@ class _ActiveRoutine:
     scene_id: int
     scene_name: str
     cancel_requested: bool = False
+    scheduled: bool = False
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -728,7 +729,7 @@ class RoutineRunner:
             or _LOGGER
         )
 
-    def start_scene(self, scene: dict[str, Any]) -> dict[str, Any]:
+    def start_scene(self, scene: dict[str, Any], *, scheduled: bool = False) -> dict[str, Any]:
         device_id = scene_device_id(scene)
         if not device_id:
             raise RoutineExecutionError(f"Scene {_scene_id(scene)} is missing device_id")
@@ -739,7 +740,7 @@ class RoutineRunner:
         if existing is not None:
             if existing.task.done():
                 self._tasks_by_device.pop(device_id, None)
-            elif existing.scene_id == scene_id:
+            elif existing.scene_id == scene_id and not scheduled:
                 if not existing.cancel_requested:
                     existing.cancel_requested = True
                     existing.task.cancel()
@@ -777,13 +778,14 @@ class RoutineRunner:
                 }
 
         task = asyncio.get_running_loop().create_task(
-            self._run_scene(scene=dict(scene), steps=steps),
+            self._run_scene(scene=dict(scene), steps=steps, require_ready=scheduled),
             name=f"routine-scene-{scene_id}-{device_id}",
         )
         self._tasks_by_device[device_id] = _ActiveRoutine(
             task=task,
             scene_id=scene_id,
             scene_name=scene_name,
+            scheduled=scheduled,
         )
         task.add_done_callback(lambda finished: self._on_scene_done(device_id, finished))
         return {
@@ -794,6 +796,13 @@ class RoutineRunner:
             "sceneName": scene_name,
             "stepCount": len(steps),
         }
+
+    async def stop_scheduled(self) -> None:
+        """Close scheduled MQTT work before the supervisor shuts down its broker."""
+        tasks = [active.task for active in self._tasks_by_device.values() if active.scheduled]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     def _on_scene_done(self, device_id: str, task: asyncio.Task[None]) -> None:
         current = self._tasks_by_device.get(device_id)
@@ -960,7 +969,9 @@ class RoutineRunner:
                     continue
                 raise
 
-    async def _run_scene(self, *, scene: dict[str, Any], steps: list[RoutineStep]) -> None:
+    async def _run_scene(
+        self, *, scene: dict[str, Any], steps: list[RoutineStep], require_ready: bool = False
+    ) -> None:
         device_id = scene_device_id(scene)
         device = self._device_record(device_id)
         logger = logging.LoggerAdapter(
@@ -980,8 +991,16 @@ class RoutineRunner:
         )
 
         client = _RoutineMqttClient(self._context, device, logger)
-        await client.connect()
         try:
+            await client.connect()
+            if require_ready:
+                status = await client.get_status()
+                if (
+                    _enum_or_int_value(status.state) not in _ROUTINE_READY_STATES
+                    or _enum_or_int_value(status.in_cleaning) != RoborockInCleaning.complete.value
+                ):
+                    logger.info("Skipping scheduled routine: device is not ready device=%s", device_id)
+                    return
             await self._sync_scene_tids(client=client, scene=scene, device_id=device_id, logger=logger)
             for step_index, step in enumerate(steps):
                 commands = commands_for_step(step)

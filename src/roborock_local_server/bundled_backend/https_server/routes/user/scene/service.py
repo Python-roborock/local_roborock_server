@@ -635,7 +635,7 @@ def create_scene(ctx: ServerContext, body_params: dict[str, list[str]]) -> dict[
     return build_scene_payload(created_scene, home_id=home_id, include_device_context=True)
 
 
-def execute_scene(ctx: ServerContext, scene_id: int) -> Any:
+def get_scene_for_execution(ctx: ServerContext, scene_id: int) -> dict[str, Any]:
     state = _scene_state(ctx)
     scene = next(
         (
@@ -647,8 +647,12 @@ def execute_scene(ctx: ServerContext, scene_id: int) -> Any:
     )
     if scene is None:
         raise RoutineExecutionError(f"Scene {scene_id} not found")
+    return _hydrate_inventory_scene_ranges(ctx, scene)
+
+
+def execute_scene(ctx: ServerContext, scene_id: int) -> Any:
+    scene = get_scene_for_execution(ctx, scene_id)
     _LOGGER.info("Executing scene %s (%s)", scene_id, get_value(scene, "name", default=""))
-    scene = _hydrate_inventory_scene_ranges(ctx, scene)
     return _routine_runner_for_context(ctx).start_scene(scene)
 
 

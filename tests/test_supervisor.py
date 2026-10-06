@@ -43,6 +43,7 @@ def test_release_supervisor_start_stop_external_mode(tmp_path: Path, monkeypatch
     monkeypatch.setattr(ReleaseSupervisor, "_start_mqtt_proxy", fake_start_mqtt_proxy)
 
     asyncio.run(supervisor.start())
+    assert supervisor.routine_scheduler._task is not None
     health = supervisor.runtime_state.health_snapshot()
     service_map = {service["name"]: service for service in health["services"]}
     assert service_map["https_server"]["running"] is True
@@ -50,6 +51,7 @@ def test_release_supervisor_start_stop_external_mode(tmp_path: Path, monkeypatch
     assert service_map["mqtt_backend_broker"]["running"] is True
 
     asyncio.run(supervisor.stop())
+    assert supervisor.routine_scheduler._task is None
     health = supervisor.runtime_state.health_snapshot()
     service_map = {service["name"]: service for service in health["services"]}
     assert service_map["https_server"]["running"] is False

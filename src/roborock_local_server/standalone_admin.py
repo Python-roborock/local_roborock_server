@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .security import verify_password
+from .routine_schedules import register_routine_schedule_routes
 
 
 def _admin_login_html() -> str:
@@ -309,6 +310,8 @@ def register_standalone_admin_routes(
     supervisor: Any,
     project_support: dict[str, Any],
 ) -> None:
+    register_routine_schedule_routes(app, supervisor)
+
     @app.get("/admin", response_class=HTMLResponse)
     async def admin_page(request: Request) -> HTMLResponse:
         if not supervisor._authenticated(request):
