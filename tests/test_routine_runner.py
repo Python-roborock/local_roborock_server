@@ -263,6 +263,70 @@ def test_run_scene_syncs_scene_tids_before_step_commands(tmp_path: Path, monkeyp
     asyncio.run(exercise())
 
 
+def test_run_scene_sends_repeat_times_as_object_before_app_start(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The repeat-times setting must precede APP_START in the accepted form.
+
+    Firmware answers the list form with -10007 invalid params. Because the
+    command sits immediately before APP_START, a rejection aborts the routine
+    and the vacuum never starts, which is why the object form is asserted here.
+    """
+    async def exercise() -> None:
+        device_id = "6HL2zfniaoYYV01CkVuhkO"
+        scene = _scene(scene_id=4491073, device_id=device_id, name="Start")
+
+        sent_commands: list[tuple[RoborockCommand, object]] = []
+
+        class FakeRoutineClient:
+            def __init__(self, context, device, logger) -> None:
+                _ = context, device, logger
+
+            async def connect(self) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+            async def send_command(self, command, params=None):
+                sent_commands.append((command, params))
+                return ["ok"]
+
+            async def wait_for_step_complete(self) -> None:
+                return None
+
+        monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+
+        runner = RoutineRunner(_test_context(tmp_path))
+        await runner._run_scene(scene=scene, steps=parse_scene_steps(scene))
+
+        repeat_commands = [
+            (command, params)
+            for command, params in sent_commands
+            if command == RoborockCommand.SET_CLEAN_REPEAT_TIMES
+        ]
+        assert repeat_commands == [(RoborockCommand.SET_CLEAN_REPEAT_TIMES, {"repeat": 1})]
+        assert all(
+            not isinstance(params, list)
+            for command, params in repeat_commands
+        )
+
+        # The setting is useless if APP_START never follows it.
+        app_start_index = next(
+            index
+            for index, (command, _) in enumerate(sent_commands)
+            if command == RoborockCommand.APP_START
+        )
+        repeat_index = next(
+            index
+            for index, (command, _) in enumerate(sent_commands)
+            if command == RoborockCommand.SET_CLEAN_REPEAT_TIMES
+        )
+        assert repeat_index < app_start_index
+
+    asyncio.run(exercise())
+
+
 def test_run_scene_retries_step_start_when_device_is_action_locked(tmp_path: Path, monkeypatch) -> None:
     async def exercise() -> None:
         device_id = "6HL2zfniaoYYV01CkVuhkO"
