@@ -367,7 +367,13 @@ def commands_for_step(step: RoutineStep) -> list[RoutineCommand]:
         repeat = max(1, _as_int(entry.get("repeat"), 1))
         return [
             *_settings_commands(entry),
-            RoutineCommand(RoborockCommand.SET_CLEAN_REPEAT_TIMES, [repeat]),
+            # Sent as an object, not a list. Firmware rejects the list form with
+            # -10007 invalid params, and because this is the command immediately
+            # before APP_START a rejection aborts the whole routine, so the
+            # vacuum never starts.
+            RoutineCommand(
+                RoborockCommand.SET_CLEAN_REPEAT_TIMES, {"repeat": repeat}
+            ),
             RoutineCommand(RoborockCommand.APP_START, None),
         ]
     raise RoutineExecutionError(f"Unsupported step method {step.method!r}")
