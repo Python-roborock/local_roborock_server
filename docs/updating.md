@@ -71,7 +71,7 @@ The add-on does not automatically rewrite Home Assistant's Roborock integration 
 
 ### Switching From Beta To Stable
 
-The Beta add-on is currently unused. For `1.2.0`, use **Roborock Local Server**.
+The Beta add-on is currently unused. For `1.2.1`, use **Roborock Local Server**.
 Back up Beta before switching, then stop it and disable **Start on boot** before
 starting stable on the same ports.
 

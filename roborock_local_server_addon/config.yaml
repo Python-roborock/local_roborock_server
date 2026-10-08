@@ -1,5 +1,5 @@
 name: Roborock Local Server
-version: "1.2.0"
+version: "1.2.1"
 slug: roborock_local_server
 description: Private Roborock HTTPS and MQTT stack for Home Assistant environments.
 url: "https://github.com/Python-roborock/local_roborock_server"
