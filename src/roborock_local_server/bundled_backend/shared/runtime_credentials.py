@@ -596,7 +596,7 @@ class RuntimeCredentialsStore:
         if normalized_topic.startswith("rr/d/"):
             parts = normalized_topic.split("/")
             if len(parts) >= 5:
-                device = self.resolve_device(did=parts[3])
+                device = self.resolve_device(duid=parts[3]) or self.resolve_device(did=parts[3])
                 return _clean_str(device.get("localkey")) if device else ""
         if normalized_topic.startswith("rr/m/"):
             parts = normalized_topic.split("/")
