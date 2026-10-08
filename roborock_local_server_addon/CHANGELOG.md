@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.1
+
+- Fixed vacuums losing control about 48 hours after onboarding with `rrcheck access denied` (seen on the Qrevo Edge 2). The server now answers the firmware's periodic `/f/c` access check locally.
+- Fixed routines that start cleaning with `do_scenes_app_start` stopping before the vacuum started, because some firmware rejected the clean repeat count.
+- Fixed region and timezone mismatches during onboarding for non-US regions: the location endpoint now uses the region's timezone, and European timezones map to the `eu` region.
+- Fixed the Roborock app's v4 home requests reaching the Roborock cloud instead of the local API through the MITM redirect.
+- Fixed cloud import rejecting every code for some accounts (for example UK accounts on the EU cloud).
+- Fixed a crash in guided onboarding when the typed input was not valid UTF-8.
+- Existing settings, cloud imports, and recovered keys are retained when updating.
+
 ## 1.2.0
 
 - Added onboarding for vacuums that have never been on the Roborock cloud: choose **New vacuum** in the guided CLI or GUI. The server adopts the vacuum from its own onboarding traffic and adds it to the inventory as soon as it registers, with its model, product name, and product id taken from a built-in catalog of Roborock robot vacuums.
