@@ -71,6 +71,14 @@ class ServerContext:
     runtime_credentials: RuntimeCredentialsStore | None = None
     zone_ranges_store: ZoneRangesStore | None = None
     timezone: str | None = None
+    # TURN/STUN advertised to the robot for camera sessions (see routes/fw/createca.py).
+    turn_enabled: bool = False
+    turn_host: str = ""
+    turn_port: int = 3478
+    turn_username: str = ""
+    turn_password: str = ""
+    turn_realm: str = ""
+    turn_ttl: int = 86400
     _bootstrap_encryptor: BootstrapEncryptor | None = field(init=False, default=None, repr=False)
     _device_key_cache: DeviceKeyCache | None = field(init=False, default=None, repr=False)
 

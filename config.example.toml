@@ -49,3 +49,16 @@ new_connections_enabled = true
 # Home Assistant/app logins use this email plus a local 6-digit PIN entered as the "code".
 protocol_login_email = "you@example.com"
 protocol_login_pin_hash = "pbkdf2_sha256$600000$replace_me$replace_me"
+
+[turn]
+# TURN/STUN server advertised to the robot so the camera (live video) preview can
+# complete locally. Leave enabled = false unless you run a TURN server (e.g. coturn)
+# reachable by the robot. See docs/camera.md. Camera also needs a short onboarding
+# region (<=14 chars + trailing '/') so the robot's fwapi host resolves here.
+enabled = false
+host = ""            # defaults to network.stack_fqdn when empty
+port = 3478
+username = ""
+password = ""
+realm = ""           # defaults to host when empty
+ttl = 86400
