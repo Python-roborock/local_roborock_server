@@ -1,0 +1,47 @@
+{
+  "non_array_body": {
+    "http_status": 400,
+    "response": {
+      "code": "parameter.error",
+      "msg": "parameter error",
+      "status": "BAD_REQUEST",
+      "timestamp": "2026-10-10T17:19:01.641+00:00"
+    }
+  },
+  "malformed_json": {
+    "http_status": 400,
+    "response": {
+      "code": "parameter.error",
+      "msg": "parameter error",
+      "status": "BAD_REQUEST",
+      "timestamp": "2026-10-10T17:19:01.799+00:00"
+    }
+  },
+  "unknown_scene_id": {
+    "http_status": 200,
+    "response": {
+      "api": null,
+      "result": null,
+      "status": "ok",
+      "success": true
+    }
+  },
+  "invalid_actions_type": {
+    "http_status": 200,
+    "response": {
+      "api": null,
+      "result": null,
+      "status": "ok",
+      "success": true
+    }
+  },
+  "missing_authentication": {
+    "http_status": 401,
+    "response": {
+      "code": "auth.err",
+      "msg": "auth.err.invalid.token",
+      "status": "UNAUTHORIZED",
+      "timestamp": "2026-10-10T17:19:02.266+00:00"
+    }
+  }
+}

@@ -134,6 +134,8 @@ from .routes.user.scene.item import match_put_name as _match_put_scene_name
 from .routes.user.scene.item import match_put_param as _match_put_scene_param
 from .routes.user.scene.order import build as _build_get_scene_order
 from .routes.user.scene.order import match as _match_get_scene_order
+from .routes.user.scene.validity import build as _build_put_scene_validity
+from .routes.user.scene.validity import match as _match_put_scene_validity
 from .routes.v2.user.scene import build as _build_post_scene_create
 from .routes.v2.user.scene import match as _match_post_scene_create
 
@@ -584,6 +586,7 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("get_scene_order", _match_get_scene_order, _build_get_scene_order),
         EndpointRule("put_scene_name", _match_put_scene_name, _build_put_scene_name),
         EndpointRule("put_scene_param", _match_put_scene_param, _build_put_scene_param),
+        EndpointRule("put_scene_validity", _match_put_scene_validity, _build_put_scene_validity),
         EndpointRule("execute_scene", _match_execute_scene, _build_execute_scene),
         EndpointRule("delete_scene", _match_delete_scene, _build_delete_scene),
         EndpointRule("get_device", _match_get_device, _build_get_device),
