@@ -11,3 +11,8 @@ secrets/
 config.toml
 mitm_logs
 .tmp*
+
+# Roborock iOS onboarding helper runtime files
+.roborock_onboard.conf
+.roborock_mitm.pid
+roborock_mitm.log
