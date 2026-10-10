@@ -451,10 +451,17 @@
                     </div>
 
                     <div class="field">
+                        <label for="cfg-camera">Camera domain (optional, max 14 chars)</label>
+                        <input id="cfg-camera" placeholder="e.g. myvac.cc" autocomplete="off" />
+                        <div class="hint">For local TURN camera streaming. Formats with trailing slash and validates 15-char limit.</div>
+                    </div>
+
+                    <div class="field">
                         <label for="cfg-cst">POSIX TZ string</label>
                         <input id="cfg-cst" placeholder="optional" autocomplete="off" />
                         <div class="hint">Leave blank unless you need to override it.</div>
                     </div>
+
 
                     <div id="cfg-err" class="callout err hidden"></div>
 
@@ -727,9 +734,11 @@
           wifi_password: $("cfg-wifi").value,
           timezone: $("cfg-tz").value,
           country_domain: $("cfg-country").value,
+          camera_domain: $("cfg-camera").value,
           cst: $("cfg-cst").value,
         });
       } catch (e) {
+
         $("cfg-err").innerHTML = `<strong>Could not continue</strong><div class="sub">${escapeHtml(e.message)}</div>`;
         $("cfg-err").classList.remove("hidden");
       } finally {

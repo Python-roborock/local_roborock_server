@@ -14,13 +14,10 @@ arch:
 ports:
   555/tcp: 555
   8881/tcp: 8881
-  3478/tcp: 3478
-  3478/udp: 3478
 ports_description:
   555/tcp: Roborock HTTPS API
   8881/tcp: Roborock MQTT TLS proxy
-  3478/tcp: Roborock WebRTC TURN server (TCP)
-  3478/udp: Roborock WebRTC TURN server (UDP)
+
 map:
   - ssl:ro
   - addon_config:rw
