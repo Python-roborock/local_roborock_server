@@ -636,13 +636,14 @@ def _build_config_from_payload(payload: dict[str, Any]) -> GuidedOnboardingConfi
         country_domain = country_from_iana(timezone) or DEFAULT_COUNTRY_DOMAIN
 
 
-    if len(country_domain) > 15:
+    if len(country_domain) > 14 and not (len(country_domain) == 15 and country_domain.endswith("/")):
         _log.warn(
             f"Region '{country_domain}' is longer than 14 characters ({len(country_domain)} chars). "
             f"The vacuum firmware truncates region strings to 15 characters, so local camera streaming (TURN) "
             f"will not be available on camera-equipped vacuums with this region. "
             f"Standard vacuum control is unaffected."
         )
+
     return GuidedOnboardingConfig(
         api_base_url=api_base_url,
         stack_server=stack_server,

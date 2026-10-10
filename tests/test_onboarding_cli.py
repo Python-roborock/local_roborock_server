@@ -797,5 +797,39 @@ def test_prompt_for_config_long_country_domain_warns_but_succeeds() -> None:
     assert "Standard vacuum control is unaffected" in text
 
 
+def test_prompt_for_config_15_char_without_slash_warns() -> None:
+    output = StringIO()
+    args = argparse.Namespace(
+        server="api-roborock.example.com",
+        admin_password="pw",
+        ssid="my-wifi",
+        password="pw",
+        timezone="America/New_York",
+        cst="EST5EDT",
+        country_domain="123456789012345",  # 15 chars, no slash
+        camera_domain="",
+        allow_insecure_tls=False,
+    )
+    prompt_for_config(args, output=output)
+    assert "Notice: Region '123456789012345' is longer than 14 characters" in output.getvalue()
+
+    # 15 chars with slash fits firmware buffer and should not warn
+    output_ok = StringIO()
+    args_ok = argparse.Namespace(
+        server="api-roborock.example.com",
+        admin_password="pw",
+        ssid="my-wifi",
+        password="pw",
+        timezone="America/New_York",
+        cst="EST5EDT",
+        country_domain="12345678901234/",  # 15 chars ending in slash
+        camera_domain="",
+        allow_insecure_tls=False,
+    )
+    prompt_for_config(args_ok, output=output_ok)
+    assert "Notice: Region" not in output_ok.getvalue()
+
+
+
 
 

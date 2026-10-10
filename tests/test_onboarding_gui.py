@@ -281,4 +281,18 @@ def test_build_config_from_payload_long_country_domain_warns_and_succeeds() -> N
     assert any("is longer than 14 characters" in entry["msg"] for entry in _log.snapshot())
 
 
+def test_build_config_from_payload_15_char_without_slash_warns() -> None:
+    payload = {
+        "server": "api-roborock.example.com",
+        "admin_password": "pw",
+        "ssid": "my-wifi",
+        "wifi_password": "pw",
+        "country_domain": "123456789012345",  # 15 chars, no slash
+    }
+    cfg = _build_config_from_payload(payload)
+    assert cfg.country_domain == "123456789012345"
+    assert any("Notice: Region '123456789012345' is longer than 14 characters" in entry["msg"] or "is longer than 14 characters" in entry["msg"] for entry in _log.snapshot())
+
+
+
 

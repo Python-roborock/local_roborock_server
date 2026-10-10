@@ -484,13 +484,14 @@ def prompt_for_config(args: argparse.Namespace, output: TextIO = sys.stdout) -> 
             country_domain = _prompt_text("", "Country domain (could not auto-detect from timezone)", default=DEFAULT_COUNTRY_DOMAIN)
 
 
-    if len(country_domain) > 15:
+    if len(country_domain) > 14 and not (len(country_domain) == 15 and country_domain.endswith("/")):
         output.write(
             f"Notice: Region '{country_domain}' is longer than 14 characters ({len(country_domain)} chars). "
             f"The vacuum firmware truncates region strings to 15 characters, so local camera streaming (TURN) "
             f"will not be available on camera-equipped vacuums with this region. "
             f"Standard vacuum control is unaffected.\n"
         )
+
     return GuidedOnboardingConfig(
         api_base_url=api_base_url,
         stack_server=stack_server,
