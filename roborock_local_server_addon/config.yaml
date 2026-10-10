@@ -47,6 +47,7 @@ options:
   turn_username: ""
   turn_password: ""
   turn_realm: ""
+  turn_ttl: 86400
 schema:
   stack_fqdn: str
   https_port: port
@@ -72,3 +73,5 @@ schema:
   turn_username: str?
   turn_password: password?
   turn_realm: str?
+  turn_ttl: int?
+

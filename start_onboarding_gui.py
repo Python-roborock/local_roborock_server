@@ -41,7 +41,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 import uvicorn
 
-from onboarding_shared import perform_onboarding_preflight
+from onboarding_shared import normalize_camera_domain, perform_onboarding_preflight
 
 
 CFGWIFI_HOST = "192.168.8.1"
@@ -631,17 +631,10 @@ def _build_config_from_payload(payload: dict[str, Any]) -> GuidedOnboardingConfi
     camera_domain = str(payload.get("camera_domain") or "").strip()
     country_domain = str(payload.get("country_domain") or "").strip()
     if camera_domain:
-        if not camera_domain.endswith("/"):
-            camera_domain = f"{camera_domain}/"
-        if len(camera_domain) > 15:
-            raise ValueError(
-                f"Camera domain '{camera_domain}' exceeds the 15-character firmware limit "
-                f"({len(camera_domain)} > 15 chars including trailing slash). "
-                f"Use a shorter hostname (14 chars or fewer)."
-            )
-        country_domain = camera_domain
+        country_domain = normalize_camera_domain(camera_domain)
     elif not country_domain:
         country_domain = country_from_iana(timezone) or DEFAULT_COUNTRY_DOMAIN
+
 
     if len(country_domain) > 15:
         _log.warn(

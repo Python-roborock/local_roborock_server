@@ -751,8 +751,29 @@ def test_prompt_for_config_camera_domain_formats_and_validates() -> None:
         camera_domain="way-too-long-domain.example.com",
         allow_insecure_tls=False,
     )
-    with pytest.raises(ValueError, match="exceeds the 15-character firmware limit"):
+    with pytest.raises(ValueError, match="exceeds the 14-character limit"):
         prompt_for_config(args_too_long)
+
+    for invalid_val, expected_err in [
+        ("https://myvac.cc", "Camera domain must be a hostname without a scheme"),
+        ("myvac.cc:3478", "Camera domain must be a hostname without a port"),
+        ("myvac.cc/path", "Camera domain must be a hostname without a path"),
+        ("my vac.cc", "must be a valid hostname"),
+    ]:
+        args_invalid = argparse.Namespace(
+            server="api-roborock.example.com",
+            admin_password="pw",
+            ssid="my-wifi",
+            password="pw",
+            timezone="America/New_York",
+            cst="EST5EDT",
+            country_domain="",
+            camera_domain=invalid_val,
+            allow_insecure_tls=False,
+        )
+        with pytest.raises(ValueError, match=expected_err):
+            prompt_for_config(args_invalid)
+
 
 
 def test_prompt_for_config_long_country_domain_warns_but_succeeds() -> None:

@@ -30,7 +30,7 @@ from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Util.Padding import pad
 
-from onboarding_shared import build_ssl_context, perform_onboarding_preflight
+from onboarding_shared import build_ssl_context, normalize_camera_domain, perform_onboarding_preflight
 
 
 CFGWIFI_HOST = "192.168.8.1"
@@ -477,19 +477,12 @@ def prompt_for_config(args: argparse.Namespace, output: TextIO = sys.stdout) -> 
     camera_domain = str(getattr(args, "camera_domain", "") or "").strip()
     country_domain = str(args.country_domain or "").strip()
     if camera_domain:
-        if not camera_domain.endswith("/"):
-            camera_domain = f"{camera_domain}/"
-        if len(camera_domain) > 15:
-            raise ValueError(
-                f"Camera domain '{camera_domain}' exceeds the 15-character firmware limit "
-                f"({len(camera_domain)} > 15 chars including trailing slash). "
-                f"Use a shorter hostname (14 chars or fewer)."
-            )
-        country_domain = camera_domain
+        country_domain = normalize_camera_domain(camera_domain)
     elif not country_domain:
         country_domain = country_from_iana(timezone)
         if not country_domain:
             country_domain = _prompt_text("", "Country domain (could not auto-detect from timezone)", default=DEFAULT_COUNTRY_DOMAIN)
+
 
     if len(country_domain) > 15:
         output.write(

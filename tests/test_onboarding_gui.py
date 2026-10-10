@@ -247,8 +247,25 @@ def test_build_config_from_payload_camera_domain_formats_and_validates() -> None
         "wifi_password": "pw",
         "camera_domain": "way-too-long-domain.example.com",
     }
-    with pytest.raises(ValueError, match="exceeds the 15-character firmware limit"):
+    with pytest.raises(ValueError, match="exceeds the 14-character limit"):
         _build_config_from_payload(payload_too_long)
+
+    for invalid_val, expected_err in [
+        ("https://myvac.cc", "Camera domain must be a hostname without a scheme"),
+        ("myvac.cc:3478", "Camera domain must be a hostname without a port"),
+        ("myvac.cc/path", "Camera domain must be a hostname without a path"),
+        ("my vac.cc", "must be a valid hostname"),
+    ]:
+        payload_invalid = {
+            "server": "api-roborock.example.com",
+            "admin_password": "pw",
+            "ssid": "my-wifi",
+            "wifi_password": "pw",
+            "camera_domain": invalid_val,
+        }
+        with pytest.raises(ValueError, match=expected_err):
+            _build_config_from_payload(payload_invalid)
+
 
 
 def test_build_config_from_payload_long_country_domain_warns_and_succeeds() -> None:

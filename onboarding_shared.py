@@ -133,3 +133,30 @@ def _tls_success_message(label: str, allow_insecure_tls: bool) -> str:
     if allow_insecure_tls:
         return f"TLS listener reachable at {label} (certificate verification skipped).\n"
     return f"TLS certificate is valid and listener is reachable at {label}.\n"
+
+
+_HOSTNAME_RE = re.compile(
+    r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+)
+
+
+def normalize_camera_domain(raw_value: str) -> str:
+    candidate = str(raw_value or "").strip()
+    if not candidate:
+        return ""
+    if "://" in candidate:
+        raise ValueError("Camera domain must be a hostname without a scheme (e.g. 'myvac.cc').")
+    if ":" in candidate:
+        raise ValueError("Camera domain must be a hostname without a port.")
+    candidate = candidate.rstrip("/")
+    if "/" in candidate:
+        raise ValueError("Camera domain must be a hostname without a path.")
+    if " " in candidate or not _HOSTNAME_RE.fullmatch(candidate):
+        raise ValueError(f"Camera domain '{candidate}' must be a valid hostname.")
+    if len(candidate) > 14:
+        raise ValueError(
+            f"Camera domain '{candidate}' exceeds the 14-character limit ({len(candidate)} chars). "
+            f"With trailing slash, it must fit within the 15-character firmware buffer."
+        )
+    return f"{candidate}/"
+
