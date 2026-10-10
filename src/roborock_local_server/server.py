@@ -925,6 +925,7 @@ class ReleaseSupervisor:
                 body_params,
                 "code",
                 "verifyCode",
+                "verifycode",
                 "emailCode",
                 "smsCode",
             )
