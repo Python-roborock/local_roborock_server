@@ -57,6 +57,7 @@ nav:
   - Integrations:
     - Mobile App Options: roborock_app.md
   - Reference:
+    - Firmware Device Information: device-info.md
     - Known Limitations: known_limitations.md
     - Scene Validity Reports: scene_validity.md
     - Tested Vacuums: tested_vacuums.md
