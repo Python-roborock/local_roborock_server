@@ -464,6 +464,13 @@ class ReleaseSupervisor:
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self._init_zone_ranges_store(),
             timezone=self.config.network.timezone or None,
+            turn_enabled=self.config.turn.enabled,
+            turn_host=self.config.turn.host or self.config.network.stack_fqdn,
+            turn_port=self.config.turn.port,
+            turn_username=self.config.turn.username,
+            turn_password=self.config.turn.password,
+            turn_realm=self.config.turn.realm or self.config.turn.host or self.config.network.stack_fqdn,
+            turn_ttl=self.config.turn.ttl,
         )
         self.endpoint_rules = default_endpoint_rules()
         self.app = self._create_app()

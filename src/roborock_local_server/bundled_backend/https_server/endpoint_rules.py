@@ -69,6 +69,8 @@ from .routes.bootstrap.catchall import build as _build_catchall
 from .routes.bootstrap.catchall import match as _match_catchall
 from .routes.fw.check import build as _build_fw_check
 from .routes.fw.check import match as _match_fw_check
+from .routes.fw.createca import build as _build_fw_createca
+from .routes.fw.createca import match as _match_fw_createca
 from .routes.bootstrap.location import build as _build_location
 from .routes.bootstrap.location import match as _match_location
 from .routes.bootstrap.nc_prepare import build as _build_nc_prepare
@@ -604,6 +606,7 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("time", _match_time, _build_time),
         EndpointRule("location", _match_location, _build_location),
         EndpointRule("fw_check", _match_fw_check, _build_fw_check),
+        EndpointRule("fw_createca", _match_fw_createca, _build_fw_createca),
         EndpointRule("catchall", _match_catchall, _build_catchall),
     )
 

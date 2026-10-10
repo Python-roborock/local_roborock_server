@@ -56,6 +56,7 @@ nav:
     - Updating: updating.md
   - Integrations:
     - Mobile App Options: roborock_app.md
+    - Camera (Live Video): camera.md
   - Reference:
     - Known Limitations: known_limitations.md
     - Scene Validity Reports: scene_validity.md
