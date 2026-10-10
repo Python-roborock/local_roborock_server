@@ -30,7 +30,7 @@ from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Util.Padding import pad
 
-from onboarding_shared import build_ssl_context, normalize_camera_domain, perform_onboarding_preflight
+from onboarding_shared import build_ssl_context, normalize_camera_domain, perform_camera_preflight, perform_onboarding_preflight
 
 
 CFGWIFI_HOST = "192.168.8.1"
@@ -476,6 +476,8 @@ def prompt_for_config(args: argparse.Namespace, output: TextIO = sys.stdout) -> 
         cst = _prompt_text("", "POSIX TZ string (could not auto-detect from timezone)", default=DEFAULT_CST)
     camera_domain = str(getattr(args, "camera_domain", "") or "").strip()
     country_domain = str(args.country_domain or "").strip()
+    if camera_domain and country_domain:
+        raise ValueError("Set either country domain or camera domain, not both.")
     if camera_domain:
         country_domain = normalize_camera_domain(camera_domain)
     elif not country_domain:
@@ -483,14 +485,6 @@ def prompt_for_config(args: argparse.Namespace, output: TextIO = sys.stdout) -> 
         if not country_domain:
             country_domain = _prompt_text("", "Country domain (could not auto-detect from timezone)", default=DEFAULT_COUNTRY_DOMAIN)
 
-
-    if len(country_domain) > 14 and not (len(country_domain) == 15 and country_domain.endswith("/")):
-        output.write(
-            f"Notice: Region '{country_domain}' is longer than 14 characters ({len(country_domain)} chars). "
-            f"The vacuum firmware truncates region strings to 15 characters, so local camera streaming (TURN) "
-            f"will not be available on camera-equipped vacuums with this region. "
-            f"Standard vacuum control is unaffected.\n"
-        )
 
     return GuidedOnboardingConfig(
         api_base_url=api_base_url,
@@ -699,6 +693,14 @@ def run_guided_onboarding(
         selected = choose_device(devices, output=output)
         if selected is None:
             return 0
+
+        try:
+            perform_camera_preflight(api=api, stack_server=config.stack_server,
+                                     country_domain=config.country_domain,
+                                     model=str(selected.get("model") or ""), output=output)
+        except (RuntimeError, ValueError) as exc:
+            output.write(f"Camera preflight failed: {exc}\nChoose another vacuum or quit to edit the settings.\n")
+            continue
 
         if selected.get("new_vacuum"):
             output.write(

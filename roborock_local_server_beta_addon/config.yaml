@@ -1,7 +1,7 @@
 name: Roborock Local Server Beta
-version: "1.1.0-rc2"
+version: "1.2.2-rc1"
 slug: roborock_local_server_beta
-description: Currently unused. Install Roborock Local Server for the stable release.
+description: Opt-in prerelease of the private Roborock HTTPS and MQTT stack.
 stage: experimental
 url: "https://github.com/Python-roborock/local_roborock_server"
 image: "ghcr.io/python-roborock/local_roborock_server"
@@ -14,9 +14,51 @@ arch:
 ports:
   555/tcp: 555
   8881/tcp: 8881
+  3478/udp: null
+  49160/udp: null
+  49161/udp: null
+  49162/udp: null
+  49163/udp: null
+  49164/udp: null
+  49165/udp: null
+  49166/udp: null
+  49167/udp: null
+  49168/udp: null
+  49169/udp: null
+  49170/udp: null
+  49171/udp: null
+  49172/udp: null
+  49173/udp: null
+  49174/udp: null
+  49175/udp: null
+  49176/udp: null
+  49177/udp: null
+  49178/udp: null
+  49179/udp: null
 ports_description:
   555/tcp: Roborock HTTPS API
   8881/tcp: Roborock MQTT TLS proxy
+  3478/udp: TURN/STUN listener
+  49160/udp: TURN media relay
+  49161/udp: TURN media relay
+  49162/udp: TURN media relay
+  49163/udp: TURN media relay
+  49164/udp: TURN media relay
+  49165/udp: TURN media relay
+  49166/udp: TURN media relay
+  49167/udp: TURN media relay
+  49168/udp: TURN media relay
+  49169/udp: TURN media relay
+  49170/udp: TURN media relay
+  49171/udp: TURN media relay
+  49172/udp: TURN media relay
+  49173/udp: TURN media relay
+  49174/udp: TURN media relay
+  49175/udp: TURN media relay
+  49176/udp: TURN media relay
+  49177/udp: TURN media relay
+  49178/udp: TURN media relay
+  49179/udp: TURN media relay
 
 map:
   - ssl:ro
@@ -42,7 +84,6 @@ options:
   admin_password: ""
   protocol_login_email: ""
   protocol_login_pin: ""
-  turn_enabled: false
   turn_host: ""
   turn_port: 3478
   turn_username: ""
@@ -68,6 +109,7 @@ schema:
   admin_password: password
   protocol_login_email: email
   protocol_login_pin: password
+  turn_mode: list(disabled|provided|external)?
   turn_enabled: bool?
   turn_host: str?
   turn_port: port?

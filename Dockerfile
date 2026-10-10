@@ -8,6 +8,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    coturn \
     mosquitto \
     openssl \
   && rm -rf /var/lib/apt/lists/*
@@ -25,6 +26,6 @@ COPY src /app/src
 
 RUN pip install --no-cache-dir /app
 
-EXPOSE 555 8881
+EXPOSE 555 8881 3478/udp
 
 CMD ["python", "-m", "roborock_local_server.container_entrypoint"]

@@ -30,6 +30,7 @@ from .product_registry import resolve_product_metadata
 from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIRED_ONBOARDING_STEPS
 from .cloud import CloudImportManager
 from .config import AppConfig, AppPaths, load_config, resolve_paths
+from .turn_relay import EmbeddedTurnRelay
 from .standalone_admin import register_standalone_admin_routes
 from .backend import (
     MqttTlsProxy,
@@ -353,6 +354,7 @@ class ReleaseSupervisor:
             self.root_logger.addHandler(handler)
 
         self._broker: Any | None = None
+        self._turn_relay = EmbeddedTurnRelay(config.turn, paths.state_dir / "turn_relay")
         self._topic_bridge: MqttTopicBridge | None = None
         self._mqtt_proxy: MqttTlsProxy | None = None
         self._http_server: ManagedFastApiServer | None = None
@@ -462,7 +464,7 @@ class ReleaseSupervisor:
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self._init_zone_ranges_store(),
             timezone=self.config.network.timezone or None,
-            turn_enabled=self.config.turn.enabled,
+            turn_enabled=self.config.turn.mode != "disabled",
             turn_host=self.config.turn.host or self.config.network.stack_fqdn,
             turn_port=self.config.turn.port,
             turn_username=self.config.turn.username,
@@ -1341,7 +1343,15 @@ class ReleaseSupervisor:
             method=request.method,
         )
         entry["route"] = route_name
-        entry["response_json"] = response_payload
+        if route_name == "fw_createca":
+            # Persist metadata, but retain the exact credential response sent to firmware.
+            entry["response_json"] = {
+                key: ({field: "<redacted>" if field in {"pwd", "credential"} else value
+                       for field, value in part.items()} if isinstance(part, dict) else part)
+                for key, part in response_payload.items()
+            }
+        else:
+            entry["response_json"] = response_payload
         try:
             self.runtime_state.record_http_event(
                 event_time=str(entry["time"]),
@@ -1379,13 +1389,24 @@ class ReleaseSupervisor:
         )
         return JSONResponse(response_payload)
 
+    def _refresh_turn_health(self) -> None:
+        if self.config.turn.mode != "provided":
+            return
+        self.runtime_state.set_service(
+            "turn_relay", running=self._turn_relay.running,
+            required=self.config.turn.mode == "provided", enabled=self.config.turn.mode == "provided",
+            detail=f"udp:{self.config.turn.host}:{self.config.turn.port}",
+        )
+
     def _status_payload(self) -> dict[str, Any]:
+        self._refresh_turn_health()
         health = self.runtime_state.health_snapshot()
         merged_vacuums = self._vacuums_payload()["vacuums"]
         health["all_vacuums"] = merged_vacuums
         health["connected_vacuums"] = [vac for vac in merged_vacuums if vac.get("connected")]
         return {
             "health": health,
+            "turn": {"mode": self.config.turn.mode, "host": self.config.turn.host, "port": self.config.turn.port},
             "auth": self._auth_payload(),
             "pairing": self.runtime_state.pairing_snapshot(),
             "support": PROJECT_SUPPORT,
@@ -1766,6 +1787,7 @@ class ReleaseSupervisor:
                 "last_cloud_request": None,
                 "note": "Runtime state tracking is disabled.",
             }
+        self._refresh_turn_health()
         return runtime_state.health_snapshot()
 
     def _ui_vacuums_payload(self) -> dict[str, Any]:
@@ -1904,6 +1926,15 @@ class ReleaseSupervisor:
             self.certificate_manager.ensure_certificate()
         self.refresh_inventory_state()
 
+        if self.config.turn.mode == "provided":
+            try:
+                self._turn_relay.start()
+                self.root_logger.info("Embedded TURN relay listening on UDP %d", self.config.turn.port)
+            except Exception as exc:
+                self._turn_relay.stop()
+                self.root_logger.warning("Embedded TURN relay failed for %s:%d: %s; HTTPS and MQTT will continue", self.config.turn.host, self.config.turn.port, exc)
+        self._refresh_turn_health()
+
         if self.config.broker.mode == "embedded":
             self._broker = await start_broker(
                 self.config.broker.port,
@@ -1954,6 +1985,8 @@ class ReleaseSupervisor:
 
     async def stop(self) -> None:
         self._stop_event.set()
+        self._turn_relay.stop()
+        self._refresh_turn_health()
         if self._renew_task is not None:
             self._renew_task.cancel()
             try:
@@ -1983,8 +2016,6 @@ class ReleaseSupervisor:
             self._broker = None
 
     async def serve_forever(self) -> int:
-        await self.start()
-
         def request_shutdown() -> None:
             if not self._stop_event.is_set():
                 self._stop_event.set()
@@ -1997,6 +2028,7 @@ class ReleaseSupervisor:
                 pass
 
         try:
+            await self.start()
             await self._stop_event.wait()
         finally:
             await self.stop()

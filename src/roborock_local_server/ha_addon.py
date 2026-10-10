@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import secrets
 import tomllib
+import tempfile
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -32,7 +33,7 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "admin_password": "",
     "protocol_login_email": "",
     "protocol_login_pin": "",
-    "turn_enabled": False,
+    "turn_mode": "disabled",
     "turn_host": "",
     "turn_port": 3478,
     "turn_username": "",
@@ -250,13 +251,40 @@ def _render_config_toml(
     acme_eab_kid_file = str(acme_eab_kid_path) if acme_server == "actalis" else ""
     acme_eab_hmac_key_file = str(acme_eab_hmac_key_path) if acme_server == "actalis" else ""
 
-    turn_enabled = bool(merged.get("turn_enabled", False))
-    turn_host = str(merged.get("turn_host", "") or "").strip()
+    turn_mode = str(options.get("turn_mode") or ("external" if merged.get("turn_enabled") else "disabled")).strip().lower()
+    if turn_mode not in {"disabled", "provided", "external"}:
+        raise ValueError("turn_mode must be disabled, provided, or external")
+    turn_host = str(merged.get("turn_host", "") or "").strip() or (stack_fqdn if turn_mode == "provided" else "")
     turn_port = _as_int(merged.get("turn_port"), field_name="turn_port", default=3478)
     turn_username = str(merged.get("turn_username", "") or "").strip()
     turn_password = str(merged.get("turn_password", "") or "").strip()
     turn_realm = str(merged.get("turn_realm", "") or "").strip()
     turn_ttl = _as_positive_int(merged.get("turn_ttl"), field_name="turn_ttl", default=86400)
+    if turn_mode == "provided":
+        if turn_port != 3478:
+            raise ValueError("Provided TURN in Home Assistant requires turn_port 3478; custom ports are supported only for external mode.")
+        turn_username = turn_username or "roborock"
+        turn_realm = turn_realm or stack_fqdn
+        if not turn_password:
+            credentials_path = config_path.parent / "state" / "turn_password"
+            if credentials_path.exists():
+                turn_password = credentials_path.read_text(encoding="utf-8").strip()
+            if not turn_password:
+                turn_password = secrets.token_urlsafe(32)
+                credentials_path.parent.mkdir(parents=True, exist_ok=True)
+                descriptor, temporary = tempfile.mkstemp(prefix=".turn_password-", dir=credentials_path.parent)
+                try:
+                    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                        handle.write(turn_password)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(temporary, credentials_path)
+                finally:
+                    Path(temporary).unlink(missing_ok=True)
+    elif turn_mode == "external":
+        for field, value in (("turn_host", turn_host), ("turn_username", turn_username), ("turn_password", turn_password)):
+            _require_non_empty(value, field_name=field)
+        turn_realm = turn_realm or turn_host
 
     lines = [
         "[network]",
@@ -326,7 +354,8 @@ def _render_config_toml(
             f"protocol_login_pin_hash = {_toml_string(protocol_login_pin_hash)}",
             "",
             "[turn]",
-            f"enabled = {_toml_bool(turn_enabled)}",
+            f"mode = {_toml_string(turn_mode)}",
+            f"enabled = {_toml_bool(turn_mode != 'disabled')}",
             f"host = {_toml_string(turn_host)}",
             f"port = {turn_port}",
             f"username = {_toml_string(turn_username)}",

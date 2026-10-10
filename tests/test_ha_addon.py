@@ -5,6 +5,7 @@ from pathlib import Path
 import tomllib
 
 import pytest
+import yaml
 
 from roborock_local_server.ha_addon import write_config_from_home_assistant_options
 
@@ -490,6 +491,7 @@ def test_write_config_from_home_assistant_options_renders_turn_settings(tmp_path
     _write_options(
         options_path,
         {
+            **yaml.safe_load(Path("roborock_local_server_addon/config.yaml").read_text())["options"],
             "stack_fqdn": "api-roborock.example.com",
             "tls_mode": "provided",
             "cert_file": "/ssl/fullchain.pem",
@@ -513,6 +515,7 @@ def test_write_config_from_home_assistant_options_renders_turn_settings(tmp_path
     )
 
     parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["turn"]["mode"] == "external"
     assert parsed["turn"]["enabled"] is True
     assert parsed["turn"]["host"] == "turn.example.com"
     assert parsed["turn"]["port"] == 3478
@@ -520,4 +523,63 @@ def test_write_config_from_home_assistant_options_renders_turn_settings(tmp_path
     assert parsed["turn"]["password"] == "secretpassword"
     assert parsed["turn"]["realm"] == "turn.example.com"
     assert parsed["turn"]["ttl"] == 86400
+
+
+def test_provided_turn_generates_stable_credentials_and_uses_stack_host(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+    _write_options(options_path, {
+        "stack_fqdn": "api-vac.cc",
+        "tls_mode": "provided",
+        "cert_file": "/ssl/fullchain.pem",
+        "key_file": "/ssl/privkey.pem",
+        "admin_password": "super-secret-password",
+        "protocol_login_email": "user@example.com",
+        "protocol_login_pin": "123456",
+        "turn_mode": "provided",
+    })
+    write_config_from_home_assistant_options(options_path=options_path, config_path=config_path)
+    first = tomllib.loads(config_path.read_text(encoding="utf-8"))["turn"]
+    write_config_from_home_assistant_options(options_path=options_path, config_path=config_path)
+    second = tomllib.loads(config_path.read_text(encoding="utf-8"))["turn"]
+    assert first["mode"] == "provided"
+    assert first["host"] == "api-vac.cc"
+    assert first["realm"] == "api-vac.cc"
+    assert first["username"] == "roborock"
+    assert len(first["password"]) >= 32
+    assert first["password"] == second["password"]
+
+
+def test_provided_turn_rejects_unpublished_custom_listener_port(tmp_path):
+    options = yaml.safe_load(Path("roborock_local_server_addon/config.yaml").read_text())["options"]
+    options.update(stack_fqdn="api-vac.cc", tls_mode="provided", cert_file="cert", key_file="key",
+                   admin_password="secret", protocol_login_email="user@example.com", protocol_login_pin="123456",
+                   turn_mode="provided", turn_port=3479)
+    options_path = tmp_path / "options.json"
+    _write_options(options_path, options)
+    with pytest.raises(ValueError, match="requires turn_port 3478"):
+        write_config_from_home_assistant_options(options_path=options_path, config_path=tmp_path / "config.toml")
+
+
+def test_empty_generated_turn_password_is_replaced_atomically(tmp_path, monkeypatch):
+    from roborock_local_server import ha_addon
+    options = yaml.safe_load(Path("roborock_local_server_addon/config.yaml").read_text())["options"]
+    options.update(stack_fqdn="api-vac.cc", tls_mode="provided", cert_file="cert", key_file="key",
+                   admin_password="secret", protocol_login_email="user@example.com", protocol_login_pin="123456",
+                   turn_mode="provided")
+    options_path = tmp_path / "options.json"
+    _write_options(options_path, options)
+    password_path = tmp_path / "state" / "turn_password"
+    password_path.parent.mkdir()
+    password_path.write_text("")
+    actual_replace = ha_addon.os.replace
+    replacements = []
+    def replace(source, target):
+        assert len(Path(source).read_text()) >= 32
+        replacements.append(target)
+        actual_replace(source, target)
+    monkeypatch.setattr(ha_addon.os, "replace", replace)
+    write_config_from_home_assistant_options(options_path=options_path, config_path=tmp_path / "config.toml")
+    assert replacements == [password_path]
+    assert len(password_path.read_text()) >= 32
 

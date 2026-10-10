@@ -46,3 +46,14 @@ def test_beta_addon_requires_a_separate_opt_in_installation() -> None:
     assert beta["stage"] == "experimental"
     assert beta["boot"] == "manual"
     assert Version(beta["version"]).is_prerelease
+
+
+def test_addons_support_same_turn_modes_without_reserving_udp_ports_by_default() -> None:
+    for directory in ("roborock_local_server_addon", "roborock_local_server_beta_addon"):
+        addon = yaml.safe_load(Path(directory, "config.yaml").read_text(encoding="utf-8"))
+        assert addon["schema"]["turn_mode"] == "list(disabled|provided|external)?"
+        # No new default mode should mask an older stored turn_enabled=true.
+        assert "turn_mode" not in addon["options"]
+        assert addon["schema"]["turn_enabled"] == "bool?"
+        assert addon["ports"]["3478/udp"] is None
+        assert all(addon["ports"][f"{port}/udp"] is None for port in range(49160, 49180))

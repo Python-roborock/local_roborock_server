@@ -41,7 +41,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 import uvicorn
 
-from onboarding_shared import normalize_camera_domain, perform_onboarding_preflight
+from onboarding_shared import normalize_camera_domain, perform_camera_preflight, perform_onboarding_preflight
 
 
 CFGWIFI_HOST = "192.168.8.1"
@@ -561,6 +561,7 @@ class _SharedState:
     result_message: str | None = None
     result_detail: str | None = None
     can_continue: bool = False
+    can_wait: bool = False
     error_message: str | None = None
     key_recovery_seconds: int = 0
     pending_command: str | None = None
@@ -592,6 +593,11 @@ def _wait_for_command(expected: set[str], timeout: float | None = None) -> tuple
         while True:
             if _SHUTDOWN_EVENT.is_set():
                 return None
+            if _state.pending_command == "edit_config":
+                _state.pending_command = None
+                _state.pending_payload = {}
+                if "submit_config" not in expected:
+                    raise _EditConfigSignal
             if _state.pending_command in expected:
                 cmd = _state.pending_command
                 payload = dict(_state.pending_payload)
@@ -608,6 +614,10 @@ def _wait_for_command(expected: set[str], timeout: float | None = None) -> tuple
 
 
 class _QuitSignal(Exception):
+    pass
+
+
+class _EditConfigSignal(Exception):
     pass
 
 
@@ -630,19 +640,13 @@ def _build_config_from_payload(payload: dict[str, Any]) -> GuidedOnboardingConfi
     cst = str(payload.get("cst") or "").strip() or posix_tz_from_iana(timezone) or DEFAULT_CST
     camera_domain = str(payload.get("camera_domain") or "").strip()
     country_domain = str(payload.get("country_domain") or "").strip()
+    if camera_domain and country_domain:
+        raise ValueError("Set either country domain or camera domain, not both.")
     if camera_domain:
         country_domain = normalize_camera_domain(camera_domain)
     elif not country_domain:
         country_domain = country_from_iana(timezone) or DEFAULT_COUNTRY_DOMAIN
 
-
-    if len(country_domain) > 14 and not (len(country_domain) == 15 and country_domain.endswith("/")):
-        _log.warn(
-            f"Region '{country_domain}' is longer than 14 characters ({len(country_domain)} chars). "
-            f"The vacuum firmware truncates region strings to 15 characters, so local camera streaming (TURN) "
-            f"will not be available on camera-equipped vacuums with this region. "
-            f"Standard vacuum control is unaffected."
-        )
 
     return GuidedOnboardingConfig(
         api_base_url=api_base_url,
@@ -760,6 +764,21 @@ def _run_onboarding_for_device(
     name = str(device.get("name") or duid or ("New vacuum" if is_new_vacuum else "vacuum"))
     _log.info(f"Starting session for {name} ({duid or 'new vacuum'})")
 
+    while True:
+        try:
+            perform_camera_preflight(api=api, stack_server=config.stack_server,
+                                     country_domain=config.country_domain,
+                                     model=str(device.get("model") or ""), output=_log)
+            break
+        except Exception as exc:
+            _set_phase("error", error_message=str(exc), target={"name": name, "duid": duid})
+            _log.err(f"Camera preflight failed: {exc}")
+            result = _wait_for_command({"retry", "reselect", "quit"})
+            if result is None or result[0] == "quit":
+                raise _QuitSignal
+            if result[0] == "reselect":
+                return
+
     try:
         if is_new_vacuum:
             session = api.start_session(new_vacuum=True)
@@ -853,7 +872,7 @@ def _run_onboarding_for_device(
             _set_phase("awaiting_normal_wifi")
             _log.info(
                 "Waiting for normal Wi-Fi / server reachability. "
-                "After the server is reachable again, polling can still take up to 5 minutes, "
+                "After the server is reachable again, polling can take more than 5 minutes, "
                 "especially on the final cycle."
             )
             reachable = _wait_for_reachability(api, session_id, timeout_seconds=120.0)
@@ -872,59 +891,63 @@ def _run_onboarding_for_device(
                 continue
             _log.ok("Server reachable. Polling for progress...")
 
-            _set_phase("polling")
-            outcome, latest = _poll_until_progress(
-                api,
-                session_id,
-                baseline,
-                baseline_has_public_key=baseline_has_public_key,
-            )
-            _print_status_summary(latest, _log)
+            while True:
+                _set_phase("polling", can_wait=False)
+                outcome, latest = _poll_until_progress(
+                    api,
+                    session_id,
+                    baseline,
+                    baseline_has_public_key=baseline_has_public_key,
+                )
+                _print_status_summary(latest, _log)
 
-            status_serialized = _serialize_status(latest)
-            if outcome == "connected":
-                _set_phase("done", status=status_serialized,
-                           result_message="The vacuum is connected to the local server.",
-                           result_detail="Onboarding complete.",
-                           can_continue=False)
-                _log.ok("Vacuum connected.")
-            elif outcome == "public_key_ready":
-                _set_phase("done", status=status_serialized,
-                           result_message="Public key is ready.",
-                           result_detail="Send the final pairing cycle now to finish the connection.",
-                           can_continue=True)
-            elif outcome == "sample_increased":
-                _set_phase("done", status=status_serialized,
-                           result_message="Sample count increased.",
-                           result_detail="Send the next pairing cycle now to collect more onboarding data.",
-                           can_continue=True)
-            elif outcome == "conflict":
-                _set_phase("done", status=status_serialized,
-                           result_message="Identity conflict detected.",
-                           result_detail=str(latest.get("identity_conflict") or ""),
-                           can_continue=False)
-            elif outcome == "unsupported":
-                _set_phase("done", status=status_serialized,
-                           result_message="Vacuum unsupported.",
-                           result_detail=str(latest.get("guidance") or "This vacuum is not supported by the current onboarding flow."),
-                           can_continue=False)
-            else:
-                timeout_detail = "The server did not observe new onboarding traffic within the timeout."
-                if baseline_has_public_key and bool(latest.get("has_public_key")) and not bool(latest.get("connected")):
-                    timeout_detail = (
-                        "The public key was already ready, but the vacuum did not finish connecting within the timeout. "
-                        "Some models are slow on the final cycle; wait a bit longer or retry."
-                    )
-                _set_phase("done", status=status_serialized,
-                           result_message="Timed out waiting for progress.",
-                           result_detail=timeout_detail,
-                           can_continue=True)
+                status_serialized = _serialize_status(latest)
+                if outcome == "connected":
+                    _set_phase("done", status=status_serialized,
+                               result_message="The vacuum is connected to the local server.",
+                               result_detail="Onboarding complete.",
+                               can_continue=False)
+                    _log.ok("Vacuum connected.")
+                elif outcome == "public_key_ready":
+                    _set_phase("done", status=status_serialized,
+                               result_message="Public key is ready.",
+                               result_detail="Send the final pairing cycle now to finish the connection.",
+                               can_continue=True)
+                elif outcome == "sample_increased":
+                    _set_phase("done", status=status_serialized,
+                               result_message="Sample count increased.",
+                               result_detail="Send the next pairing cycle now to collect more onboarding data.",
+                               can_continue=True)
+                elif outcome == "conflict":
+                    _set_phase("done", status=status_serialized,
+                               result_message="Identity conflict detected.",
+                               result_detail=str(latest.get("identity_conflict") or ""),
+                               can_continue=False)
+                elif outcome == "unsupported":
+                    _set_phase("done", status=status_serialized,
+                               result_message="Vacuum unsupported.",
+                               result_detail=str(latest.get("guidance") or "This vacuum is not supported by the current onboarding flow."),
+                               can_continue=False)
+                else:
+                    timeout_detail = "The server did not observe new onboarding traffic within the timeout."
+                    if baseline_has_public_key and bool(latest.get("has_public_key")) and not bool(latest.get("connected")):
+                        timeout_detail = (
+                            "The public key was already ready, but the vacuum did not finish connecting within the timeout. "
+                            "Some models are slow on the final cycle; wait a bit longer or retry."
+                        )
+                    _set_phase("done", status=status_serialized,
+                               result_message="Still waiting for progress.",
+                               result_detail=timeout_detail + " Keep waiting to monitor this session without resending Wi-Fi settings.",
+                               can_continue=True, can_wait=True)
 
-            result = _wait_for_command({"retry", "reselect", "quit"})
-            if result is None or result[0] == "quit":
-                raise _QuitSignal
-            if result[0] == "reselect":
-                return
+                result = _wait_for_command({"retry", "keep_waiting", "reselect", "quit"})
+                if result is None or result[0] == "quit":
+                    raise _QuitSignal
+                if result[0] == "reselect":
+                    return
+                if result[0] != "keep_waiting":
+                    break
+
     finally:
         try:
             api.delete_session(session_id=session_id)
@@ -1012,13 +1035,20 @@ def _worker_loop() -> None:
 
         try:
             _run_device_loop(api, config)
+        except _EditConfigSignal:
+            _set_phase("needs_config", config=None)
+            continue
         except _QuitSignal:
             _log.info("Quit requested.")
             return
         except Exception as exc:  # noqa: BLE001
             _log.err(f"Fatal error: {exc}")
             _set_phase("error", error_message=str(exc))
-            result = _wait_for_command({"quit", "reselect"})
+            try:
+                result = _wait_for_command({"quit", "reselect"})
+            except _EditConfigSignal:
+                _set_phase("needs_config", config=None)
+                continue
             if result is None or result[0] == "quit":
                 return
             continue
@@ -1047,6 +1077,7 @@ async def get_state(request: Request) -> JSONResponse:
     with _state_lock:
         return JSONResponse({
             "phase": _state.phase,
+            "wifi_ssid": _state.config.ssid if _state.config else "",
             "config_error": _state.config_error,
             "devices": list(_state.devices),
             "target_name": (_state.target or {}).get("name"),
@@ -1056,6 +1087,7 @@ async def get_state(request: Request) -> JSONResponse:
             "result_message": _state.result_message,
             "result_detail": _state.result_detail,
             "can_continue": _state.can_continue,
+            "can_wait": _state.can_wait,
             "error_message": _state.error_message,
             "key_recovery_seconds": _state.key_recovery_seconds,
             "timezones": sorted(_IANA_TO_POSIX.keys()),
@@ -1118,6 +1150,20 @@ async def post_ready(request: Request) -> JSONResponse:
 async def post_retry(request: Request) -> JSONResponse:
     _check_token(request)
     _set_command("retry")
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/keep-waiting")
+async def post_keep_waiting(request: Request) -> JSONResponse:
+    _check_token(request)
+    _set_command("keep_waiting")
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/edit-config")
+async def post_edit_config(request: Request) -> JSONResponse:
+    _check_token(request)
+    _set_command("edit_config")
     return JSONResponse({"ok": True})
 
 

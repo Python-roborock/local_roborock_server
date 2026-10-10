@@ -199,3 +199,12 @@ If you have a smartphone, you can use [LocalRock](roborock_app.md#localrock-thir
 - [Tested vacuums](tested_vacuums.md)
 - [Home Assistant](home_assistant.md)
 - [Mobile App Options](roborock_app.md)
+
+## Confirm the destination network and allow slow reconnects
+
+Before sending, the GUI displays the destination Wi-Fi SSID. Check it is the
+network intended for the vacuum; use **Change Wi-Fi/settings** to correct it.
+After five minutes without progress, **Keep waiting** monitors the same session
+without sending another Wi-Fi packet or requiring another pairing cycle. Use
+**Run another cycle** when another send is intended. See [Camera](camera.md)
+for the firmware-specific bootstrap check performed after device selection.

@@ -663,9 +663,10 @@
         callout.className = "callout info";
         callout.innerHTML = `
           <strong>Join the vacuum hotspot</strong>
-          <div class="sub">Connect this machine to the vacuum's Wi-Fi network, then send the onboarding packet.</div>
+          <div class="sub">Connect this machine to the vacuum's Wi-Fi network, then send the onboarding packet.<br>Vacuum destination Wi-Fi: <strong>${escapeHtml(state.wifi_ssid || '')}</strong>. Confirm this is the intended network.</div>
         `;
         addBtn("Send onboarding", "primary", sendOnboarding);
+        addBtn("Change Wi-Fi/settings", "", () => api("POST", "/api/edit-config"));
         addBtn("Choose another device", "", reselect);
         addBtn("Shut down", "danger", quit);
 
@@ -707,7 +708,8 @@
           <strong>${escapeHtml(state.result_message || "Step complete")}</strong>
           <div class="sub">${escapeHtml(state.result_detail || "")}</div>
         `;
-        if (state.can_continue) addBtn("Run another cycle", "primary", anotherCycle);
+        if (state.can_wait) addBtn("Keep waiting", "primary", () => api("POST", "/api/keep-waiting"));
+        if (state.can_continue) addBtn("Run another cycle", state.can_wait ? "" : "primary", anotherCycle);
         addBtn("Choose another device", "", reselect);
         addBtn("Shut down", "danger", quit);
 
@@ -718,6 +720,7 @@
           <div class="sub">${escapeHtml(state.error_message || "Something went wrong.")}</div>
         `;
         addBtn("Retry", "primary", retry);
+        addBtn("Change Wi-Fi/settings", "", () => api("POST", "/api/edit-config"));
         addBtn("Choose another device", "", reselect);
         addBtn("Shut down", "danger", quit);
       }

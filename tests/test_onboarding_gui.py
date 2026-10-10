@@ -2,6 +2,75 @@ from __future__ import annotations
 
 import pytest
 
+
+def test_gui_keep_waiting_preserves_session_and_does_not_resend(monkeypatch) -> None:
+    import start_onboarding_gui as gui
+    config = gui._build_config_from_payload({
+        "server": "api-vac.cc:556", "admin_password": "secret",
+        "ssid": "Vacuum IOT", "wifi_password": "secret",
+    })
+    class Api:
+        deleted = []
+        def start_session(self, **kw):
+            return {"session_id": "same-session"}
+        def get_session(self, **kw):
+            return {"query_samples": 15, "has_public_key": True}
+        def delete_session(self, **kw):
+            self.deleted.append(kw["session_id"])
+    commands = iter([("send_onboarding", {}), ("keep_waiting", {}), ("reselect", {})])
+    monkeypatch.setattr(gui, "_wait_for_command", lambda *a, **kw: next(commands))
+    monkeypatch.setattr(gui, "_wait_for_reachability", lambda *a, **kw: True)
+    sends = []
+    monkeypatch.setattr(gui, "onboard_once", lambda *a: sends.append(a) or True)
+    polls = []
+    outcomes = iter([("timeout", {}), ("connected", {"connected": True})])
+    def poll(*args, **kw):
+        polls.append((args[1], args[2], kw["baseline_has_public_key"]))
+        return next(outcomes)
+    monkeypatch.setattr(gui, "_poll_until_progress", poll)
+    api = Api()
+    gui._run_onboarding_for_device(api, config, {"duid": "vacuum", "name": "Vacuum"})
+    assert len(sends) == 1
+    assert polls == [("same-session", 15, True), ("same-session", 15, True)]
+    assert api.deleted == ["same-session"]
+
+
+def test_gui_edit_config_unwinds_wait_without_sending(monkeypatch) -> None:
+    import start_onboarding_gui as gui
+    monkeypatch.setattr(gui, "_state", gui._SharedState(pending_command="edit_config"))
+    with pytest.raises(gui._EditConfigSignal):
+        gui._wait_for_command({"send_onboarding", "quit"})
+
+
+def test_gui_edit_config_is_discarded_at_initial_config_wait(monkeypatch):
+    import start_onboarding_gui as gui
+    monkeypatch.setattr(gui, "_state", gui._SharedState(pending_command="edit_config"))
+    assert gui._wait_for_command({"submit_config", "quit"}, timeout=0.001) is None
+    assert gui._state.pending_command is None
+
+
+def test_gui_worker_survives_edit_config_after_fatal_device_error(monkeypatch):
+    import start_onboarding_gui as gui
+    payload = {"server": "api-vac.cc", "admin_password": "secret", "ssid": "IOT", "wifi_password": "secret"}
+    calls = 0
+    def command(expected):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return "submit_config", payload
+        if calls == 2:
+            raise gui._EditConfigSignal
+        return None
+    monkeypatch.setattr(gui, "_wait_for_command", command)
+    monkeypatch.setattr(gui, "perform_onboarding_preflight", lambda **kw: None)
+    def fail(*a):
+        raise RuntimeError("temporary server error")
+    monkeypatch.setattr(gui, "_run_device_loop", fail)
+    monkeypatch.setattr(gui, "_state", gui._SharedState())
+    gui._worker_loop()
+    assert calls == 3
+    assert gui._state.phase == "needs_config"
+
 from start_onboarding_gui import (
     _IANA_TO_COUNTRY,
     _build_config_from_payload,
@@ -265,34 +334,3 @@ def test_build_config_from_payload_camera_domain_formats_and_validates() -> None
         }
         with pytest.raises(ValueError, match=expected_err):
             _build_config_from_payload(payload_invalid)
-
-
-
-def test_build_config_from_payload_long_country_domain_warns_and_succeeds() -> None:
-    payload = {
-        "server": "api-roborock.example.com",
-        "admin_password": "pw",
-        "ssid": "my-wifi",
-        "wifi_password": "pw",
-        "country_domain": "custom-region-longer-than-limit",
-    }
-    cfg = _build_config_from_payload(payload)
-    assert cfg.country_domain == "custom-region-longer-than-limit"
-    assert any("is longer than 14 characters" in entry["msg"] for entry in _log.snapshot())
-
-
-def test_build_config_from_payload_15_char_without_slash_warns() -> None:
-    payload = {
-        "server": "api-roborock.example.com",
-        "admin_password": "pw",
-        "ssid": "my-wifi",
-        "wifi_password": "pw",
-        "country_domain": "123456789012345",  # 15 chars, no slash
-    }
-    cfg = _build_config_from_payload(payload)
-    assert cfg.country_domain == "123456789012345"
-    assert any("Notice: Region '123456789012345' is longer than 14 characters" in entry["msg"] or "is longer than 14 characters" in entry["msg"] for entry in _log.snapshot())
-
-
-
-

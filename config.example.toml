@@ -52,13 +52,18 @@ protocol_login_pin_hash = "pbkdf2_sha256$600000$replace_me$replace_me"
 
 [turn]
 # TURN/STUN server advertised to the robot so the camera (live video) preview can
-# complete locally. Leave enabled = false unless you run a TURN server (e.g. coturn)
-# reachable by the robot. See docs/camera.md. Camera also needs a short onboarding
-# region (<=14 chars + trailing '/') so the robot's fwapi host resolves here.
-enabled = false
-host = ""            # defaults to network.stack_fqdn when empty
+# complete locally. Set mode to provided to run coturn in this container, or
+# external to advertise an existing TURN server. Leave disabled to omit TURN.
+# See docs/camera.md. The camera input used by the selected model must fit
+# within 15 chars including any port and a trailing '/'. DNS and trusted TLS
+# must cover that camera host/port. Unknown models conservatively need both
+# token.r and country_domain endpoints configured.
+# Provided mode requires publishing the listener + UDP49160-49179; Compose
+# users must enable compose.turn.yaml. HA users must enable Network mappings.
+mode = "disabled"     # disabled | provided | external
+host = "api-roborock.example.com"  # reachable relay hostname
 port = 3478
 username = ""
 password = ""
-realm = ""           # defaults to host when empty
+realm = "api-roborock.example.com"
 ttl = 86400
