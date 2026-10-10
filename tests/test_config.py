@@ -2,6 +2,26 @@ from pathlib import Path
 import pytest
 
 from roborock_local_server.config import load_config, resolve_paths
+from conftest import write_release_config
+
+
+def test_turn_config_defaults_and_rejects_unsafe_provided_credentials(tmp_path):
+    path = write_release_config(tmp_path)
+    base = path.read_text()
+    path.write_text(base + '\n[turn]\nmode="provided"\nhost="relay.example"\npassword="secret"\n')
+    config = load_config(path)
+    assert config.turn.realm == "relay.example"
+    assert config.turn.username == "roborock"
+    path.write_text(base + '\n[turn]\nmode="provided"\nhost="relay.example"\npassword="bad:secret"\n')
+    with pytest.raises(ValueError, match="turn.password cannot"):
+        load_config(path)
+
+
+def test_turn_config_rejects_nonpositive_ttl(tmp_path):
+    path = write_release_config(tmp_path)
+    path.write_text(path.read_text() + '\n[turn]\nmode="external"\nhost="relay.example"\nusername="user"\npassword="secret"\nttl=0\n')
+    with pytest.raises(ValueError, match="turn.ttl must"):
+        load_config(path)
 
 
 def test_load_config_and_resolve_paths(tmp_path: Path) -> None:

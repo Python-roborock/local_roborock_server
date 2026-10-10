@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -7,9 +8,31 @@ from roborock.data import HomeData
 
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
+from roborock_local_server.config import TurnConfig
 from roborock_local_server.server import ReleaseSupervisor, resolve_route
 from shared.constants import DEFAULT_PRODUCT_SCHEMA
 from shared.protocol_auth import ProtocolAuthStore, build_hawk_authorization
+
+
+def test_camera_bootstrap_preserves_firmware_contract_and_redacts_persisted_password(tmp_path):
+    config_file = write_release_config(tmp_path)
+    config = replace(load_config(config_file), turn=TurnConfig(mode="external", host="turn.example.com",
+        username="viewer", password="camera-test-secret", realm="turn.example.com"))
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+    response = client.post("/iot.roborock.com/fwapi/createca", json={})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] == payload["result"]
+    assert payload["data"]["pwd"] == payload["data"]["credential"] == "camera-test-secret"
+    log = supervisor.context.http_jsonl.read_text()
+    assert "camera-test-secret" not in log
+    entry = json.loads(log.splitlines()[-1])
+    assert entry["response_json"]["data"]["pwd"] == "<redacted>"
+    assert entry["response_json"]["data"]["credential"] == "<redacted>"
+    assert entry["response_json"]["result"]["pwd"] == "<redacted>"
+    assert entry["response_json"]["result"]["credential"] == "<redacted>"
 
 
 def _scene_zone_step(

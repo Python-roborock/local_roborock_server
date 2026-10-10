@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from io import StringIO
 
 import pytest
@@ -14,9 +15,11 @@ from start_onboarding import (
     normalize_api_base_url,
     poll_session_until_progress,
     posix_tz_from_iana,
+    prompt_for_config,
     run_guided_onboarding,
     sanitize_stack_server,
 )
+
 
 
 class FakeApi:
@@ -720,3 +723,53 @@ def test_posix_tz_from_iana_supports_extended_european_timezones() -> None:
     assert posix_tz_from_iana("Europe/Vienna") == "CET-1CEST,M3.5.0,M10.5.0/3"
     assert posix_tz_from_iana("Europe/Rome") == "CET-1CEST,M3.5.0,M10.5.0/3"
     assert posix_tz_from_iana("Europe/Moscow") == "MSK-3"
+
+
+def test_prompt_for_config_camera_domain_formats_and_validates() -> None:
+    args = argparse.Namespace(
+        server="api-roborock.example.com",
+        admin_password="pw",
+        ssid="my-wifi",
+        password="pw",
+        timezone="America/New_York",
+        cst="EST5EDT",
+        country_domain="",
+        camera_domain="myvac.cc",
+        allow_insecure_tls=False,
+    )
+    cfg = prompt_for_config(args)
+    assert cfg.country_domain == "myvac.cc/"
+
+    args_too_long = argparse.Namespace(
+        server="api-roborock.example.com",
+        admin_password="pw",
+        ssid="my-wifi",
+        password="pw",
+        timezone="America/New_York",
+        cst="EST5EDT",
+        country_domain="",
+        camera_domain="way-too-long-domain.example.com",
+        allow_insecure_tls=False,
+    )
+    with pytest.raises(ValueError, match="exceeds the 14-character limit"):
+        prompt_for_config(args_too_long)
+
+    for invalid_val, expected_err in [
+        ("https://myvac.cc", "Camera domain must be a hostname without a scheme"),
+        ("myvac.cc:3478", "Camera domain must be a hostname without a port"),
+        ("myvac.cc/path", "Camera domain must be a hostname without a path"),
+        ("my vac.cc", "must be a valid hostname"),
+    ]:
+        args_invalid = argparse.Namespace(
+            server="api-roborock.example.com",
+            admin_password="pw",
+            ssid="my-wifi",
+            password="pw",
+            timezone="America/New_York",
+            cst="EST5EDT",
+            country_domain="",
+            camera_domain=invalid_val,
+            allow_insecure_tls=False,
+        )
+        with pytest.raises(ValueError, match=expected_err):
+            prompt_for_config(args_invalid)

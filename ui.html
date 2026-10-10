@@ -451,10 +451,17 @@
                     </div>
 
                     <div class="field">
+                        <label for="cfg-camera">Camera domain (optional, max 14 chars)</label>
+                        <input id="cfg-camera" placeholder="e.g. myvac.cc" autocomplete="off" />
+                        <div class="hint">For local TURN camera streaming. Formats with trailing slash and validates 15-char limit.</div>
+                    </div>
+
+                    <div class="field">
                         <label for="cfg-cst">POSIX TZ string</label>
                         <input id="cfg-cst" placeholder="optional" autocomplete="off" />
                         <div class="hint">Leave blank unless you need to override it.</div>
                     </div>
+
 
                     <div id="cfg-err" class="callout err hidden"></div>
 
@@ -656,9 +663,10 @@
         callout.className = "callout info";
         callout.innerHTML = `
           <strong>Join the vacuum hotspot</strong>
-          <div class="sub">Connect this machine to the vacuum's Wi-Fi network, then send the onboarding packet.</div>
+          <div class="sub">Connect this machine to the vacuum's Wi-Fi network, then send the onboarding packet.<br>Vacuum destination Wi-Fi: <strong>${escapeHtml(state.wifi_ssid || '')}</strong>. Confirm this is the intended network.</div>
         `;
         addBtn("Send onboarding", "primary", sendOnboarding);
+        addBtn("Change Wi-Fi/settings", "", () => api("POST", "/api/edit-config"));
         addBtn("Choose another device", "", reselect);
         addBtn("Shut down", "danger", quit);
 
@@ -700,7 +708,8 @@
           <strong>${escapeHtml(state.result_message || "Step complete")}</strong>
           <div class="sub">${escapeHtml(state.result_detail || "")}</div>
         `;
-        if (state.can_continue) addBtn("Run another cycle", "primary", anotherCycle);
+        if (state.can_wait) addBtn("Keep waiting", "primary", () => api("POST", "/api/keep-waiting"));
+        if (state.can_continue) addBtn("Run another cycle", state.can_wait ? "" : "primary", anotherCycle);
         addBtn("Choose another device", "", reselect);
         addBtn("Shut down", "danger", quit);
 
@@ -711,6 +720,7 @@
           <div class="sub">${escapeHtml(state.error_message || "Something went wrong.")}</div>
         `;
         addBtn("Retry", "primary", retry);
+        addBtn("Change Wi-Fi/settings", "", () => api("POST", "/api/edit-config"));
         addBtn("Choose another device", "", reselect);
         addBtn("Shut down", "danger", quit);
       }
@@ -727,9 +737,11 @@
           wifi_password: $("cfg-wifi").value,
           timezone: $("cfg-tz").value,
           country_domain: $("cfg-country").value,
+          camera_domain: $("cfg-camera").value,
           cst: $("cfg-cst").value,
         });
       } catch (e) {
+
         $("cfg-err").innerHTML = `<strong>Could not continue</strong><div class="sub">${escapeHtml(e.message)}</div>`;
         $("cfg-err").classList.remove("hidden");
       } finally {
