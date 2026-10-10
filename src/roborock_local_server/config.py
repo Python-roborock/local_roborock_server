@@ -72,12 +72,32 @@ class AdminConfig:
 
 
 @dataclass(frozen=True)
+class TurnConfig:
+    """TURN/STUN server advertised to the robot for camera (live video) sessions.
+
+    When ``enabled`` is true the ``/fwapi/createca`` route answers the robot's TURN
+    credential request with this server, which lets the WebRTC preview complete
+    locally instead of reaching the Roborock cloud. When false the request falls
+    through to the catchall and the camera simply stays unavailable, as before.
+    """
+
+    enabled: bool
+    host: str
+    port: int
+    username: str
+    password: str
+    realm: str
+    ttl: int
+
+
+@dataclass(frozen=True)
 class AppConfig:
     network: NetworkConfig
     broker: BrokerConfig
     storage: StorageConfig
     tls: TlsConfig
     admin: AdminConfig
+    turn: TurnConfig
 
 
 @dataclass(frozen=True)
@@ -223,6 +243,7 @@ def load_config(path: str | Path) -> AppConfig:
     storage = _get_section(parsed, "storage")
     tls = _get_section(parsed, "tls")
     admin = _get_section(parsed, "admin")
+    turn = _get_section(parsed, "turn")
     broker_mode = str(broker.get("mode", "embedded")).strip().lower()
     if broker_mode not in {"embedded", "external"}:
         raise ValueError("broker.mode must be 'embedded' or 'external'")
@@ -316,6 +337,15 @@ def load_config(path: str | Path) -> AppConfig:
                 admin.get("protocol_login_pin_hash"),
                 "admin.protocol_login_pin_hash",
             ),
+        ),
+        turn=TurnConfig(
+            enabled=_as_bool(turn.get("enabled"), False),
+            host=str(turn.get("host", "")).strip(),
+            port=_as_port(turn.get("port"), "turn.port", 3478),
+            username=str(turn.get("username", "")).strip(),
+            password=str(turn.get("password", "")).strip(),
+            realm=str(turn.get("realm", "")).strip(),
+            ttl=_as_int(turn.get("ttl"), "turn.ttl", 86400),
         ),
     )
 
