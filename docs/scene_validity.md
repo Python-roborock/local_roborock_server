@@ -20,11 +20,20 @@ or execute scenes. Runtime scene execution continues to use the saved action
 definitions. When protocol authentication is enabled, the existing `/user/`
 Hawk authentication gate applies.
 
-The success response preserves the acknowledgement accepted by the app when
-this endpoint used the fallback handler: the usual success envelope containing
-`{"ok":true,"route":"/user/scene/validity"}` in `data` and `result`. This is
-local compatibility behavior; an upstream cloud response has not been captured
-to establish its exact response body.
+The success response matches an authenticated replay to Roborock's US cloud
+API on 2026-10-10. The original app request bytes were sent to
+`PUT https://api-us.roborock.com/user/scene/validity` with a fresh Hawk timestamp
+and nonce. The captured request signature was verified before replaying it.
+The server returned HTTP **200**, `Content-Type: application/json`, and:
+
+```json
+{"api":null,"result":null,"status":"ok","success":true}
+```
+
+This response is retained as `tests/fixtures/scene_validity_cloud_success.json`.
+The previous generic fallback's `code`, `msg`, `data`, and route echo are absent.
+Only the successful app-shaped request was probed; malformed-request response
+behavior and whether the cloud persisted the report have not been verified.
 
 Bodies that are not JSON arrays receive a local error envelope
 (`success:false`, `code:400`) before any inventory write. Unsupported individual
@@ -37,5 +46,5 @@ envelopes; `code:400` is the JSON error code, rather than a transport status.
 Reported action IDs
 are persisted as provided; the server does not infer whether they are invalid.
 Inventory updates use the shared transaction lock and atomic writer. If the
-write fails, a warning is logged while the established success acknowledgement
+write fails, a warning is logged while the observed cloud success acknowledgement
 is preserved; the client cannot rely on that acknowledgement to prove persistence.

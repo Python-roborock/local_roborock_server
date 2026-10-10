@@ -8,7 +8,6 @@ from typing import Any
 
 from shared.context import ServerContext
 from shared.data_helpers import as_int
-from shared.http_helpers import wrap_response
 from shared.inventory_io import WEB_API_INVENTORY_FILE, inventory_transaction, load_inventory, write_inventory
 from shared.routine_runner import RoutineExecutionError
 
@@ -104,13 +103,12 @@ def build(
     ctx: ServerContext,
     _query_params: dict[str, list[str]],
     body_params: dict[str, list[str]],
-    clean_path: str,
+    _clean_path: str,
 ) -> dict[str, Any]:
     try:
         _persist(ctx, _reports(body_params))
     except RoutineExecutionError as exc:
         _LOGGER.warning("Scene validity rejected: %s", exc)
         return {"success": False, "code": 400, "msg": str(exc), "data": None, "result": None}
-    # Preserve the acknowledgement accepted by the app before this route existed.
-    # A cloud response capture is still needed to establish the upstream body.
-    return wrap_response({"ok": True, "route": clean_path})
+    # Observed from the cloud API after an authenticated app-report replay.
+    return {"api": None, "result": None, "status": "ok", "success": True}

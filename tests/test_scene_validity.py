@@ -8,6 +8,10 @@ from roborock_local_server.server import ReleaseSupervisor
 from test_scene_delete import _ctx, _write
 
 
+# Cloud response captured 2026-10-10 by replaying an authenticated app report.
+CLOUD_SUCCESS = json.loads((Path(__file__).parent / "fixtures" / "scene_validity_cloud_success.json").read_text(encoding="utf-8"))
+
+
 def _resolve(tmp_path: Path, reports, *, method="PUT", path="/user/scene/validity"):
     raw = json.dumps(reports)
     return resolve_route(
@@ -28,8 +32,7 @@ def test_reports_persist_and_clear_without_changing_actions(tmp_path):
     path = _write(tmp_path, inventory)
     route, response = _resolve(tmp_path, [{"sceneId": "42", "extra": '{"invalidActions":[1,3]}'}])
     assert route == "put_scene_validity"
-    assert response["data"] == response["result"] == {"ok": True, "route": "/user/scene/validity"}
-    assert response["success"] is True
+    assert response == CLOUD_SUCCESS
     saved = json.loads(path.read_text())
     for key in ("scenes", "home_scenes"):
         scene = saved[key][0]
@@ -144,7 +147,6 @@ def test_write_failure_is_logged_without_changing_ack(tmp_path, monkeypatch, cap
     original = path.read_bytes()
     monkeypatch.setattr("https_server.routes.user.scene.validity.write_inventory", lambda *_: False)
     response = _resolve(tmp_path, [{"sceneId": "42", "extra": '{"invalidActions":[1]}'}])[1]
-    assert response["success"] is True
-    assert response["data"] == {"ok": True, "route": "/user/scene/validity"}
+    assert response == CLOUD_SUCCESS
     assert "Scene validity inventory write failed" in caplog.text
     assert path.read_bytes() == original
