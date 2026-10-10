@@ -582,4 +582,3 @@ def test_empty_generated_turn_password_is_replaced_atomically(tmp_path, monkeypa
     write_config_from_home_assistant_options(options_path=options_path, config_path=tmp_path / "config.toml")
     assert replacements == [password_path]
     assert len(password_path.read_text()) >= 32
-

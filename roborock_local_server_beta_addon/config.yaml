@@ -117,4 +117,3 @@ schema:
   turn_password: password?
   turn_realm: str?
   turn_ttl: int?
-
