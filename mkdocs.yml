@@ -59,6 +59,7 @@ nav:
   - Reference:
     - Firmware Device Information: device-info.md
     - Known Limitations: known_limitations.md
+    - Scene Validity Reports: scene_validity.md
     - Tested Vacuums: tested_vacuums.md
     - Reverse Proxy: reverse_proxy.md
     - Custom MQTT: custom_mqtt.md

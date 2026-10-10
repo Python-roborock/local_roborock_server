@@ -52,6 +52,7 @@ from .backend import (
 )
 from shared.inventory_io import atomic_write_inventory, inventory_transaction
 from shared.protocol_auth import ProtocolAuthStore
+from https_server.routes.user.scene import validity as scene_validity
 from https_server.routes.auth.service import (
     build_login_data_response,
     cloud_login_data_required_response,
@@ -924,6 +925,7 @@ class ReleaseSupervisor:
                 body_params,
                 "code",
                 "verifyCode",
+                "verifycode",
                 "emailCode",
                 "smsCode",
             )
@@ -1216,6 +1218,8 @@ class ReleaseSupervisor:
             if not authenticated:
                 route_name = f"{required_auth}_auth_failed"
                 status_code, response_payload = self._protocol_auth_failure_response(auth_reason, required_auth)
+                if scene_validity.match(clean_path, request.method):
+                    response_payload = scene_validity.error_response(unauthorized=True)
                 entry["route"] = route_name
                 entry["response_json"] = response_payload
                 try:
@@ -1371,7 +1375,8 @@ class ReleaseSupervisor:
             route_name,
             body_sha256[:16],
         )
-        return JSONResponse(response_payload)
+        status_code = 400 if route_name == "put_scene_validity" and response_payload.get("status") == "BAD_REQUEST" else 200
+        return JSONResponse(response_payload, status_code=status_code)
 
     def _status_payload(self) -> dict[str, Any]:
         health = self.runtime_state.health_snapshot()
