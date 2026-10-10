@@ -32,6 +32,13 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "admin_password": "",
     "protocol_login_email": "",
     "protocol_login_pin": "",
+    "turn_enabled": False,
+    "turn_host": "",
+    "turn_port": 3478,
+    "turn_username": "",
+    "turn_password": "",
+    "turn_realm": "",
+    "turn_ttl": 86400,
 }
 
 _HOST_RE = re.compile(r"^[a-z0-9.-]+$")
@@ -84,6 +91,18 @@ def _as_int(value: object, *, field_name: str, default: int) -> int:
         raise ValueError(f"{field_name} must be an integer") from exc
     if not (1 <= candidate <= 65535):
         raise ValueError(f"{field_name} must be between 1 and 65535")
+    return candidate
+
+
+def _as_positive_int(value: object, *, field_name: str, default: int) -> int:
+    if value in (None, ""):
+        return default
+    try:
+        candidate = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+    if candidate <= 0:
+        raise ValueError(f"{field_name} must be greater than 0")
     return candidate
 
 
@@ -231,6 +250,14 @@ def _render_config_toml(
     acme_eab_kid_file = str(acme_eab_kid_path) if acme_server == "actalis" else ""
     acme_eab_hmac_key_file = str(acme_eab_hmac_key_path) if acme_server == "actalis" else ""
 
+    turn_enabled = bool(merged.get("turn_enabled", False))
+    turn_host = str(merged.get("turn_host", "") or "").strip()
+    turn_port = _as_int(merged.get("turn_port"), field_name="turn_port", default=3478)
+    turn_username = str(merged.get("turn_username", "") or "").strip()
+    turn_password = str(merged.get("turn_password", "") or "").strip()
+    turn_realm = str(merged.get("turn_realm", "") or "").strip()
+    turn_ttl = _as_positive_int(merged.get("turn_ttl"), field_name="turn_ttl", default=86400)
+
     lines = [
         "[network]",
         f"stack_fqdn = {_toml_string(stack_fqdn)}",
@@ -297,6 +324,15 @@ def _render_config_toml(
             f"new_connections_enabled = {_toml_bool(new_connections_enabled)}",
             f"protocol_login_email = {_toml_string(protocol_login_email)}",
             f"protocol_login_pin_hash = {_toml_string(protocol_login_pin_hash)}",
+            "",
+            "[turn]",
+            f"enabled = {_toml_bool(turn_enabled)}",
+            f"host = {_toml_string(turn_host)}",
+            f"port = {turn_port}",
+            f"username = {_toml_string(turn_username)}",
+            f"password = {_toml_string(turn_password)}",
+            f"realm = {_toml_string(turn_realm)}",
+            f"ttl = {turn_ttl}",
             "",
         ]
     )

@@ -481,3 +481,43 @@ def test_write_config_from_home_assistant_options_removes_stale_cloudflare_token
     assert token_path.exists() is False
     assert kid_path.exists() is False
     assert hmac_path.exists() is False
+
+
+def test_write_config_from_home_assistant_options_renders_turn_settings(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+
+    _write_options(
+        options_path,
+        {
+            "stack_fqdn": "api-roborock.example.com",
+            "tls_mode": "provided",
+            "cert_file": "/ssl/fullchain.pem",
+            "key_file": "/ssl/privkey.pem",
+            "admin_password": "super-secret-password",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "123456",
+            "turn_enabled": True,
+            "turn_host": "turn.example.com",
+            "turn_port": 3478,
+            "turn_username": "rrturn",
+            "turn_password": "secretpassword",
+            "turn_realm": "turn.example.com",
+            "turn_ttl": 86400,
+        },
+    )
+
+    write_config_from_home_assistant_options(
+        options_path=options_path,
+        config_path=config_path,
+    )
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["turn"]["enabled"] is True
+    assert parsed["turn"]["host"] == "turn.example.com"
+    assert parsed["turn"]["port"] == 3478
+    assert parsed["turn"]["username"] == "rrturn"
+    assert parsed["turn"]["password"] == "secretpassword"
+    assert parsed["turn"]["realm"] == "turn.example.com"
+    assert parsed["turn"]["ttl"] == 86400
+

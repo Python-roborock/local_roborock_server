@@ -14,9 +14,13 @@ arch:
 ports:
   555/tcp: 555
   8881/tcp: 8881
+  3478/tcp: 3478
+  3478/udp: 3478
 ports_description:
   555/tcp: Roborock HTTPS API
   8881/tcp: Roborock MQTT TLS proxy
+  3478/tcp: Roborock WebRTC TURN server (TCP)
+  3478/udp: Roborock WebRTC TURN server (UDP)
 map:
   - ssl:ro
   - addon_config:rw
@@ -41,6 +45,12 @@ options:
   admin_password: ""
   protocol_login_email: ""
   protocol_login_pin: ""
+  turn_enabled: false
+  turn_host: ""
+  turn_port: 3478
+  turn_username: ""
+  turn_password: ""
+  turn_realm: ""
 schema:
   stack_fqdn: str
   https_port: port
@@ -60,3 +70,9 @@ schema:
   admin_password: password
   protocol_login_email: email
   protocol_login_pin: password
+  turn_enabled: bool?
+  turn_host: str?
+  turn_port: port?
+  turn_username: str?
+  turn_password: password?
+  turn_realm: str?

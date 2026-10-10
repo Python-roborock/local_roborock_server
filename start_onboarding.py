@@ -438,6 +438,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cst", default="")
     parser.add_argument("--country-domain", default="")
     parser.add_argument(
+        "--camera-domain",
+        default="",
+        help="Optional domain for local camera TURN bootstrap (must be 14 characters or fewer; trailing slash appended automatically).",
+    )
+    parser.add_argument(
         "--allow-insecure-tls",
         action="store_true",
         help="Skip TLS certificate verification for the admin API and MQTT preflight checks.",
@@ -457,7 +462,7 @@ def _prompt_text(value: str, prompt: str, *, default: str = "", secret: bool = F
         print("A value is required.")
 
 
-def prompt_for_config(args: argparse.Namespace) -> GuidedOnboardingConfig:
+def prompt_for_config(args: argparse.Namespace, output: TextIO = sys.stdout) -> GuidedOnboardingConfig:
     api_base_url = normalize_api_base_url(args.server)
     stack_server = sanitize_stack_server(args.server)
     admin_password = _prompt_text(args.admin_password, "Admin password", secret=True)
@@ -469,11 +474,30 @@ def prompt_for_config(args: argparse.Namespace) -> GuidedOnboardingConfig:
         cst = posix_tz_from_iana(timezone)
     if not cst:
         cst = _prompt_text("", "POSIX TZ string (could not auto-detect from timezone)", default=DEFAULT_CST)
+    camera_domain = str(getattr(args, "camera_domain", "") or "").strip()
     country_domain = str(args.country_domain or "").strip()
-    if not country_domain:
+    if camera_domain:
+        if not camera_domain.endswith("/"):
+            camera_domain = f"{camera_domain}/"
+        if len(camera_domain) > 15:
+            raise ValueError(
+                f"Camera domain '{camera_domain}' exceeds the 15-character firmware limit "
+                f"({len(camera_domain)} > 15 chars including trailing slash). "
+                f"Use a shorter hostname (14 chars or fewer)."
+            )
+        country_domain = camera_domain
+    elif not country_domain:
         country_domain = country_from_iana(timezone)
-    if not country_domain:
-        country_domain = _prompt_text("", "Country domain (could not auto-detect from timezone)", default=DEFAULT_COUNTRY_DOMAIN)
+        if not country_domain:
+            country_domain = _prompt_text("", "Country domain (could not auto-detect from timezone)", default=DEFAULT_COUNTRY_DOMAIN)
+
+    if len(country_domain) > 15:
+        output.write(
+            f"Notice: Region '{country_domain}' is longer than 14 characters ({len(country_domain)} chars). "
+            f"The vacuum firmware truncates region strings to 15 characters, so local camera streaming (TURN) "
+            f"will not be available on camera-equipped vacuums with this region. "
+            f"Standard vacuum control is unaffected.\n"
+        )
     return GuidedOnboardingConfig(
         api_base_url=api_base_url,
         stack_server=stack_server,

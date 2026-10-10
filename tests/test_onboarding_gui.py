@@ -4,12 +4,16 @@ import pytest
 
 from start_onboarding_gui import (
     _IANA_TO_COUNTRY,
+    _build_config_from_payload,
+    _log,
     _poll_until_progress,
     country_from_iana,
     normalize_api_base_url,
     posix_tz_from_iana,
     sanitize_stack_server,
 )
+
+
 
 
 @pytest.mark.parametrize(
@@ -223,3 +227,41 @@ def test_gui_country_from_iana_unknown_or_fallback() -> None:
 def test_gui_posix_tz_from_iana_supports_extended_timezones() -> None:
     assert posix_tz_from_iana("Europe/Vienna") == "CET-1CEST,M3.5.0,M10.5.0/3"
     assert posix_tz_from_iana("Europe/Moscow") == "MSK-3"
+
+
+def test_build_config_from_payload_camera_domain_formats_and_validates() -> None:
+    payload = {
+        "server": "api-roborock.example.com",
+        "admin_password": "pw",
+        "ssid": "my-wifi",
+        "wifi_password": "pw",
+        "camera_domain": "myvac.cc",
+    }
+    cfg = _build_config_from_payload(payload)
+    assert cfg.country_domain == "myvac.cc/"
+
+    payload_too_long = {
+        "server": "api-roborock.example.com",
+        "admin_password": "pw",
+        "ssid": "my-wifi",
+        "wifi_password": "pw",
+        "camera_domain": "way-too-long-domain.example.com",
+    }
+    with pytest.raises(ValueError, match="exceeds the 15-character firmware limit"):
+        _build_config_from_payload(payload_too_long)
+
+
+def test_build_config_from_payload_long_country_domain_warns_and_succeeds() -> None:
+    payload = {
+        "server": "api-roborock.example.com",
+        "admin_password": "pw",
+        "ssid": "my-wifi",
+        "wifi_password": "pw",
+        "country_domain": "custom-region-longer-than-limit",
+    }
+    cfg = _build_config_from_payload(payload)
+    assert cfg.country_domain == "custom-region-longer-than-limit"
+    assert any("is longer than 14 characters" in entry["msg"] for entry in _log.snapshot())
+
+
+

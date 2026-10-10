@@ -81,13 +81,13 @@ class TurnConfig:
     through to the catchall and the camera simply stays unavailable, as before.
     """
 
-    enabled: bool
-    host: str
-    port: int
-    username: str
-    password: str
-    realm: str
-    ttl: int
+    enabled: bool = False
+    host: str = ""
+    port: int = 3478
+    username: str = ""
+    password: str = ""
+    realm: str = ""
+    ttl: int = 86400
 
 
 @dataclass(frozen=True)
@@ -97,7 +97,7 @@ class AppConfig:
     storage: StorageConfig
     tls: TlsConfig
     admin: AdminConfig
-    turn: TurnConfig
+    turn: TurnConfig = TurnConfig()
 
 
 @dataclass(frozen=True)

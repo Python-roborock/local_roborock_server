@@ -628,7 +628,28 @@ def _build_config_from_payload(payload: dict[str, Any]) -> GuidedOnboardingConfi
         raise ValueError("Home Wi-Fi password is required.")
     timezone = str(payload.get("timezone") or "").strip() or DEFAULT_TIMEZONE
     cst = str(payload.get("cst") or "").strip() or posix_tz_from_iana(timezone) or DEFAULT_CST
-    country_domain = str(payload.get("country_domain") or "").strip() or country_from_iana(timezone) or DEFAULT_COUNTRY_DOMAIN
+    camera_domain = str(payload.get("camera_domain") or "").strip()
+    country_domain = str(payload.get("country_domain") or "").strip()
+    if camera_domain:
+        if not camera_domain.endswith("/"):
+            camera_domain = f"{camera_domain}/"
+        if len(camera_domain) > 15:
+            raise ValueError(
+                f"Camera domain '{camera_domain}' exceeds the 15-character firmware limit "
+                f"({len(camera_domain)} > 15 chars including trailing slash). "
+                f"Use a shorter hostname (14 chars or fewer)."
+            )
+        country_domain = camera_domain
+    elif not country_domain:
+        country_domain = country_from_iana(timezone) or DEFAULT_COUNTRY_DOMAIN
+
+    if len(country_domain) > 15:
+        _log.warn(
+            f"Region '{country_domain}' is longer than 14 characters ({len(country_domain)} chars). "
+            f"The vacuum firmware truncates region strings to 15 characters, so local camera streaming (TURN) "
+            f"will not be available on camera-equipped vacuums with this region. "
+            f"Standard vacuum control is unaffected."
+        )
     return GuidedOnboardingConfig(
         api_base_url=api_base_url,
         stack_server=stack_server,
@@ -1056,6 +1077,7 @@ class ConfigPayload(BaseModel):
     wifi_password: str
     timezone: str = ""
     country_domain: str = ""
+    camera_domain: str = ""
     cst: str = ""
 
 

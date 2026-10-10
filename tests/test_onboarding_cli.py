@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from io import StringIO
 
 import pytest
@@ -14,9 +15,11 @@ from start_onboarding import (
     normalize_api_base_url,
     poll_session_until_progress,
     posix_tz_from_iana,
+    prompt_for_config,
     run_guided_onboarding,
     sanitize_stack_server,
 )
+
 
 
 class FakeApi:
@@ -720,3 +723,58 @@ def test_posix_tz_from_iana_supports_extended_european_timezones() -> None:
     assert posix_tz_from_iana("Europe/Vienna") == "CET-1CEST,M3.5.0,M10.5.0/3"
     assert posix_tz_from_iana("Europe/Rome") == "CET-1CEST,M3.5.0,M10.5.0/3"
     assert posix_tz_from_iana("Europe/Moscow") == "MSK-3"
+
+
+def test_prompt_for_config_camera_domain_formats_and_validates() -> None:
+    args = argparse.Namespace(
+        server="api-roborock.example.com",
+        admin_password="pw",
+        ssid="my-wifi",
+        password="pw",
+        timezone="America/New_York",
+        cst="EST5EDT",
+        country_domain="",
+        camera_domain="myvac.cc",
+        allow_insecure_tls=False,
+    )
+    cfg = prompt_for_config(args)
+    assert cfg.country_domain == "myvac.cc/"
+
+    args_too_long = argparse.Namespace(
+        server="api-roborock.example.com",
+        admin_password="pw",
+        ssid="my-wifi",
+        password="pw",
+        timezone="America/New_York",
+        cst="EST5EDT",
+        country_domain="",
+        camera_domain="way-too-long-domain.example.com",
+        allow_insecure_tls=False,
+    )
+    with pytest.raises(ValueError, match="exceeds the 15-character firmware limit"):
+        prompt_for_config(args_too_long)
+
+
+def test_prompt_for_config_long_country_domain_warns_but_succeeds() -> None:
+    output = StringIO()
+    args = argparse.Namespace(
+        server="api-roborock.example.com",
+        admin_password="pw",
+        ssid="my-wifi",
+        password="pw",
+        timezone="America/New_York",
+        cst="EST5EDT",
+        country_domain="custom-region-longer-than-limit",
+        camera_domain="",
+        allow_insecure_tls=False,
+    )
+    cfg = prompt_for_config(args, output=output)
+    assert cfg.country_domain == "custom-region-longer-than-limit"
+    text = output.getvalue()
+    assert "Notice: Region 'custom-region-longer-than-limit' is longer than 14 characters" in text
+    assert "local camera streaming (TURN) will not be available" in text
+    assert "Standard vacuum control is unaffected" in text
+
+
+
+
