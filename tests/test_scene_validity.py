@@ -65,8 +65,9 @@ def test_non_array_rejected_without_write(tmp_path, reports, caplog):
     original = path.read_bytes()
     route, response = _resolve(tmp_path, reports)
     assert route == "put_scene_validity"
-    assert response["success"] is False
-    assert response["code"] == 400
+    assert response["status"] == "BAD_REQUEST"
+    assert response["code"] == "parameter.error"
+    assert "api" not in response and "result" not in response
     assert path.read_bytes() == original
     assert "Scene validity rejected" in caplog.text
 
@@ -150,3 +151,37 @@ def test_write_failure_is_logged_without_changing_ack(tmp_path, monkeypatch, cap
     assert response == CLOUD_SUCCESS
     assert "Scene validity inventory write failed" in caplog.text
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("body, fixture_key, authenticated", [
+    (b"{}", "non_array_body", True),
+    (b"{", "malformed_json", True),
+    (b"[]", "missing_authentication", False),
+    (json.dumps([{"sceneId": "9223372036854775807", "extra": json.dumps({"invalidActions": "not-a-list"})}]).encode(), "invalid_actions_type", True),
+    (b'[{"sceneId":"9223372036854775807","extra":"{\\\"invalidActions\\\":[1]}"}]', "unknown_scene_id", True),
+])
+def test_http_response_matches_cloud_probe(tmp_path, body, fixture_key, authenticated):
+    from datetime import datetime
+    from fastapi.testclient import TestClient
+    from test_protocol_auth import _build_supervisor
+    from shared.protocol_auth import build_hawk_authorization
+
+    supervisor, paths = _build_supervisor(tmp_path)
+    original = paths.inventory_path.read_bytes()
+    headers = {"content-type": "application/json"}
+    if authenticated:
+        user = supervisor.protocol_auth.availability().user
+        assert user is not None
+        headers["authorization"] = build_hawk_authorization(
+            user=user, path="/user/scene/validity", json_body=body,
+        )
+    response = TestClient(supervisor.app).put("/user/scene/validity", content=body, headers=headers)
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "scene_validity_cloud_errors.json").read_text(encoding="utf-8"))[fixture_key]
+    assert response.status_code == fixture["http_status"]
+    actual = response.json()
+    expected = dict(fixture["response"])
+    if "timestamp" in expected:
+        assert datetime.fromisoformat(actual.pop("timestamp")).utcoffset().total_seconds() == 0
+        expected.pop("timestamp")
+    assert actual == expected
+    assert paths.inventory_path.read_bytes() == original

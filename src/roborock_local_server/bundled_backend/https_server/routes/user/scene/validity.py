@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
 from typing import Any
@@ -16,6 +17,16 @@ _LOGGER = logging.getLogger(__name__)
 
 def match(path: str, method: str = "GET") -> bool:
     return method.upper() == "PUT" and path.rstrip("/") == "/user/scene/validity"
+
+
+def error_response(*, unauthorized: bool = False) -> dict[str, Any]:
+    """Cloud envelopes observed for bad JSON and missing authentication."""
+    code, message, status = (
+        ("auth.err", "auth.err.invalid.token", "UNAUTHORIZED") if unauthorized else
+        ("parameter.error", "parameter error", "BAD_REQUEST")
+    )
+    return {"code": code, "msg": message, "status": status,
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds")}
 
 
 def _extra(value: Any) -> dict[str, Any]:
@@ -109,6 +120,6 @@ def build(
         _persist(ctx, _reports(body_params))
     except RoutineExecutionError as exc:
         _LOGGER.warning("Scene validity rejected: %s", exc)
-        return {"success": False, "code": 400, "msg": str(exc), "data": None, "result": None}
+        return error_response()
     # Observed from the cloud API after an authenticated app-report replay.
     return {"api": None, "result": None, "status": "ok", "success": True}
