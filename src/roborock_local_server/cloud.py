@@ -27,6 +27,7 @@ from .backend import (
     _normalize_schedule_map,
     _normalize_value_map,
 )
+from shared.inventory_io import atomic_write_inventory, inventory_transaction
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -187,13 +188,14 @@ class CloudImportManager:
         }
         normalized_inventory = _to_jsonable(inventory)
         normalized_snapshot = _to_jsonable(snapshot)
-        normalized_inventory = _merge_existing_inventory_mutations(
-            normalized_inventory,
-            _load_existing_inventory_for_merge(self.inventory_path),
-        )
-
         self.inventory_path.parent.mkdir(parents=True, exist_ok=True)
-        self.inventory_path.write_text(json.dumps(normalized_inventory, indent=2) + "\n", encoding="utf-8")
+        with inventory_transaction(self.inventory_path):
+            normalized_inventory = _merge_existing_inventory_mutations(
+                normalized_inventory,
+                _load_existing_inventory_for_merge(self.inventory_path),
+            )
+
+            atomic_write_inventory(self.inventory_path, normalized_inventory)
         self.snapshot_path.write_text(json.dumps(normalized_snapshot, indent=2) + "\n", encoding="utf-8")
 
         with self._lock:
