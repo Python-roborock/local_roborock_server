@@ -51,6 +51,8 @@ Cloudflare can provide DNS validation for several certificate issuers. Its use a
 |---|---:|---:|---:|---:|---:|---|
 | Roborock S5 Max | Not reported | ❌ | ❓ | ❌ | ❓ | [#3](https://github.com/Python-roborock/local_roborock_server/issues/3) |
 | Roborock S5 Max | `02.16.62` | ❓ | ✅ | ❓ | ❓ | [#3](https://github.com/Python-roborock/local_roborock_server/issues/3#issuecomment-5450368775) |
+| Roborock S6 | `3.5.8_2076` | n/a | n/a | n/a | n/a | firmware doesn't support setting custom api ([#158](https://github.com/Python-roborock/local_roborock_server/issues/158)) |
+| Roborock S6 | `02.33.88` /<br> `3.5.8_2700` | ❓ | ✅ | ❓ | ❓ | [#158](https://github.com/Python-roborock/local_roborock_server/issues/158) |
 | Roborock S6 MaxV (a10) | `01.58.02` | ✅ | ❓ | ❌ | ❓ | [#122](https://github.com/Python-roborock/local_roborock_server/issues/122) |
 | Roborock S7 | Not reported | ❓ | ✅ | ❌ | ✅ | [#3](https://github.com/Python-roborock/local_roborock_server/issues/3) |
 | Roborock S7 MaxV | Not reported | ❓ | ❓ | ✅ | ❓ | — |
