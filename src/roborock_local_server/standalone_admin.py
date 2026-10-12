@@ -88,10 +88,34 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
         </nav>
 
         <div class="container">
-          <h4 class="header rls-heading">Vacuums</h4>
-          <div id="vacuumSummary" style="display:grid;gap:12px">Loading vacuums...</div>
+          <div id="deviceTabs" class="rls-chips">Loading vacuums...</div>
         </div>
 
+        <div id="devicePanel" class="hidden">
+          <div class="container">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <h4 id="deviceTitle" class="header rls-heading" style="margin:0"></h4>
+              <span id="deviceState" class="rls-badge http"></span>
+            </div>
+            <div id="deviceFacts" class="rls-facts" style="margin-top:14px"></div>
+            <div id="deviceNotice" class="alert-banner"></div>
+          </div>
+
+          <div class="container">
+            <h4 class="header rls-heading">Activity</h4>
+            <div id="activityMeta" class="rls-muted" style="margin-bottom:10px"></div>
+            <div id="activityList" class="rls-activity-list"></div>
+          </div>
+
+          <div class="container">
+            <details class="rls-details">
+              <summary>Raw details</summary>
+              <pre id="deviceRaw" class="rls-pre" style="margin-top:10px"></pre>
+            </details>
+          </div>
+        </div>
+
+        <div id="serverPanel" class="hidden">
         <div class="container">
           <h4 id="supportTitle" class="header rls-heading"></h4>
           <p id="supportText" class="rls-muted"></p>
@@ -146,18 +170,9 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
         </div>
 
         <div class="container">
-          <h4 class="header rls-heading">Activity</h4>
-          <div id="activityMeta" class="rls-muted" style="margin-bottom:10px"></div>
-          <div id="activityList" class="rls-activity-list"></div>
-        </div>
-
-        <div class="container">
           <h4 class="header rls-heading">Health</h4>
           <pre id="health" class="rls-pre"></pre>
         </div>
-        <div class="container">
-          <h4 class="header rls-heading">Vacuums (raw)</h4>
-          <pre id="vacuums" class="rls-pre"></pre>
         </div>
         {SCRIPT_ASSETS}
         <script>
@@ -190,54 +205,92 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
         function yesNo(value) {{
           return value ? "Yes" : "No";
         }}
-        function renderVacuumSummary(vacuums) {{
-          const container = document.getElementById("vacuumSummary");
-          container.innerHTML = "";
-          const items = Array.isArray(vacuums) ? vacuums : [];
-          if (!items.length) {{
-            const empty = document.createElement("div");
-            empty.textContent = "No vacuums yet.";
-            empty.style.color = "var(--rls-text-muted)";
-            container.appendChild(empty);
-            return;
-          }}
-          const addField = (parent, label, value) => {{
-            const line = document.createElement("div");
-            line.textContent = `${{label}}: ${{value}}`;
-            line.style.marginTop = "4px";
-            parent.appendChild(line);
+        let vacuumList = [];
+        const deviceKey = (vac) => vac.duid || vac.did || "";
+        const vacuumLabel = (vac) => vac.name || vac.did || vac.duid || "Unknown vacuum";
+        function currentSelection() {{
+          const hash = decodeURIComponent(window.location.hash.replace(/^#/, ""));
+          if (hash === "server") return "server";
+          const wanted = hash.startsWith("device=") ? hash.slice(7) : "";
+          if (wanted && vacuumList.some((vac) => deviceKey(vac) === wanted || vac.did === wanted)) return wanted;
+          // Nothing (valid) selected: open the first vacuum, or the Server view if there are none.
+          return vacuumList.length ? deviceKey(vacuumList[0]) : "server";
+        }}
+        function renderDeviceTabs(selected) {{
+          const tabs = document.getElementById("deviceTabs");
+          tabs.innerHTML = "";
+          const addChip = (key, label, state) => {{
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "rls-chip" + (key === selected ? " active" : "");
+            const dot = document.createElement("span");
+            dot.className = "rls-dot " + state;
+            chip.appendChild(dot);
+            chip.appendChild(document.createTextNode(label));
+            chip.addEventListener("click", () => {{
+              window.location.hash = key === "server" ? "server" : `device=${{encodeURIComponent(key)}}`;
+            }});
+            tabs.appendChild(chip);
           }};
-          for (const vacuum of items) {{
-            const card = document.createElement("div");
-            card.style.border = "1px solid var(--rls-border)";
-            card.style.borderRadius = "8px";
-            card.style.padding = "12px";
-            card.style.background = "var(--rls-bg)";
-
-            const name = document.createElement("div");
-            name.textContent = vacuum.name || vacuum.did || vacuum.duid || "Unknown vacuum";
-            name.style.fontWeight = "600";
-            name.style.marginBottom = "8px";
-            card.appendChild(name);
-
-            const onboarding = vacuum.onboarding || {{}};
-            const keyState = onboarding.key_state || {{}};
-            addField(card, "Num query samples", Number(keyState.query_samples || 0));
-            addField(card, "Public Key determined", yesNo(Boolean(onboarding.has_public_key)));
-            addField(card, "Mqtt connected", yesNo(Boolean(vacuum.connected)));
-            if (onboarding.unsupported) {{
-              const alert = document.createElement("div");
-              alert.textContent = onboarding.guidance || "This vacuum is not supported by the current onboarding flow.";
-              alert.style.marginTop = "10px";
-              alert.style.padding = "8px";
-              alert.style.borderRadius = "6px";
-              alert.style.border = "1px solid var(--rls-warn-border)";
-              alert.style.background = "var(--rls-warn-bg)";
-              alert.style.color = "var(--rls-warn-text)";
-              card.appendChild(alert);
-            }}
-            container.appendChild(card);
+          for (const vac of vacuumList) {{
+            addChip(deviceKey(vac), vacuumLabel(vac), vac.connected ? "ok" : "wait");
           }}
+          addChip("server", "Server", "");
+          if (!vacuumList.length) {{
+            const hint = document.createElement("span");
+            hint.className = "rls-muted";
+            hint.textContent = "No vacuums yet. Use Cloud Import under Server to fetch yours.";
+            tabs.appendChild(hint);
+          }}
+        }}
+        function renderDevice(vac) {{
+          document.getElementById("deviceTitle").textContent = vacuumLabel(vac);
+          const state = document.getElementById("deviceState");
+          state.textContent = vac.connected ? "Connected" : "Not connected";
+          state.className = "rls-badge " + (vac.connected ? "mqtt" : "http");
+
+          const onboarding = vac.onboarding || {{}};
+          const keyState = onboarding.key_state || {{}};
+          const lastMessage = vac.last_message_at
+            ? `${{vac.last_message_at}} (${{vac.last_message_source || "unknown"}})`
+            : "None yet";
+          const rows = [
+            ["Model", vac.model || "Unknown"],
+            ["DUID", vac.duid || "-"],
+            ["DID", vac.did || "-"],
+            ["Product ID", vac.product_id || "-"],
+            ["Last message", lastMessage],
+            ["Mqtt connected", yesNo(Boolean(vac.connected))],
+            ["Num query samples", Number(keyState.query_samples || 0)],
+            ["Public Key determined", yesNo(Boolean(onboarding.has_public_key))],
+          ];
+          const facts = document.getElementById("deviceFacts");
+          facts.innerHTML = "";
+          for (const [label, value] of rows) {{
+            const cell = document.createElement("div");
+            const labelEl = document.createElement("div");
+            labelEl.className = "rls-fact-label";
+            labelEl.textContent = label;
+            const valueEl = document.createElement("div");
+            valueEl.className = "rls-fact-value";
+            valueEl.textContent = String(value);
+            cell.appendChild(labelEl);
+            cell.appendChild(valueEl);
+            facts.appendChild(cell);
+          }}
+
+          const notice = document.getElementById("deviceNotice");
+          if (onboarding.unsupported) {{
+            notice.textContent =
+              onboarding.guidance || "This vacuum is not supported by the current onboarding flow.";
+            notice.className = "alert-banner shown error";
+          }} else {{
+            notice.textContent = "";
+            notice.className = "alert-banner";
+          }}
+          // The local key is a credential; never render it, even in the raw view.
+          const redacted = Object.assign({{}}, vac, {{local_key: vac.local_key ? "<redacted>" : ""}});
+          document.getElementById("deviceRaw").textContent = JSON.stringify(redacted, null, 2);
         }}
         function renderAuth(auth) {{
           const enabled = Boolean(auth.new_connections_enabled);
@@ -376,10 +429,20 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           document.getElementById("health").textContent = JSON.stringify(status.health, null, 2);
           renderAuth(await fetchJson("/admin/api/auth"));
           const vacuums = await fetchJson("/admin/api/vacuums");
-          renderVacuumSummary(vacuums.vacuums);
-          document.getElementById("vacuums").textContent = JSON.stringify(vacuums.vacuums, null, 2);
-          renderActivity(await fetchJson("/admin/api/activity"));
+          vacuumList = Array.isArray(vacuums.vacuums) ? vacuums.vacuums : [];
+
+          const selected = currentSelection();
+          renderDeviceTabs(selected);
+          const showServer = selected === "server";
+          document.getElementById("serverPanel").classList.toggle("hidden", !showServer);
+          document.getElementById("devicePanel").classList.toggle("hidden", showServer);
+          if (showServer) return;
+          const vac = vacuumList.find((item) => deviceKey(item) === selected || item.did === selected);
+          if (!vac) return;
+          renderDevice(vac);
+          renderActivity(await fetchJson(`/admin/api/activity?device=${{encodeURIComponent(deviceKey(vac))}}`));
         }}
+        window.addEventListener("hashchange", () => refresh().catch(() => {{}}));
         document.getElementById("sendCode").addEventListener("click", async () => {{
           try {{
             const payload = await fetchJson("/admin/api/cloud/request-code", {{
@@ -518,7 +581,11 @@ def register_standalone_admin_routes(
         except ValueError:
             return JSONResponse({"error": "limit must be an integer"}, status_code=400)
         limit = max(1, min(limit, 500))
-        return JSONResponse(supervisor._activity_payload(limit=limit))
+        device = str(request.query_params.get("device") or "").strip()
+        payload = supervisor._activity_payload(limit=limit, device=device)
+        if device and not payload["device_known"]:
+            return JSONResponse({"error": f"Unknown vacuum {device!r}"}, status_code=404)
+        return JSONResponse(payload)
 
     @app.post("/admin/api/auth")
     async def admin_auth_update(request: Request) -> JSONResponse:
