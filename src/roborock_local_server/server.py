@@ -1590,16 +1590,43 @@ class ReleaseSupervisor:
             )
         return devices
 
-    def _activity_payload(self, *, limit: int) -> dict[str, Any]:
+    def _vacuum_identifiers(self, device_ref: str) -> set[str] | None:
+        """Every id traffic for this vacuum can carry (duid, did, MQTT user), or None if unknown."""
+        reference = device_ref.strip()
+        if not reference:
+            return None
+        for vacuum in self._vacuums_payload()["vacuums"]:
+            candidates = {
+                str(vacuum.get(key) or "").strip()
+                for key in ("duid", "did", "runtime_did", "linked_inventory_duid")
+            }
+            candidates.discard("")
+            if reference not in candidates:
+                continue
+            record = self.runtime_credentials.resolve_device(
+                did=str(vacuum.get("did") or ""),
+                duid=str(vacuum.get("duid") or ""),
+            )
+            if record:
+                candidates.update(
+                    str(record.get(key) or "").strip() for key in ("did", "duid", "device_mqtt_usr")
+                )
+                candidates.discard("")
+            return candidates
+        return None
+
+    def _activity_payload(self, *, limit: int, device: str = "") -> dict[str, Any]:
         raw = activity_raw_enabled(os.environ)
+        device_ids = self._vacuum_identifiers(device) if device.strip() else None
         entries = read_recent_activity(
             http_jsonl_path=self.paths.http_jsonl_path,
             mqtt_jsonl_path=self.paths.mqtt_jsonl_path,
             mitm_jsonl_path=self.paths.mitm_activity_jsonl_path,
             limit=limit,
             raw=raw,
+            device_ids=device_ids if device.strip() else None,
         )
-        return {"raw": raw, "entries": entries}
+        return {"raw": raw, "entries": entries, "device": device.strip(), "device_known": device_ids is not None or not device.strip()}
 
     def _auth_payload(self) -> dict[str, Any]:
         sessions = [

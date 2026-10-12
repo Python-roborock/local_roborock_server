@@ -250,6 +250,28 @@ STYLE_CSS = dedent(
         word-break: break-word; max-height: 22em; overflow: auto; color: var(--rls-text);
     }
 
+    /* Device selector: one chip per vacuum, plus Server for the global settings. */
+    .rls-chips { display: flex; flex-wrap: wrap; align-items: center; gap: .5em; }
+    .rls-chip {
+        display: inline-flex; align-items: center; gap: .55em; cursor: pointer; font: inherit;
+        padding: .45em 1em; border-radius: 999px;
+        border: 1px solid var(--rls-border); background: var(--rls-surface); color: var(--rls-text);
+    }
+    .rls-chip:hover { border-color: var(--rls-accent); }
+    .rls-chip:focus-visible { outline: 2px solid var(--rls-accent); outline-offset: 2px; }
+    .rls-chip.active { background: var(--rls-accent); border-color: var(--rls-accent); color: #fff; }
+    .rls-dot { width: .6em; height: .6em; border-radius: 50%; background: var(--rls-text-muted); }
+    .rls-dot.ok { background: #2e9d5b; }
+    .rls-dot.wait { background: #d9822b; }
+    .rls-chip.active .rls-dot { box-shadow: 0 0 0 2px rgba(255, 255, 255, .55); }
+
+    .rls-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .8em 1.5em; }
+    .rls-fact-label {
+        color: var(--rls-text-muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .04em;
+    }
+    .rls-fact-value { word-break: break-all; }
+    .rls-details > summary { cursor: pointer; color: var(--rls-text-muted); }
+
     .hidden { display: none !important; }
 
     @media (max-width: 480px) {
