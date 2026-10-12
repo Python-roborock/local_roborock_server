@@ -81,9 +81,9 @@ If you use `tls_mode = provided` with existing certificates managed in Home Assi
 - **Official Home Assistant Let's Encrypt Add-on**: Certificates are stored in `/ssl`. Point `cert_file` and `key_file` to the `/ssl` directory:
   - `cert_file = /ssl/fullchain.pem`
   - `key_file = /ssl/privkey.pem`
-- **Third-Party Certificate Add-ons (e.g., Nginx Proxy Manager)**: Certificate files are available through `/all_addon_configs/...`:
-  - `cert_file = /all_addon_configs/a0d7b954_nginxproxymanager/letsencrypt/live/npm-3/fullchain.pem`
-  - `key_file = /all_addon_configs/a0d7b954_nginxproxymanager/letsencrypt/live/npm-3/privkey.pem`
+- **Third-Party Certificate Add-ons (e.g., Nginx Proxy Manager)**: Certificate files are available through `/all_app_configs/...`:
+  - `cert_file = /all_app_configs/a0d7b954_nginxproxymanager/letsencrypt/live/npm-9/fullchain.pem`
+  - `key_file = /all_app_configs/a0d7b954_nginxproxymanager/letsencrypt/live/npm-9/privkey.pem`
 
 > [!NOTE]
 > Nginx Proxy Manager is mainly useful here as a certificate source or admin/API HTTPS convenience; it does not remove the need for a reachable MQTT/TLS port. See [Reverse Proxy](reverse_proxy.md). Always verify whether your vacuum model trusts Let's Encrypt certificates or requires ZeroSSL/Actalis in [Tested Vacuums](tested_vacuums.md).
