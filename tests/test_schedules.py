@@ -166,3 +166,90 @@ def test_cloud_inventory_build_preserves_device_schedules() -> None:
         "6HL2zfniaoYYV01CkVuhkO": [schedule],
         "ignored": [],
     }
+
+
+def _jobs_client(tmp_path: Path, device_id: str, schedules: list[dict[str, object]]):
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    _write_json(
+        paths.inventory_path,
+        {
+            "home": {"id": 1233716, "name": "My Home"},
+            "devices": [{"duid": device_id, "name": "Roborock Qrevo"}],
+            "schedules": {device_id: schedules},
+        },
+    )
+    _seed_cloud_snapshot(paths.cloud_snapshot_path)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    supervisor.refresh_inventory_state()
+    return TestClient(supervisor.app), paths
+
+
+def _signed_json(paths, path: str, body: dict[str, object]) -> tuple[bytes, dict[str, str]]:
+    raw = json.dumps(body, separators=(",", ":")).encode()
+    user = ProtocolAuthStore(paths.cloud_snapshot_path).availability().user
+    assert user is not None
+    headers = {
+        # Hawk rejects replayed nonces, and _hawk_headers() uses nonce-<path> for plain requests.
+        "Authorization": build_hawk_authorization(
+            user=user, path=path, json_body=raw, nonce=f"write-{path.replace('/', '-')}-{len(raw)}"
+        ),
+        "Content-Type": "application/json",
+    }
+    return raw, headers
+
+
+def test_jobs_can_be_created_updated_and_deleted_over_http(tmp_path: Path) -> None:
+    device_id = "6HL2zfniaoYYV01CkVuhkO"
+    existing = {
+        "id": 3549431,
+        "cron": "00 11 ? * 1,3,5",
+        "timeZoneId": "America/New_York",
+        "repeated": True,
+        "enabled": True,
+        "param": {
+            "id": 1,
+            "method": "server_scheduled_start",
+            "params": [{"repeat": 1, "water_box_mode": 203, "segments": "0", "fan_power": 104, "mop_mode": 300}],
+        },
+    }
+    client, paths = _jobs_client(tmp_path, device_id, [existing])
+    collection = f"/user/devices/{device_id}/jobs"
+
+    body, headers = _signed_json(paths, collection, {"cron": "30 7 * * 1,2", "enabled": True})
+    created = client.post(collection, content=body, headers=headers)
+    assert created.status_code == 200
+    assert created.json()["success"] is True
+    new_id = created.json()["result"]["id"]
+
+    listed = client.get(collection, headers=_hawk_headers(paths.cloud_snapshot_path, collection)).json()["result"]
+    assert {job["id"] for job in listed} == {3549431, new_id}
+    assert all(job.get("nextFireTime") for job in listed)
+
+    item = f"{collection}/3549431"
+    body, headers = _signed_json(paths, item, {"cron": "15 9 ? * 1,3,5", "enabled": False})
+    updated = client.put(item, content=body, headers=headers)
+    assert updated.status_code == 200
+    result = updated.json()["result"]
+    assert (result["cron"], result["enabled"]) == ("15 9 ? * 1,3,5", False)
+    # Vac/mop settings are untouched by a cron/enabled edit.
+    assert result["param"]["params"][0]["mop_mode"] == 300
+
+    deleted = client.delete(item, headers=_hawk_headers(paths.cloud_snapshot_path, item))
+    assert deleted.status_code == 200 and deleted.json()["success"] is True
+    user = ProtocolAuthStore(paths.cloud_snapshot_path).availability().user
+    assert user is not None
+    second_list = {"Authorization": build_hawk_authorization(user=user, path=collection, nonce="second-list")}
+    remaining = client.get(collection, headers=second_list).json()["result"]
+    assert [job["id"] for job in remaining] == [new_id]
+
+
+def test_creating_a_job_with_a_bad_cron_is_rejected(tmp_path: Path) -> None:
+    device_id = "6HL2zfniaoYYV01CkVuhkO"
+    client, paths = _jobs_client(tmp_path, device_id, [])
+    collection = f"/user/devices/{device_id}/jobs"
+    body, headers = _signed_json(paths, collection, {"cron": "nonsense"})
+    response = client.post(collection, content=body, headers=headers)
+    assert response.json()["success"] is False
+    assert response.json()["code"] == 400
