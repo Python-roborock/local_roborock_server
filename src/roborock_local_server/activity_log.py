@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping
 
 ENV_ACTIVITY_RAW = "ROBOROCK_SERVER_ACTIVITY_RAW"
 DEFAULT_LIMIT = 200
@@ -121,6 +121,29 @@ def _summarize_mitm_entry(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# A device-filtered view reads a deeper tail, since most of a busy log belongs
+# to other devices and the newest `limit` lines may hold none of this one's.
+_DEVICE_FILTER_TAIL_FACTOR = 10
+
+
+def _path_segments(value: Any) -> set[str]:
+    return {part for part in str(value or "").split("/") if part}
+
+
+def _entry_mentions_device(entry: dict[str, Any], device_ids: frozenset[str]) -> bool:
+    """True when the entry's did, path or MQTT topic names one of the device's ids.
+
+    Matches whole path/topic segments, never substrings, so a short id can't
+    pick up unrelated traffic.
+    """
+    if str(entry.get("did") or "") in device_ids:
+        return True
+    for key in ("clean_path", "raw_path", "path", "topic"):
+        if _path_segments(entry.get(key)) & device_ids:
+            return True
+    return False
+
+
 def read_recent_activity(
     *,
     http_jsonl_path: Path,
@@ -128,6 +151,7 @@ def read_recent_activity(
     mitm_jsonl_path: Path | None = None,
     limit: int = DEFAULT_LIMIT,
     raw: bool = False,
+    device_ids: Collection[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Most recent `limit` HTTP+MQTT(+MITM) activity entries, newest first.
 
@@ -135,10 +159,19 @@ def read_recent_activity(
     the default returns metadata-only summaries with no header/body/payload
     content at all. `mitm_jsonl_path` is optional since not every deployment
     runs mitm_redirect.py with --activity-sync.
+
+    `device_ids` keeps only entries that name one of those ids (a vacuum's
+    did, duid or MQTT user). An empty collection matches nothing.
     """
-    http_entries = _parse_jsonl_lines(_tail_lines(http_jsonl_path, limit))
-    mqtt_entries = _parse_jsonl_lines(_tail_lines(mqtt_jsonl_path, limit))
-    mitm_entries = _parse_jsonl_lines(_tail_lines(mitm_jsonl_path, limit)) if mitm_jsonl_path else []
+    wanted = frozenset(str(item) for item in device_ids if str(item)) if device_ids is not None else None
+    tail = limit * _DEVICE_FILTER_TAIL_FACTOR if device_ids is not None else limit
+    http_entries = _parse_jsonl_lines(_tail_lines(http_jsonl_path, tail))
+    mqtt_entries = _parse_jsonl_lines(_tail_lines(mqtt_jsonl_path, tail))
+    mitm_entries = _parse_jsonl_lines(_tail_lines(mitm_jsonl_path, tail)) if mitm_jsonl_path else []
+    if wanted is not None:
+        http_entries = [entry for entry in http_entries if _entry_mentions_device(entry, wanted)]
+        mqtt_entries = [entry for entry in mqtt_entries if _entry_mentions_device(entry, wanted)]
+        mitm_entries = [entry for entry in mitm_entries if _entry_mentions_device(entry, wanted)]
 
     if raw:
         combined = [{"source": "http", **entry} for entry in http_entries]
