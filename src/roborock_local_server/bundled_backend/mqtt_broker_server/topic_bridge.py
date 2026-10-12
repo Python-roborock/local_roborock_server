@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 import aiomqtt
 
@@ -73,7 +73,11 @@ class MqttTopicBridge:
         fixed_device_mqtt_usr: str = "",
         runtime_state: Any | None = None,
         inventory_path: Path | None = None,
+        request_interceptor: Callable[[str, bytes], bytes | None] | None = None,
     ) -> None:
+        # Given (duid, payload) for each rr/m request; returns an encoded reply to
+        # publish back to the requester instead of forwarding, or None to forward.
+        self._request_interceptor = request_interceptor
         self._host = host
         self._port = port
         self._logger = logger
@@ -389,6 +393,19 @@ class MqttTopicBridge:
         cloud_topic: CloudTopicKey,
         src_topic: str,
     ) -> None:
+        if self._request_interceptor is not None:
+            payload = message.payload
+            raw = payload if isinstance(payload, (bytes, bytearray)) else str(payload).encode()
+            try:
+                reply = self._request_interceptor(cloud_topic.duid, bytes(raw))
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning("MQTT request interceptor failed for %s: %s", src_topic, exc)
+                reply = None
+            if reply is not None:
+                await client.publish(cloud_topic.topic_out, reply, qos=_extract_qos(message))
+                self._logger.info("MQTT bridge answered %s locally -> %s", src_topic, cloud_topic.topic_out)
+                return
+
         device_topic = self._resolve_device_for_cloud(cloud_topic)
         if device_topic is None:
             if cloud_topic.duid not in self._warned_unmapped_duids:
