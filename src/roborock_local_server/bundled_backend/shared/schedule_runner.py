@@ -15,9 +15,11 @@ import logging
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .constants import DEFAULT_TIMEZONE
 from .data_helpers import as_bool
-from .inventory_io import inventory_mutation, load_inventory, write_inventory
+from .inventory_io import load_inventory
 from .routine_runner import RoutineExecutionError, RoutineStep, get_routine_runner
+from .schedule_store import set_enabled
 
 if TYPE_CHECKING:
     from .context import ServerContext
@@ -134,7 +136,8 @@ def next_fire(spec: CronSpec, after: datetime) -> datetime | None:
 
 
 def _zone(name: str, fallback: str) -> tzinfo:
-    for candidate in (name, fallback):
+    # DEFAULT_TIMEZONE is what /location tells the robot when none is configured.
+    for candidate in (name, fallback, DEFAULT_TIMEZONE):
         candidate = str(candidate or "").strip()
         if not candidate:
             continue
@@ -226,19 +229,6 @@ def next_fire_time_utc(job: dict[str, Any], *, default_timezone: str = "", now: 
     return upcoming.astimezone(timezone.utc) if upcoming is not None else None
 
 
-@inventory_mutation
-def _disable_job(ctx: ServerContext, device_id: str, job_id: Any) -> None:
-    inventory = load_inventory(ctx)
-    schedules = inventory.get("schedules")
-    jobs = schedules.get(device_id) if isinstance(schedules, dict) else None
-    if not isinstance(jobs, list):
-        return
-    for job in jobs:
-        if isinstance(job, dict) and str(job.get("id")) == str(job_id):
-            job["enabled"] = False
-    write_inventory(ctx, inventory)
-
-
 class ScheduleRunner:
     def __init__(self, context: ServerContext, *, default_timezone: str = "") -> None:
         self._context = context
@@ -294,7 +284,7 @@ class ScheduleRunner:
             else:
                 self._logger.info("Schedule %s on %s fired: %s", job_id, device_id, result.get("status"))
                 if result.get("accepted") and not as_bool(job.get("repeated", True), True):
-                    _disable_job(self._context, device_id, job_id)
+                    set_enabled(self._context, device_id, job_id, False)
             results.append({"jobId": job_id, **result})
         return results
 
