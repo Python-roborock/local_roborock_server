@@ -505,6 +505,7 @@ def test_admin_onboarding_endpoints_require_auth_and_manage_session(tmp_path: Pa
     devices_payload = devices.json()
     assert [item["duid"] for item in devices_payload["devices"]] == ["cloud-q7-a"]
     assert devices_payload["devices"][0]["name"] == "Q7 Upstairs"
+    assert devices_payload["devices"][0]["model"] == "roborock.vacuum.sc05"
     assert devices_payload["devices"][0]["onboarding"]["has_public_key"] is True
     assert devices_payload["devices"][0]["onboarding"]["key_state"]["query_samples"] == 2
 

@@ -30,7 +30,7 @@ from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Util.Padding import pad
 
-from onboarding_shared import build_ssl_context, normalize_camera_domain, perform_camera_preflight, perform_onboarding_preflight
+from onboarding_shared import build_ssl_context, gateway_mac, normalize_camera_domain, perform_camera_preflight, perform_onboarding_preflight, ssid_pre_key
 
 
 CFGWIFI_HOST = "192.168.8.1"
@@ -497,7 +497,7 @@ def prompt_for_config(args: argparse.Namespace, output: TextIO = sys.stdout) -> 
     )
 
 
-def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout) -> bool:
+def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout, *, model: str = "") -> bool:
     token_s = f"S_TOKEN_{secrets.token_hex(16)}"
     token_t = f"T_TOKEN_{secrets.token_hex(16)}"
 
@@ -511,6 +511,13 @@ def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout) ->
         hello = build_hello_packet(CFGWIFI_PRE_KEY, pub)
         sock.sendto(hello, target)
         hello_resp = recv_with_timeout(sock, CFGWIFI_TIMEOUT_SECONDS)
+        mac = gateway_mac(CFGWIFI_HOST) if not hello_resp and model else ""
+        if mac:
+            # Some vacuums only accept a pre-key taken from their hotspot SSID.
+            pre_key = ssid_pre_key(model, mac)
+            output.write(f"HELLO: no response with default pre-key, retrying with SSID pre-key {pre_key}\n")
+            sock.sendto(build_hello_packet(pre_key, pub), target)
+            hello_resp = recv_with_timeout(sock, CFGWIFI_TIMEOUT_SECONDS)
         if not hello_resp:
             output.write("HELLO: no response\n")
             return False
@@ -678,7 +685,7 @@ def run_guided_onboarding(
     *,
     config: GuidedOnboardingConfig,
     api: Any,
-    send_onboarding: Callable[[GuidedOnboardingConfig, TextIO], bool] = onboard_once,
+    send_onboarding: Callable[..., bool] = onboard_once,
     output: TextIO = sys.stdout,
     poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
     timeout_seconds: float = POLL_TIMEOUT_SECONDS,
@@ -738,7 +745,7 @@ def run_guided_onboarding(
                     break
 
                 output.write("Sending cfgwifi onboarding packet...\n")
-                if not send_onboarding(config, output):
+                if not send_onboarding(config, output, model=str(selected.get("model") or "")):
                     output.write("Onboarding send failed.\n")
                     action = prompt_post_attempt_action(status, output=output)
                     if action == "reselect":

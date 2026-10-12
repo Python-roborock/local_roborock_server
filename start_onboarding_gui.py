@@ -41,7 +41,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 import uvicorn
 
-from onboarding_shared import normalize_camera_domain, perform_camera_preflight, perform_onboarding_preflight
+from onboarding_shared import gateway_mac, normalize_camera_domain, perform_camera_preflight, perform_onboarding_preflight, ssid_pre_key
 
 
 CFGWIFI_HOST = "192.168.8.1"
@@ -428,7 +428,7 @@ def _format_http_error(status_code: int, raw_body: str) -> str:
     return f"HTTP {status_code}"
 
 
-def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout) -> bool:
+def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout, *, model: str = "") -> bool:
     token_s = f"S_TOKEN_{secrets.token_hex(16)}"
     token_t = f"T_TOKEN_{secrets.token_hex(16)}"
 
@@ -442,6 +442,13 @@ def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout) ->
         hello = build_hello_packet(CFGWIFI_PRE_KEY, pub)
         sock.sendto(hello, target)
         hello_resp = recv_with_timeout(sock, CFGWIFI_TIMEOUT_SECONDS)
+        mac = gateway_mac(CFGWIFI_HOST) if not hello_resp and model else ""
+        if mac:
+            # Some vacuums only accept a pre-key taken from their hotspot SSID.
+            pre_key = ssid_pre_key(model, mac)
+            output.write(f"HELLO: no response with default pre-key, retrying with SSID pre-key {pre_key}\n")
+            sock.sendto(build_hello_packet(pre_key, pub), target)
+            hello_resp = recv_with_timeout(sock, CFGWIFI_TIMEOUT_SECONDS)
         if not hello_resp:
             output.write("HELLO: no response\n")
             return False
@@ -845,7 +852,7 @@ def _run_onboarding_for_device(
             _set_phase("sending_onboarding")
             _log.info("Sending cfgwifi onboarding packet to 192.168.8.1...")
             try:
-                sent_ok = onboard_once(config, _log)
+                sent_ok = onboard_once(config, _log, model=str(device.get("model") or ""))
             except Exception as exc:  # noqa: BLE001
                 _log.err(f"onboard_once raised: {exc}")
                 sent_ok = False

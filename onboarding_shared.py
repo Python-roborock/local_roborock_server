@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import re
 import socket
 import ssl
+import subprocess
 import json
 from typing import Any, TextIO
 from urllib import parse
@@ -13,6 +15,29 @@ DEFAULT_MQTT_TLS_PORT = 8881
 TLS_CONNECT_TIMEOUT_SECONDS = 8.0
 _REQUIRED_SERVICE_NAMES = ("https_server", "mqtt_tls_proxy", "mqtt_backend_broker")
 _SERVICE_PORT_RE = re.compile(r":(?P<port>\d+)\s*$")
+_MAC_RE = re.compile(r"(?:[0-9a-f]{1,2}[:-]){5}[0-9a-f]{1,2}", re.IGNORECASE)
+
+
+def ssid_pre_key(model: str, mac: str) -> str:
+    """Return the cfgwifi pre-key some vacuums expect: the last 16 characters of their hotspot SSID.
+
+    The SSID is ``<model with dashes>_miap<last two MAC bytes>``, e.g. ``roborock-vacuum-a10_miap5F1D``.
+    """
+    suffix = "".join(f"{int(part, 16):02X}" for part in re.split(r"[:-]", mac)[-2:])
+    return f"{model.replace('.', '-')}_miap{suffix}"[-16:]
+
+
+def gateway_mac(host: str) -> str:
+    """Return host's MAC address from the OS ARP table, or an empty string if it is unknown."""
+    try:
+        with open("/proc/net/arp", encoding="utf-8") as arp_table:  # Linux
+            text = arp_table.read()
+    except OSError:  # macOS and Windows
+        text = subprocess.run(["arp", "-a" if os.name == "nt" else "-n", host], capture_output=True, text=True).stdout
+    for line in text.splitlines():
+        if re.search(rf"(?<![\d.]){re.escape(host)}(?![\d.])", line) and (match := _MAC_RE.search(line)):
+            return match.group(0)
+    return ""
 
 
 def build_ssl_context(*, allow_insecure_tls: bool) -> ssl.SSLContext | None:

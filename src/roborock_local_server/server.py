@@ -1444,6 +1444,7 @@ class ReleaseSupervisor:
                     "duid": str(vac.get("duid") or "").strip(),
                     "did": str(vac.get("did") or "").strip(),
                     "name": str(vac.get("name") or vac.get("duid") or "").strip(),
+                    "model": str(vac.get("model") or "").strip(),
                     "connected": bool(vac.get("connected")),
                     "onboarding": {
                         "has_public_key": bool(onboarding.get("has_public_key")),
