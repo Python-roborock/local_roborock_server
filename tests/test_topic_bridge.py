@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+from types import SimpleNamespace
 
 from roborock_local_server.bundled_backend.mqtt_broker_server.topic_bridge import (
     CloudTopicKey,
@@ -140,3 +142,106 @@ def test_topic_bridge_fans_out_to_all_cloud_routes_even_with_mixed_device_topic_
     assert sorted(published_topics) == sorted([app_cloud.topic_out, ha_cloud.topic_out])
     assert bridge._m_to_d.get(app_cloud) == new_device_topic
     assert bridge._m_to_d.get(ha_cloud) == new_device_topic
+
+
+def test_topic_bridge_maps_same_model_devices_from_learned_runtime_credentials(tmp_path) -> None:
+    pairs = {
+        "7RMLFxGvQx7HNHyrkf4uxN": "1103812576952",
+        "4Nzba8pCrwFHCc53nLc5aB": "1103812576978",
+        "ej7PNYHNhbpcFJZd8HMoZ": "1103812579307",
+    }
+    inventory_path = tmp_path / "web_api_inventory.json"
+    inventory_path.write_text(
+        json.dumps({"devices": [{"duid": duid, "model": "roborock.vacuum.a10"} for duid in pairs]}),
+        encoding="utf-8",
+    )
+    runtime_state = SimpleNamespace(
+        key_models_by_did=lambda: {did: "roborock.vacuum.a10" for did in pairs.values()},
+        runtime_credentials=SimpleNamespace(
+            devices=lambda: [{"did": did, "duid": duid} for duid, did in pairs.items()],
+        ),
+    )
+    bridge = MqttTopicBridge(
+        host="127.0.0.1",
+        port=1883,
+        logger=logging.getLogger("test.topic_bridge.same_model"),
+        runtime_state=runtime_state,
+        inventory_path=inventory_path,
+    )
+    device_topics = {did: DeviceTopicKey(did=did, mqtt_usr=f"usr-{did}") for did in pairs.values()}
+    for device_topic in device_topics.values():
+        bridge._remember_device_seen(device_topic)
+
+    for duid, did in pairs.items():
+        cloud_topic = CloudTopicKey(rriot_u="ha-user", mqtt_username="ha-mqtt", duid=duid)
+        assert bridge._resolve_device_for_cloud(cloud_topic) == device_topics[did]
+
+
+def test_topic_bridge_model_fallback_does_not_reuse_did_learned_for_another_duid(tmp_path) -> None:
+    # The only a168 with a known model is already paired with another DUID, for
+    # example a replaced vacuum. The inventory's lone a168 must stay unmapped
+    # rather than be routed to that vacuum.
+    inventory_path = tmp_path / "web_api_inventory.json"
+    inventory_path.write_text(
+        json.dumps({"devices": [{"duid": "1mRc3mFQhMWxkAQIAGI46w", "model": "roborock.vacuum.a168"}]}),
+        encoding="utf-8",
+    )
+    runtime_state = SimpleNamespace(
+        key_models_by_did=lambda: {"1103841353419": "roborock.vacuum.a168"},
+        runtime_credentials=SimpleNamespace(
+            devices=lambda: [{"did": "1103841353419", "duid": "6aEI34L0ZtsALO8XtccuPw"}],
+        ),
+    )
+    bridge = MqttTopicBridge(
+        host="127.0.0.1",
+        port=1883,
+        logger=logging.getLogger("test.topic_bridge.learned_did_guard"),
+        runtime_state=runtime_state,
+        inventory_path=inventory_path,
+    )
+
+    bridge._refresh_duid_to_did_map()
+
+    assert bridge._duid_to_did == {"6aEI34L0ZtsALO8XtccuPw": "1103841353419"}
+
+
+def test_topic_bridge_handles_runtime_credentials_exception(tmp_path) -> None:
+    def broken_devices():
+        raise RuntimeError("Store locked")
+
+    runtime_state = SimpleNamespace(
+        key_models_by_did=lambda: {},
+        runtime_credentials=SimpleNamespace(devices=broken_devices),
+    )
+    bridge = MqttTopicBridge(
+        host="127.0.0.1",
+        port=1883,
+        logger=logging.getLogger("test.topic_bridge.exception"),
+        runtime_state=runtime_state,
+        inventory_path=tmp_path / "web_api_inventory.json",
+    )
+
+    bridge._refresh_duid_to_did_map()
+
+    assert bridge._duid_to_did == {}
+
+
+def test_topic_bridge_handles_runtime_credentials_malformed_devices(tmp_path) -> None:
+    runtime_state = SimpleNamespace(
+        key_models_by_did=lambda: {},
+        runtime_credentials=SimpleNamespace(
+            devices=lambda: [None, "invalid", {"duid": "", "did": "123"}, {"duid": "d1", "did": "123"}],
+        ),
+    )
+    bridge = MqttTopicBridge(
+        host="127.0.0.1",
+        port=1883,
+        logger=logging.getLogger("test.topic_bridge.malformed"),
+        runtime_state=runtime_state,
+        inventory_path=tmp_path / "web_api_inventory.json",
+    )
+
+    bridge._refresh_duid_to_did_map()
+
+    assert bridge._duid_to_did == {"d1": "123"}
+

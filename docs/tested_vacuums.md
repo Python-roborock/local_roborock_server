@@ -75,7 +75,7 @@ Cloudflare can provide DNS validation for several certificate issuers. Its use a
 | Roborock Q5 Pro | `02.04.66` | ❌ | ❓ | ✅ | ❓ | [#56](https://github.com/Python-roborock/local_roborock_server/issues/56), [#97](https://github.com/Python-roborock/local_roborock_server/issues/97) |
 | Roborock Q8 Max | `02.06.86` | ❓ | ❓ | ✅ | ❓ | [#70](https://github.com/Python-roborock/local_roborock_server/issues/70) |
 | Roborock QV 35A (a168) | `02.49.24` | ✅ | ❓ | ❓ | ❓ | [#119](https://github.com/Python-roborock/local_roborock_server/issues/119) |
-| Roborock Qrevo C (a170) | `02.16.64` | ❓ | ❓ | ❓ | ❓ | [#95](https://github.com/Python-roborock/local_roborock_server/issues/95) |
+| Roborock Qrevo C (a170) | `02.16.64` | ❓ | ❓ | ✅ | ❓ | [#95](https://github.com/Python-roborock/local_roborock_server/issues/95) |
 | QRevo | `02.20.60` | ✅ | ❓ | ✅ | ❓ | [#75](https://github.com/Python-roborock/local_roborock_server/pull/75), [#94](https://github.com/Python-roborock/local_roborock_server/issues/94) |
 | QRevo Curv | `02.28.60` | ❓ | ❓ | ✅ | ❓ | [#60](https://github.com/Python-roborock/local_roborock_server/issues/60) |
 | QRevo Curv (a135) | `02.28.92` | ❓ | ❓ | ✅ | ❓ | [#110](https://github.com/Python-roborock/local_roborock_server/issues/110) |

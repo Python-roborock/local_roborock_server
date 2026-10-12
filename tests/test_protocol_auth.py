@@ -330,6 +330,29 @@ def test_protocol_code_login_rejects_wrong_email_and_wrong_pin(tmp_path: Path) -
     assert wrong_pin.json()["data"]["reason"] == "invalid_login_pin"
 
 
+def test_legacy_login_with_code_accepts_python_roborock_lowercase_verifycode(tmp_path: Path) -> None:
+    """python-roborock's legacy ``RoborockApiClient.code_login`` posts the PIN as the
+    query parameter ``verifycode`` (lowercase c) to ``/api/v1/loginWithCode``; the
+    lookup is case-sensitive, so only ``verifyCode`` matched before this test."""
+    supervisor, _paths = _build_supervisor(tmp_path, with_snapshot=False)
+    client = TestClient(supervisor.app)
+
+    response = client.post(
+        "/api/v1/loginWithCode",
+        params={"username": "user@example.com", "verifycode": "123456"},
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["code"] == 200
+    assert response.json()["data"]["rriot"]["r"]["a"] == supervisor.context.api_url()
+
+    wrong_pin = client.post(
+        "/api/v1/loginWithCode",
+        params={"username": "user@example.com", "verifycode": "654321"},
+    )
+    assert wrong_pin.status_code == 401
+    assert wrong_pin.json()["data"]["reason"] == "invalid_login_pin"
+
+
 def test_protocol_password_login_is_rejected(tmp_path: Path) -> None:
     supervisor, _paths = _build_supervisor(tmp_path)
     client = TestClient(supervisor.app)

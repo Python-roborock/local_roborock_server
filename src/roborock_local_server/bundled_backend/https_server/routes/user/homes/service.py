@@ -8,7 +8,7 @@ from typing import Any
 from shared.constants import DEFAULT_HOME_NAME
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, as_int, default_home_id, get_value, stable_int
-from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory, write_inventory
+from shared.inventory_io import WEB_API_INVENTORY_FILE, inventory_mutation, load_inventory, write_inventory
 
 from ..devices.service import _home_data as _base_home_data
 from ..devices.service import enrich_home_data_with_cloud_snapshot
@@ -40,6 +40,7 @@ def extract_home_id_from_rooms_path(ctx: ServerContext, clean_path: str) -> int:
     return as_int(match.group(1), default_home_id(ctx))
 
 
+@inventory_mutation
 def upsert_inventory_room(ctx: ServerContext, *, home_id: int, room_name: str) -> tuple[dict[str, Any], bool]:
     inventory = load_inventory(ctx)
     if not isinstance(inventory, dict):

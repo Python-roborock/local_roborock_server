@@ -67,6 +67,8 @@ from .routes.api.v5.product import build as _build_get_products_v5
 from .routes.api.v5.product import match as _match_get_products_v5
 from .routes.bootstrap.catchall import build as _build_catchall
 from .routes.bootstrap.catchall import match as _match_catchall
+from .routes.bootstrap.device_info import build as _build_device_info
+from .routes.bootstrap.device_info import match as _match_device_info
 from .routes.fw.check import build as _build_fw_check
 from .routes.fw.check import match as _match_fw_check
 from .routes.fw.createca import build as _build_fw_createca
@@ -136,6 +138,8 @@ from .routes.user.scene.item import match_put_name as _match_put_scene_name
 from .routes.user.scene.item import match_put_param as _match_put_scene_param
 from .routes.user.scene.order import build as _build_get_scene_order
 from .routes.user.scene.order import match as _match_get_scene_order
+from .routes.user.scene.validity import build as _build_put_scene_validity
+from .routes.user.scene.validity import match as _match_put_scene_validity
 from .routes.v2.user.scene import build as _build_post_scene_create
 from .routes.v2.user.scene import match as _match_post_scene_create
 
@@ -586,6 +590,7 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("get_scene_order", _match_get_scene_order, _build_get_scene_order),
         EndpointRule("put_scene_name", _match_put_scene_name, _build_put_scene_name),
         EndpointRule("put_scene_param", _match_put_scene_param, _build_put_scene_param),
+        EndpointRule("put_scene_validity", _match_put_scene_validity, _build_put_scene_validity),
         EndpointRule("execute_scene", _match_execute_scene, _build_execute_scene),
         EndpointRule("delete_scene", _match_delete_scene, _build_delete_scene),
         EndpointRule("get_device", _match_get_device, _build_get_device),
@@ -604,6 +609,7 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("location", _match_location, _build_location),
         EndpointRule("fw_check", _match_fw_check, _build_fw_check),
         EndpointRule("fw_createca", _match_fw_createca, _build_fw_createca),
+        EndpointRule("device_info", _match_device_info, _build_device_info),
         EndpointRule("catchall", _match_catchall, _build_catchall),
     )
 

@@ -50,7 +50,9 @@ from .backend import (
     start_broker,
     strip_roborock_prefix,
 )
+from shared.inventory_io import atomic_write_inventory, inventory_transaction
 from shared.protocol_auth import ProtocolAuthStore
+from https_server.routes.user.scene import validity as scene_validity
 from https_server.routes.auth.service import (
     build_login_data_response,
     cloud_login_data_required_response,
@@ -930,6 +932,7 @@ class ReleaseSupervisor:
                 body_params,
                 "code",
                 "verifyCode",
+                "verifycode",
                 "emailCode",
                 "smsCode",
             )
@@ -1222,6 +1225,8 @@ class ReleaseSupervisor:
             if not authenticated:
                 route_name = f"{required_auth}_auth_failed"
                 status_code, response_payload = self._protocol_auth_failure_response(auth_reason, required_auth)
+                if scene_validity.match(clean_path, request.method):
+                    response_payload = scene_validity.error_response(unauthorized=True)
                 entry["route"] = route_name
                 entry["response_json"] = response_payload
                 try:
@@ -1377,7 +1382,8 @@ class ReleaseSupervisor:
             route_name,
             body_sha256[:16],
         )
-        return JSONResponse(response_payload)
+        status_code = 400 if route_name == "put_scene_validity" and response_payload.get("status") == "BAD_REQUEST" else 200
+        return JSONResponse(response_payload, status_code=status_code)
 
     def _status_payload(self) -> dict[str, Any]:
         health = self.runtime_state.health_snapshot()
@@ -1650,97 +1656,92 @@ class ReleaseSupervisor:
         product_id: str,
         local_key: str,
     ) -> bool:
-        inventory_id = (duid or did).strip()
-        if not inventory_id:
-            return False
-        inventory = _load_inventory(self.paths.inventory_path)
-        devices = inventory.get("devices")
-        if not isinstance(devices, list):
-            devices = []
-        identifiers = {value for value in (inventory_id, did, duid) if value}
-        meta = resolve_product_metadata(
-            model=model,
-            custom_name=name,
-            custom_registry_path=self.paths.runtime_dir / "product_registry.custom.json",
-        )
-        resolved_name = meta["product_name"]
-        resolved_model = meta["model"]
-        resolved_category = meta["category"]
-        resolved_product_id = product_id or meta["product_id"]
-        resolved_schema = meta["schema"]
-
-        for existing in devices:
-            if not isinstance(existing, dict):
-                continue
-            existing_ids = {
-                str(existing.get(key) or "").strip()
-                for key in ("duid", "did", "device_id", "deviceId")
-            }
-            if identifiers & existing_ids:
-                if existing.get("source") != "onboarding":
-                    # Cloud-imported records are authoritative; never rewrite them here.
-                    return False
-                changed = False
-                if name and (not existing.get("name") or existing.get("name") in identifiers):
-                    existing["name"] = resolved_name
-                    changed = True
-                if not existing.get("product_name"):
-                    existing["product_name"] = resolved_name
-                    changed = True
-                if model and not existing.get("model"):
-                    existing["model"] = resolved_model
-                    changed = True
-                if not existing.get("schema"):
-                    existing["schema"] = resolved_schema
-                    changed = True
-                if not existing.get("category"):
-                    existing["category"] = resolved_category
-                    changed = True
-                if changed:
-                    self.paths.inventory_path.write_text(
-                        json.dumps(inventory, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
+        with inventory_transaction(self.paths.inventory_path):
+            inventory_id = (duid or did).strip()
+            if not inventory_id:
                 return False
-        # Unify the runtime-credentials record so its duid matches the inventory id while
-        # keeping the already-minted localKey. sync_inventory matches on duid only, so an
-        # unset duid would otherwise make it create a duplicate device with a fresh key.
-        self.runtime_credentials.ensure_device(
-            did=did,
-            duid=inventory_id,
-            name=resolved_name,
-            model=resolved_model,
-            product_id=resolved_product_id,
-            assign_localkey=False,
-        )
-        devices.append(
-            {
-                "duid": inventory_id,
-                "did": did,
-                "name": resolved_name,
-                "product_name": resolved_name,
-                "model": resolved_model,
-                "category": resolved_category,
-                "product_id": resolved_product_id,
-                "local_key": local_key,
-                "source": "onboarding",
-                "schema": resolved_schema,
-            }
-        )
-        inventory["devices"] = devices
-        if not isinstance(inventory.get("home"), dict):
-            inventory["home"] = {"name": "Local Home", "rooms": [{"id": 1, "name": "Living Room"}]}
-        self.paths.inventory_path.write_text(
-            json.dumps(inventory, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        self.root_logger.info(
-            "persisted onboarded 'new vacuum' to inventory: id=%s did=%s model=%s",
-            inventory_id,
-            did or "-",
-            model or "unknown",
-        )
-        return True
+            inventory = _load_inventory(self.paths.inventory_path)
+            devices = inventory.get("devices")
+            if not isinstance(devices, list):
+                devices = []
+            identifiers = {value for value in (inventory_id, did, duid) if value}
+            meta = resolve_product_metadata(
+                model=model,
+                custom_name=name,
+                custom_registry_path=self.paths.runtime_dir / "product_registry.custom.json",
+            )
+            resolved_name = meta["product_name"]
+            resolved_model = meta["model"]
+            resolved_category = meta["category"]
+            resolved_product_id = product_id or meta["product_id"]
+            resolved_schema = meta["schema"]
+
+            for existing in devices:
+                if not isinstance(existing, dict):
+                    continue
+                existing_ids = {
+                    str(existing.get(key) or "").strip()
+                    for key in ("duid", "did", "device_id", "deviceId")
+                }
+                if identifiers & existing_ids:
+                    if existing.get("source") != "onboarding":
+                        # Cloud-imported records are authoritative; never rewrite them here.
+                        return False
+                    changed = False
+                    if name and (not existing.get("name") or existing.get("name") in identifiers):
+                        existing["name"] = resolved_name
+                        changed = True
+                    if not existing.get("product_name"):
+                        existing["product_name"] = resolved_name
+                        changed = True
+                    if model and not existing.get("model"):
+                        existing["model"] = resolved_model
+                        changed = True
+                    if not existing.get("schema"):
+                        existing["schema"] = resolved_schema
+                        changed = True
+                    if not existing.get("category"):
+                        existing["category"] = resolved_category
+                        changed = True
+                    if changed:
+                        atomic_write_inventory(self.paths.inventory_path, inventory)
+                    return False
+            # Unify the runtime-credentials record so its duid matches the inventory id while
+            # keeping the already-minted localKey. sync_inventory matches on duid only, so an
+            # unset duid would otherwise make it create a duplicate device with a fresh key.
+            self.runtime_credentials.ensure_device(
+                did=did,
+                duid=inventory_id,
+                name=resolved_name,
+                model=resolved_model,
+                product_id=resolved_product_id,
+                assign_localkey=False,
+            )
+            devices.append(
+                {
+                    "duid": inventory_id,
+                    "did": did,
+                    "name": resolved_name,
+                    "product_name": resolved_name,
+                    "model": resolved_model,
+                    "category": resolved_category,
+                    "product_id": resolved_product_id,
+                    "local_key": local_key,
+                    "source": "onboarding",
+                    "schema": resolved_schema,
+                }
+            )
+            inventory["devices"] = devices
+            if not isinstance(inventory.get("home"), dict):
+                inventory["home"] = {"name": "Local Home", "rooms": [{"id": 1, "name": "Living Room"}]}
+            atomic_write_inventory(self.paths.inventory_path, inventory)
+            self.root_logger.info(
+                "persisted onboarded 'new vacuum' to inventory: id=%s did=%s model=%s",
+                inventory_id,
+                did or "-",
+                model or "unknown",
+            )
+            return True
 
     def clear_onboarding_session(self, *, session_id: str) -> dict[str, Any]:
         snapshot = self.runtime_state.onboarding_session_snapshot()

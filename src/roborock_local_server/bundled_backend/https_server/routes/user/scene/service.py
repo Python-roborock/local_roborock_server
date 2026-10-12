@@ -8,7 +8,7 @@ from typing import Any, Callable, Sequence
 
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, as_int, default_home_id, get_value, stable_int
-from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory, write_inventory
+from shared.inventory_io import WEB_API_INVENTORY_FILE, inventory_mutation, load_inventory, write_inventory
 from shared.routine_runner import RoutineExecutionError, RoutineRunner
 
 _LOGGER = logging.getLogger(__name__)
@@ -424,6 +424,7 @@ def _scene_device_name(inventory: dict[str, Any], device_id: str) -> str:
     return ""
 
 
+@inventory_mutation
 def _replace_inventory_scene(
     ctx: ServerContext,
     *,
@@ -486,6 +487,7 @@ def _hydrate_inventory_scene_ranges(ctx: ServerContext, scene: dict[str, Any]) -
     return updated_scene
 
 
+@inventory_mutation
 def _create_inventory_scene(ctx: ServerContext, scene_request: dict[str, Any]) -> dict[str, Any]:
     inventory = load_inventory(ctx)
     if not isinstance(inventory, dict):
@@ -697,6 +699,7 @@ def update_scene_param(ctx: ServerContext, scene_id: int, body_params: dict[str,
     return build_scene_payload(updated_scene, home_id=home_id, include_device_context=True)
 
 
+@inventory_mutation
 def delete_scene(ctx: ServerContext, scene_id: int) -> None:
     inventory = load_inventory(ctx)
     if not isinstance(inventory, dict):
