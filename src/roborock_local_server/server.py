@@ -54,6 +54,7 @@ from .backend import (
 from shared.inventory_io import atomic_write_inventory, inventory_transaction
 from shared.protocol_auth import ProtocolAuthStore
 from shared.schedule_runner import ScheduleRunner
+from shared.timer_rpc import TimerRpcInterceptor
 from https_server.routes.user.scene import validity as scene_validity
 from https_server.routes.auth.service import (
     build_login_data_response,
@@ -1957,6 +1958,10 @@ class ReleaseSupervisor:
                 logger=self.loggers["mqtt"],
                 runtime_state=self.runtime_state,
                 inventory_path=self.paths.inventory_path,
+                request_interceptor=TimerRpcInterceptor(
+                    self.context,
+                    default_timezone=self.config.network.timezone,
+                ),
             )
             await self._topic_bridge.start()
             self.runtime_state.set_service("mqtt_topic_bridge", running=True, required=False, enabled=True)
