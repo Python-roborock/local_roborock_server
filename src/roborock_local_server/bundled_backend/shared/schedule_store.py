@@ -17,6 +17,68 @@ DEFAULT_JOB_PARAM: dict[str, Any] = {
 }
 
 
+JOB_SETTING_KEYS = (
+    "repeat",
+    "fan_power",
+    "water_box_mode",
+    "mop_mode",
+    "mop_template_id",
+    "segments",
+    "clean_mop",
+)
+_INT_SETTING_KEYS = frozenset(JOB_SETTING_KEYS) - {"segments"}
+
+
+class SettingsError(ValueError):
+    """A schedule setting had a value this server cannot store."""
+
+
+def _normalize_setting(key: str, value: Any) -> Any:
+    if key == "segments":
+        items = value.replace(";", ",").split(",") if isinstance(value, str) else list(value)
+        try:
+            ids = [int(str(item).strip()) for item in items if str(item).strip()]
+        except ValueError as exc:
+            raise SettingsError(f"segments must be room ids, got {value!r}") from exc
+        ids = [room for room in ids if room > 0]
+        return ",".join(str(room) for room in ids) if ids else "0"
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise SettingsError(f"{key} must be a number, got {value!r}")
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise SettingsError(f"{key} must be a number, got {value!r}") from exc
+
+
+def job_settings(job: dict[str, Any]) -> dict[str, Any]:
+    """The vac/mop settings a job carries, as a flat dict."""
+    param = job.get("param")
+    params = param.get("params") if isinstance(param, dict) else None
+    entry = params[0] if isinstance(params, list) and params and isinstance(params[0], dict) else {}
+    return {key: entry[key] for key in JOB_SETTING_KEYS if key in entry}
+
+
+def merge_job_settings(param: dict[str, Any] | None, settings: dict[str, Any]) -> dict[str, Any]:
+    """Copy of ``param`` with ``settings`` merged in; a None value clears that setting.
+
+    Settings not mentioned are left alone, so editing one option never resets the rest.
+    """
+    merged = copy.deepcopy(param) if isinstance(param, dict) else copy.deepcopy(DEFAULT_JOB_PARAM)
+    params = merged.get("params")
+    if not isinstance(params, list) or not params or not isinstance(params[0], dict):
+        params = copy.deepcopy(DEFAULT_JOB_PARAM["params"])
+        merged["params"] = params
+    entry = params[0]
+    for key, value in settings.items():
+        if key not in JOB_SETTING_KEYS:
+            raise SettingsError(f"unknown schedule setting {key!r}")
+        if value is None:
+            entry.pop(key, None)
+        else:
+            entry[key] = _normalize_setting(key, value)
+    return merged
+
+
 def _same_id(job: Any, job_id: Any) -> bool:
     return isinstance(job, dict) and str(job.get("id")) == str(job_id)
 

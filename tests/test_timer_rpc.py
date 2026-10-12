@@ -58,10 +58,11 @@ def ctx(tmp_path):
 def test_get_timer_lists_cloud_schedules_in_the_shape_localrock_parses(ctx):
     result = timer_rpc.handle_timer_request(ctx, DUID, "get_timer", None)
     # The one-off (Dec 15) keeps its day and month, the form the robot and the official app use.
+    settings = {"repeat": 1, "water_box_mode": 203, "segments": "0", "fan_power": 104, "mop_mode": 300}
     assert result == [
-        ["3549431", "on", ["00 11 * * 1,3,5", ["start_clean", {}]]],
-        ["3549434", "off", ["00 11 * * 0,6", ["start_clean", {}]]],
-        ["3878757", "on", ["03 13 15 12 *", ["start_clean", {}]]],
+        ["3549431", "on", ["00 11 * * 1,3,5", ["start_clean", settings]]],
+        ["3549434", "off", ["00 11 * * 0,6", ["start_clean", settings]]],
+        ["3878757", "on", ["03 13 15 12 *", ["start_clean", settings]]],
     ]
 
 
@@ -93,7 +94,8 @@ def test_set_timer_creates_a_job_and_get_timer_returns_it(ctx):
     assert job["param"]["method"] == "server_scheduled_start"
 
     listed = timer_rpc.handle_timer_request(ctx, DUID, "get_timer", None)
-    assert ["1790000000", "on", ["30 7 * * 1,2", ["start_clean", {}]]] in listed
+    default_settings = {"repeat": 1, "segments": "0"}
+    assert ["1790000000", "on", ["30 7 * * 1,2", ["start_clean", default_settings]]] in listed
 
 
 def test_editing_a_cloud_schedule_keeps_its_vac_and_mop_settings(ctx):
@@ -170,3 +172,67 @@ def test_bridge_answers_timer_requests_locally_and_does_not_forward_them(ctx):
 
     assert [topic for topic, _ in client.published] == [cloud.topic_out]
     assert _decode_reply(client.published[0][1]).request_id == 4242
+
+
+def _job(ctx, job_id):
+    return next(j for j in schedule_store.list_jobs(ctx, DUID) if str(j["id"]) == str(job_id))
+
+
+def test_set_timer_carries_vac_and_mop_settings_in_the_action_object(ctx):
+    action = ["start_clean", {"fan_power": 102, "water_box_mode": 200, "repeat": 2}]
+    params = [["1790000001", ["on", ["0 9 * * 2,4", action]]]]
+    assert timer_rpc.handle_timer_request(ctx, DUID, "set_timer", params) == ["ok"]
+
+    entry = _job(ctx, 1790000001)["param"]["params"][0]
+    assert (entry["fan_power"], entry["water_box_mode"], entry["repeat"]) == (102, 200, 2)
+
+    listed = timer_rpc.handle_timer_request(ctx, DUID, "get_timer", None)
+    row = next(item for item in listed if item[0] == "1790000001")
+    assert row[2][1][1]["water_box_mode"] == 200
+
+
+def test_changing_one_setting_leaves_the_others_alone(ctx):
+    action = ["start_clean", {"water_box_mode": 200}]  # vac only on this cloud schedule
+    timer_rpc.handle_timer_request(ctx, DUID, "set_timer", [["3549431", ["on", ["00 11 * * 1,3,5", action]]]])
+
+    entry = _job(ctx, 3549431)["param"]["params"][0]
+    assert entry["water_box_mode"] == 200
+    assert (entry["fan_power"], entry["mop_mode"]) == (104, 300)
+
+
+def test_an_empty_action_object_does_not_reset_existing_settings(ctx):
+    # What older LocalRock builds send: ["start_clean", {}].
+    action = ["start_clean", {}]
+    timer_rpc.handle_timer_request(ctx, DUID, "set_timer", [["3549431", ["on", ["30 8 * * 1,3,5", action]]]])
+
+    job = _job(ctx, 3549431)
+    assert job["cron"] == "30 8 * * 1,3,5"
+    assert job["param"]["params"][0]["water_box_mode"] == 203
+
+
+def test_null_clears_a_setting_and_segments_are_normalised(ctx):
+    action = ["start_clean", {"mop_mode": None, "segments": [16, 17]}]
+    timer_rpc.handle_timer_request(ctx, DUID, "set_timer", [["3549431", ["on", ["00 11 * * 1,3,5", action]]]])
+
+    entry = _job(ctx, 3549431)["param"]["params"][0]
+    assert "mop_mode" not in entry
+    assert entry["segments"] == "16,17"
+
+
+def test_vac_only_schedule_fires_without_a_mop_template(ctx):
+    from shared import schedule_runner
+
+    action = ["start_clean", {"water_box_mode": 200, "fan_power": 102}]
+    timer_rpc.handle_timer_request(ctx, DUID, "set_timer", [["1790000002", ["on", ["0 9 * * *", action]]]])
+
+    (step,) = schedule_runner.steps_for_job(_job(ctx, 1790000002))
+    assert step.params[0]["water_box_mode"] == 200
+    assert step.params[0]["fan_power"] == 102
+
+
+def test_non_numeric_setting_is_rejected_and_nothing_is_saved(ctx):
+    before = schedule_store.list_jobs(ctx, DUID)
+    action = ["start_clean", {"fan_power": "loud"}]
+    with pytest.raises(timer_rpc.TimerRequestError):
+        timer_rpc.handle_timer_request(ctx, DUID, "set_timer", [["9", ["on", ["0 9 * * *", action]]]])
+    assert schedule_store.list_jobs(ctx, DUID) == before

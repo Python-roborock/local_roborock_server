@@ -18,7 +18,16 @@ from roborock.roborock_message import RoborockMessage, RoborockMessageProtocol
 
 from .constants import DEFAULT_TIMEZONE
 from .schedule_runner import CronError, parse_cron
-from .schedule_store import delete_job, list_jobs, set_enabled, upsert_job
+from .schedule_store import (
+    JOB_SETTING_KEYS,
+    SettingsError,
+    delete_job,
+    job_settings,
+    list_jobs,
+    merge_job_settings,
+    set_enabled,
+    upsert_job,
+)
 
 if TYPE_CHECKING:
     from .context import ServerContext
@@ -56,10 +65,10 @@ def _timer_entry(job: dict[str, Any]) -> list[Any] | None:
         return None
     enabled = job.get("enabled", True)
     on = enabled not in (False, 0, "0", "false", "False")
-    return [str(job.get("id")), "on" if on else "off", [cron, ["start_clean", {}]]]
+    return [str(job.get("id")), "on" if on else "off", [cron, ["start_clean", job_settings(job)]]]
 
 
-def _parse_set_timer(params: Any) -> tuple[str, bool, str]:
+def _parse_set_timer(params: Any) -> tuple[str, bool, str, dict[str, Any]]:
     entry = params[0] if isinstance(params, list) and params and isinstance(params[0], list) else params
     if not isinstance(entry, list) or len(entry) < 2:
         raise TimerRequestError("set_timer needs [id, [status, [cron, action]]]")
@@ -73,7 +82,9 @@ def _parse_set_timer(params: Any) -> tuple[str, bool, str]:
         status, detail = spec[0], spec[1]
     if not isinstance(detail, list) or not detail:
         raise TimerRequestError("set_timer is missing its cron")
-    return job_id, str(status).lower() == "on", str(detail[0])
+    action = detail[1] if len(detail) > 1 else None
+    settings = action[1] if isinstance(action, list) and len(action) > 1 and isinstance(action[1], dict) else {}
+    return job_id, str(status).lower() == "on", str(detail[0]), settings
 
 
 def _id_and_status(params: Any) -> tuple[str, str]:
@@ -106,13 +117,23 @@ def handle_timer_request(
         return [entry for entry in entries if entry is not None]
 
     if method == "set_timer":
-        job_id, enabled, cron = _parse_set_timer(params)
+        job_id, enabled, cron, action_settings = _parse_set_timer(params)
         try:
             parse_cron(cron)
         except CronError as exc:
             raise TimerRequestError(str(exc)) from exc
+        # An empty action object (what older clients send) leaves the job's settings alone;
+        # keys it does carry are merged in, so a client can change one option at a time.
+        settings = {key: value for key, value in action_settings.items() if key in JOB_SETTING_KEYS}
+        param = None
+        if settings:
+            existing = next((job for job in list_jobs(ctx, duid) if str(job.get("id")) == job_id), None)
+            try:
+                param = merge_job_settings(existing.get("param") if existing else None, settings)
+            except SettingsError as exc:
+                raise TimerRequestError(str(exc)) from exc
         zone = str(getattr(ctx, "timezone", "") or default_timezone or DEFAULT_TIMEZONE)
-        upsert_job(ctx, duid, job_id=job_id, cron=cron, enabled=enabled, time_zone=zone)
+        upsert_job(ctx, duid, job_id=job_id, cron=cron, enabled=enabled, time_zone=zone, param=param)
         return list(_OK)
 
     if method == "upd_timer":
