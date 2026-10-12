@@ -104,6 +104,9 @@ def test_device_jobs_endpoint_returns_imported_schedules(tmp_path: Path) -> None
     payload = response.json()
     assert payload["success"] is True
     assert payload["data"] == payload["result"]
+    # nextFireTime is computed from the cron against "now", so check its shape, not its value.
+    next_fire_time = payload["result"][0].pop("nextFireTime")
+    assert next_fire_time.endswith("T13:03:00.000+00:00")
     assert payload["result"] == [
         {
             **schedule,
