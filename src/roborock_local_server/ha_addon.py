@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .configure import hash_password
+from .config import LoggingConfig
 
 DEFAULT_OPTIONS: dict[str, Any] = {
     "stack_fqdn": "",
@@ -21,6 +22,8 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "advertised_https_port": 0,
     "advertised_mqtt_tls_port": 0,
     "region": "us",
+    "log_max_size_mb": LoggingConfig.max_size_mb,
+    "log_backup_count": LoggingConfig.backup_count,
     "tls_mode": "provided",
     "tls_base_domain": "",
     "tls_email": "",
@@ -174,6 +177,10 @@ def _render_config_toml(
 ) -> tuple[str, dict[Path, str]]:
     merged = dict(DEFAULT_OPTIONS)
     merged.update(options)
+    log_config = LoggingConfig(
+        max_size_mb=merged["log_max_size_mb"],
+        backup_count=merged["log_backup_count"],
+    )
 
     stack_fqdn = _normalize_hostname(
         merged.get("stack_fqdn", ""),
@@ -305,6 +312,10 @@ def _render_config_toml(
         "",
         "[storage]",
         'data_dir = "/data"',
+        "",
+        "[logging]",
+        f"max_size_mb = {log_config.max_size_mb}",
+        f"backup_count = {log_config.backup_count}",
         "",
         "[tls]",
         f"mode = {_toml_string(effective_tls_mode)}",

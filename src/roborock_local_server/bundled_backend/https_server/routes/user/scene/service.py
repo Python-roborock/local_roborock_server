@@ -6,6 +6,8 @@ import json
 import logging
 from typing import Any, Callable, Sequence
 
+from roborock_local_server.log_retention import iter_log_lines
+
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, as_int, default_home_id, get_value, stable_int
 from shared.inventory_io import WEB_API_INVENTORY_FILE, inventory_mutation, load_inventory, write_inventory
@@ -166,45 +168,36 @@ def _scene_zone_ranges_from_mqtt(
     *,
     tids_filter: set[str] | None = None,
 ) -> dict[tuple[str, int], list[int]]:
-    path = ctx.mqtt_jsonl
-    if not path.exists():
-        return {}
     zone_ranges: dict[tuple[str, int], list[int]] = {}
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            lines = handle.readlines()
-        for line in reversed(lines):
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
+    # Oldest first so the latest coordinates win, including across rotations.
+    for line in iter_log_lines(ctx.mqtt_jsonl):
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        decoded_messages = entry.get("decoded_messages")
+        if not isinstance(decoded_messages, list):
+            continue
+        for decoded in decoded_messages:
+            if not isinstance(decoded, dict):
                 continue
-            decoded_messages = entry.get("decoded_messages")
-            if not isinstance(decoded_messages, list):
-                continue
-            for decoded in decoded_messages:
-                if not isinstance(decoded, dict):
-                    continue
-                rpc = decoded.get("rpc")
-                if isinstance(rpc, dict) and str(rpc.get("method") or "").strip() == "set_scenes_zones":
-                    _merge_scene_zone_ranges_from_request(
-                        zone_ranges,
-                        params=rpc.get("params"),
-                        tids_filter=tids_filter,
-                    )
-                response_to = decoded.get("response_to")
-                if isinstance(response_to, dict) and str(response_to.get("request_method") or "").strip() == "set_scenes_zones":
-                    _merge_scene_zone_ranges_from_response(
-                        zone_ranges,
-                        request_params=response_to.get("request_params"),
-                        result=response_to.get("result"),
-                        tids_filter=tids_filter,
-                    )
-            if tids_filter and all(
-                any(key[0] == tid for key in zone_ranges) for tid in tids_filter
-            ):
-                break
-    except OSError:
-        return {}
+            rpc = decoded.get("rpc")
+            if isinstance(rpc, dict) and str(rpc.get("method") or "").strip() == "set_scenes_zones":
+                _merge_scene_zone_ranges_from_request(
+                    zone_ranges,
+                    params=rpc.get("params"),
+                    tids_filter=tids_filter,
+                )
+            response_to = decoded.get("response_to")
+            if isinstance(response_to, dict) and str(response_to.get("request_method") or "").strip() == "set_scenes_zones":
+                _merge_scene_zone_ranges_from_response(
+                    zone_ranges,
+                    request_params=response_to.get("request_params"),
+                    result=response_to.get("result"),
+                    tids_filter=tids_filter,
+                )
     return zone_ranges
 
 

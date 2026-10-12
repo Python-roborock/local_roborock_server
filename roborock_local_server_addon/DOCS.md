@@ -45,6 +45,13 @@ For existing cloud integrations, Home Assistant does not support changing the se
 
 ## Notes
 
+Service logs and HTTP/MQTT JSONL traces rotate automatically at 10 MiB per file,
+with three backups each. Set `log_max_size_mb` (1–1024 MiB) and
+`log_backup_count` (0–20), then restart to change retention. Zero backups keeps
+only the active file while still limiting growth. Existing oversized logs are
+trimmed at startup after state recovery. See [Log retention](../docs/logging.md)
+for upgrade behavior and storage estimates.
+
 - Local-only access is still the preferred setup. If you expose it for remote access, the server handles auth and can disable new devices from connecting, but any publicly accessible self-hosted service has risk.
 - If you change `https_port` or `mqtt_tls_port`, update your DNS/clients to use those ports.
 - The current server advertises the same hostname for HTTPS and MQTT/TLS, so Home Assistant's Roborock entry should normally use `ssl://api-roborock.example.com:8881`, not a separate `mqtt-...` hostname.

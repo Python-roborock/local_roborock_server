@@ -44,6 +44,22 @@ class StorageConfig:
 
 
 @dataclass(frozen=True)
+class LoggingConfig:
+    max_size_mb: int = 10
+    backup_count: int = 3
+
+    def __post_init__(self) -> None:
+        for name, minimum, maximum in (("max_size_mb", 1, 1024), ("backup_count", 0, 20)):
+            value = getattr(self, name)
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ValueError(f"logging.{name} must be an integer between {minimum} and {maximum}")
+
+    @property
+    def max_bytes(self) -> int:
+        return self.max_size_mb * 1024 * 1024
+
+
+@dataclass(frozen=True)
 class TlsConfig:
     mode: str
     base_domain: str
@@ -96,6 +112,7 @@ class AppConfig:
     tls: TlsConfig
     admin: AdminConfig
     turn: TurnConfig = TurnConfig()
+    logging: LoggingConfig = LoggingConfig()
 
 
 @dataclass(frozen=True)
@@ -239,6 +256,7 @@ def load_config(path: str | Path) -> AppConfig:
     network = _get_section(parsed, "network")
     broker = _get_section(parsed, "broker")
     storage = _get_section(parsed, "storage")
+    logging = _get_section(parsed, "logging")
     tls = _get_section(parsed, "tls")
     admin = _get_section(parsed, "admin")
     turn = _get_section(parsed, "turn")
@@ -305,6 +323,10 @@ def load_config(path: str | Path) -> AppConfig:
         ),
         storage=StorageConfig(
             data_dir=str(storage.get("data_dir", "/data")).strip() or "/data",
+        ),
+        logging=LoggingConfig(
+            max_size_mb=logging.get("max_size_mb", LoggingConfig.max_size_mb),
+            backup_count=logging.get("backup_count", LoggingConfig.backup_count),
         ),
         tls=TlsConfig(
             mode=tls_mode,

@@ -30,6 +30,7 @@ from .product_registry import resolve_product_metadata
 from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIRED_ONBOARDING_STEPS
 from .cloud import CloudImportManager
 from .config import AppConfig, AppPaths, load_config, resolve_paths
+from .log_retention import configure_jsonl_logging
 from .turn_relay import EmbeddedTurnRelay
 from .standalone_admin import register_standalone_admin_routes
 from .backend import (
@@ -377,7 +378,6 @@ class ReleaseSupervisor:
             session_store_path=self.paths.protocol_auth_sessions_path,
         )
 
-        self.loggers = self._setup_loggers()
         if not self.paths.device_key_state_path.exists():
             self.paths.device_key_state_path.parent.mkdir(parents=True, exist_ok=True)
             self.paths.device_key_state_path.write_text('{"devices":{}}\n', encoding="utf-8")
@@ -444,6 +444,16 @@ class ReleaseSupervisor:
         if recovered_device_passwords:
             self.root_logger.info("Recovered %d device MQTT password(s) from mqtt_server.log", recovered_device_passwords)
 
+        # Recover legacy state before retention trims oversized files or removes
+        # backups, including when the user lowers the configured limits.
+        zone_ranges_store = self._init_zone_ranges_store()
+        self.loggers = self._setup_loggers()
+        for path in (self.paths.http_jsonl_path, self.paths.mqtt_jsonl_path):
+            configure_jsonl_logging(
+                path, max_bytes=self.config.logging.max_bytes,
+                backup_count=self.config.logging.backup_count,
+            )
+
         self.context = ServerContext(
             api_host=self.config.network.stack_fqdn,
             mqtt_host=self.config.network.stack_fqdn,
@@ -464,7 +474,7 @@ class ReleaseSupervisor:
             bootstrap_encryption_enabled=True,
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
-            zone_ranges_store=self._init_zone_ranges_store(),
+            zone_ranges_store=zone_ranges_store,
             timezone=self.config.network.timezone or None,
             turn_enabled=self.config.turn.mode != "disabled",
             turn_host=self.config.turn.host or self.config.network.stack_fqdn,
@@ -488,12 +498,12 @@ class ReleaseSupervisor:
     def _setup_loggers(self) -> dict[str, logging.Logger]:
         self.paths.runtime_dir.mkdir(parents=True, exist_ok=True)
         return {
-            "api": setup_file_logger("api", self.paths.runtime_dir / "api_server.log"),
-            "iot": setup_file_logger("iot", self.paths.runtime_dir / "iot_server.log"),
-            "wood": setup_file_logger("wood", self.paths.runtime_dir / "wood_server.log"),
-            "https": setup_file_logger("https", self.paths.runtime_dir / "https_server.log"),
-            "mqtt": setup_file_logger("mqtt", self.paths.runtime_dir / "mqtt_server.log"),
-            "unknown": setup_file_logger("unknown", self.paths.runtime_dir / "unknown_server.log"),
+            name: setup_file_logger(
+                name, self.paths.runtime_dir / f"{name}_server.log",
+                max_bytes=self.config.logging.max_bytes,
+                backup_count=self.config.logging.backup_count,
+            )
+            for name in ("api", "iot", "wood", "https", "mqtt", "unknown")
         }
 
     def _derive_bootstrap_credentials(self) -> dict[str, str]:

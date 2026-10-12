@@ -1,8 +1,32 @@
 from pathlib import Path
+
 import pytest
+from conftest import write_release_config
 
 from roborock_local_server.config import load_config, resolve_paths
-from conftest import write_release_config
+
+
+def test_logging_defaults_and_overrides(tmp_path):
+    path = write_release_config(tmp_path)
+    defaults = load_config(path).logging
+    assert defaults.max_bytes == 10 * 1024 * 1024
+    assert defaults.backup_count == 3
+    path.write_text(path.read_text() + '\n[logging]\nmax_size_mb=2\nbackup_count=0\n')
+    config = load_config(path)
+    assert config.logging.max_bytes == 2 * 1024 * 1024
+    assert config.logging.backup_count == 0
+
+
+@pytest.mark.parametrize("field,value", [
+    ("max_size_mb", "0"), ("max_size_mb", "-1"), ("max_size_mb", "1025"),
+    ("max_size_mb", "1.5"), ("max_size_mb", "true"), ("max_size_mb", '"10"'),
+    ("backup_count", "-1"), ("backup_count", "21"), ("backup_count", "false"),
+])
+def test_logging_rejects_invalid_limits(tmp_path, field, value):
+    path = write_release_config(tmp_path)
+    path.write_text(path.read_text() + f'\n[logging]\n{field}={value}\n')
+    with pytest.raises(ValueError, match=f"logging.{field} must be an integer"):
+        load_config(path)
 
 
 def test_turn_config_defaults_and_rejects_unsafe_provided_credentials(tmp_path):

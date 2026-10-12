@@ -11,6 +11,8 @@ import threading
 from typing import Any
 from urllib.parse import parse_qs
 
+from roborock_local_server.log_retention import iter_log_lines
+
 from .data_helpers import utcnow_iso
 
 
@@ -702,8 +704,6 @@ class RuntimeCredentialsStore:
 
     def backfill_device_mqtt_passwords(self, log_path: str | Path) -> int:
         path = Path(log_path)
-        if not path.exists():
-            return 0
         changed = 0
         with self._lock:
             pending_usernames = {
@@ -715,28 +715,24 @@ class RuntimeCredentialsStore:
             return 0
 
         recovered_by_username: dict[str, str] = {}
-        try:
-            with path.open("r", encoding="utf-8", errors="replace") as handle:
-                for raw_line in handle:
-                    line = str(raw_line or "")
-                    if " CONNECT " not in line or " hex=" not in line:
-                        continue
-                    hex_value = line.rsplit(" hex=", 1)[-1].strip()
-                    if not hex_value:
-                        continue
-                    try:
-                        packet = bytes.fromhex(hex_value)
-                    except ValueError:
-                        continue
-                    parsed = parse_mqtt_connect_packet(packet)
-                    if parsed is None:
-                        continue
-                    username = _clean_str(parsed.get("username"))
-                    password = _clean_str(parsed.get("password"))
-                    if username in pending_usernames and password:
-                        recovered_by_username[username] = password
-        except OSError:
-            return 0
+        for raw_line in iter_log_lines(path):
+            line = str(raw_line or "")
+            if " CONNECT " not in line or " hex=" not in line:
+                continue
+            hex_value = line.rsplit(" hex=", 1)[-1].strip()
+            if not hex_value:
+                continue
+            try:
+                packet = bytes.fromhex(hex_value)
+            except ValueError:
+                continue
+            parsed = parse_mqtt_connect_packet(packet)
+            if parsed is None:
+                continue
+            username = _clean_str(parsed.get("username"))
+            password = _clean_str(parsed.get("password"))
+            if username in pending_usernames and password:
+                recovered_by_username[username] = password
 
         with self._lock:
             for username, password in recovered_by_username.items():

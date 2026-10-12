@@ -70,6 +70,8 @@ options:
   advertised_https_port: 0
   advertised_mqtt_tls_port: 0
   region: "us"
+  log_max_size_mb: 10
+  log_backup_count: 3
   tls_mode: "provided"
   tls_base_domain: ""
   tls_email: ""
@@ -96,6 +98,8 @@ schema:
   advertised_https_port: int
   advertised_mqtt_tls_port: int
   region: list(us|eu|cn|ru)
+  log_max_size_mb: int(1,1024)?
+  log_backup_count: int(0,20)?
   tls_mode: list(provided|cloudflare_acme)
   tls_base_domain: str
   tls_email: str

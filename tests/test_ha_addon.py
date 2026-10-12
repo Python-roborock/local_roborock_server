@@ -1,17 +1,50 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tomllib
+from pathlib import Path
 
 import pytest
 import yaml
 
+from roborock_local_server.config import load_config
 from roborock_local_server.ha_addon import write_config_from_home_assistant_options
 
 
 def _write_options(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+@pytest.mark.parametrize("addon", ["roborock_local_server_addon", "roborock_local_server_beta_addon"])
+def test_logging_options_round_trip_from_addon_schema(tmp_path, addon):
+    manifest = yaml.safe_load((Path(addon) / "config.yaml").read_text())
+    assert manifest["options"]["log_max_size_mb"] == 10
+    assert manifest["options"]["log_backup_count"] == 3
+    assert manifest["schema"]["log_max_size_mb"] == "int(1,1024)?"
+    assert manifest["schema"]["log_backup_count"] == "int(0,20)?"
+    options = {**manifest["options"], "stack_fqdn": "api-roborock.example.com",
+               "cert_file": "cert", "key_file": "key", "admin_password": "secret",
+               "protocol_login_email": "user@example.com", "protocol_login_pin": "123456",
+               "log_max_size_mb": 2, "log_backup_count": 0}
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+    _write_options(options_path, options)
+    write_config_from_home_assistant_options(options_path=options_path, config_path=config_path)
+    config = load_config(config_path)
+    assert config.logging.max_bytes == 2 * 1024 * 1024
+    assert config.logging.backup_count == 0
+
+
+@pytest.mark.parametrize("options", [{"log_max_size_mb": 0}, {"log_max_size_mb": 1.5},
+                                    {"log_backup_count": -1}, {"log_backup_count": True}])
+def test_addon_rejects_invalid_logging_options_before_writing_config(tmp_path, options):
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("existing configuration")
+    _write_options(options_path, options)
+    with pytest.raises(ValueError, match="logging."):
+        write_config_from_home_assistant_options(options_path=options_path, config_path=config_path)
+    assert config_path.read_text() == "existing configuration"
 
 
 def test_write_config_from_home_assistant_options_provided_tls(tmp_path: Path) -> None:
@@ -51,6 +84,7 @@ def test_write_config_from_home_assistant_options_provided_tls(tmp_path: Path) -
     assert parsed["broker"]["host"] == "127.0.0.1"
     assert parsed["broker"]["port"] == 18830
     assert parsed["broker"]["enable_topic_bridge"] is True
+    assert parsed["logging"] == {"max_size_mb": 10, "backup_count": 3}
     assert parsed["tls"]["mode"] == "provided"
     assert parsed["tls"]["cert_file"] == "/ssl/fullchain.pem"
     assert parsed["tls"]["key_file"] == "/ssl/privkey.pem"

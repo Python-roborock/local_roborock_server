@@ -30,6 +30,13 @@ enable_topic_bridge = true
 [storage]
 data_dir = "/data"
 
+[logging]
+# Applies to each service .log and HTTP/MQTT .jsonl trace in runtime/.
+# MiB per file (1-1024), plus this many numbered backups (0-20).
+# 0 backups keeps only the active file; rotation remains enabled.
+max_size_mb = 10
+backup_count = 3
+
 [tls]
 # Cloudflare DNS-01 wildcard issuance. No public inbound access is required.
 mode = "cloudflare_acme"
