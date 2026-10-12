@@ -105,8 +105,10 @@ def test_device_jobs_endpoint_returns_imported_schedules(tmp_path: Path) -> None
     assert payload["success"] is True
     assert payload["data"] == payload["result"]
     # nextFireTime is computed from the cron against "now", so check its shape, not its value.
+    # No timezone is configured, so the cron runs in the zone the robot is told (America/New_York):
+    # 13:03 local on Dec 15 is 18:03Z.
     next_fire_time = payload["result"][0].pop("nextFireTime")
-    assert next_fire_time.endswith("T13:03:00.000+00:00")
+    assert next_fire_time.endswith("T18:03:00.000+00:00")
     assert payload["result"] == [
         {
             **schedule,
