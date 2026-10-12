@@ -801,6 +801,33 @@ class RoutineRunner:
             "stepCount": len(steps),
         }
 
+    def start_job(
+        self,
+        *,
+        device_id: str,
+        job_id: int,
+        name: str,
+        steps: list[RoutineStep],
+    ) -> dict[str, Any]:
+        """Run a scheduled job's steps; never interrupts a routine already running."""
+        existing = self._tasks_by_device.get(device_id)
+        if existing is not None and not existing.task.done():
+            return {
+                "accepted": False,
+                "status": "routine_in_progress",
+                "jobId": job_id,
+                "deviceId": device_id,
+                "activeSceneName": existing.scene_name,
+            }
+        scene = {"id": job_id, "name": name, "device_id": device_id}
+        task = asyncio.get_running_loop().create_task(
+            self._run_steps(scene=scene, steps=steps, sync_scene_tids=False),
+            name=f"routine-job-{job_id}-{device_id}",
+        )
+        self._tasks_by_device[device_id] = _ActiveRoutine(task=task, scene_id=job_id, scene_name=name)
+        task.add_done_callback(lambda finished: self._on_scene_done(device_id, finished))
+        return {"accepted": True, "status": "started", "jobId": job_id, "deviceId": device_id, "stepCount": len(steps)}
+
     def _on_scene_done(self, device_id: str, task: asyncio.Task[None]) -> None:
         current = self._tasks_by_device.get(device_id)
         if current is not None and current.task is task:
@@ -967,6 +994,15 @@ class RoutineRunner:
                 raise
 
     async def _run_scene(self, *, scene: dict[str, Any], steps: list[RoutineStep]) -> None:
+        await self._run_steps(scene=scene, steps=steps, sync_scene_tids=True)
+
+    async def _run_steps(
+        self,
+        *,
+        scene: dict[str, Any],
+        steps: list[RoutineStep],
+        sync_scene_tids: bool,
+    ) -> None:
         device_id = scene_device_id(scene)
         device = self._device_record(device_id)
         logger = logging.LoggerAdapter(
@@ -988,7 +1024,8 @@ class RoutineRunner:
         client = _RoutineMqttClient(self._context, device, logger)
         await client.connect()
         try:
-            await self._sync_scene_tids(client=client, scene=scene, device_id=device_id, logger=logger)
+            if sync_scene_tids:
+                await self._sync_scene_tids(client=client, scene=scene, device_id=device_id, logger=logger)
             for step_index, step in enumerate(steps):
                 commands = commands_for_step(step)
                 waits_for_step_complete = RoborockDataProtocol.TASK_COMPLETE.value in step.finish_dp_ids
@@ -1015,3 +1052,11 @@ class RoutineRunner:
             await client.close()
 
         logger.info("Completed routine scene=%s device=%s", _scene_name(scene), device_id)
+
+
+def get_routine_runner(context: ServerContext) -> RoutineRunner:
+    runner = getattr(context, "_routine_runner", None)
+    if runner is None:
+        runner = RoutineRunner(context)
+        setattr(context, "_routine_runner", runner)
+    return runner
