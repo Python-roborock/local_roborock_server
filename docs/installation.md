@@ -92,11 +92,27 @@ If your model already has certificate notes on the tested-vacuums page, follow t
    uv sync
    ```
 
-3. Run the setup wizard:
+3. Run the setup wizard.
 
-   ```bash
-   uv run roborock-local-server configure
-   ```
+   You have two options here, and they write the same `config.toml`:
+
+   - **In your browser (no `uv`/Python needed on the host):** skip straight to step 6 and start the container
+     with no `config.toml` present. It boots into a setup wizard, served in plain HTTP at `/admin` on your
+     configured HTTPS port (`http://<this host>:555/admin` by default), that asks for the same fields as the
+     CLI wizard below. Submitting it writes `config.toml`, and the container restarts itself into the full
+     HTTPS/MQTT stack - reload the page after a few seconds and you're at the real (now HTTPS) admin login.
+   - **On the command line:**
+
+     ```bash
+     uv run roborock-local-server configure
+     ```
+
+   You can also combine the two: if `ROBOROCK_SERVER_*` env vars generate `config.toml`'s network/broker/TLS
+   settings but the admin ones (`ROBOROCK_SERVER_ADMIN_PASSWORD`, `ROBOROCK_SERVER_PROTOCOL_LOGIN_EMAIL`,
+   `ROBOROCK_SERVER_PROTOCOL_LOGIN_PIN`) are left unset, the container still boots into `/admin`, but the
+   wizard notices the rest is already configured and only asks for admin credentials. Useful for a
+   reverse-proxy or ACME setup you'd rather express as env vars/IaC, while still picking the admin password
+   in a browser instead of a compose file.
 
    The wizard asks for:
 
@@ -111,7 +127,7 @@ If your model already has certificate notes on the tested-vacuums page, follow t
 
    It then writes `config.toml`, generates `admin.password_hash` and `admin.session_secret`, and if you chose Cloudflare it also writes `secrets/cloudflare_token`. If you also chose `acme_server = actalis`, it writes `secrets/acme_eab_kid` and `secrets/acme_eab_hmac_key`.
 
-4. If you chose external MQTT, fill in `broker.host` in `config.toml` before starting the stack. See [Custom MQTT](custom_mqtt.md).
+4. If you chose external MQTT with the CLI wizard, fill in `broker.host` in `config.toml` before starting the stack (the browser wizard asks for the broker host directly, so this step doesn't apply there). See [Custom MQTT](custom_mqtt.md).
 
 5. If you skipped Cloudflare, put your certificate files in `data/certs/fullchain.pem` and `data/certs/privkey.pem` (relative to the repository root on the host, which maps to `/data/certs/` inside the container). This is the path to use when your vacuum works better with a certificate chain you manage yourself. See [Custom certificate management](custom_cert_management.md).
 
@@ -139,6 +155,54 @@ If your model already has certificate notes on the tested-vacuums page, follow t
 
    For reverse proxy setups, keep `network.https_port` and `network.mqtt_tls_port` set to the backend listener ports and use `network.advertised_https_port` / `network.advertised_mqtt_tls_port` for the public ports.
 
+### Alternative: Environment Variables Only (No `uv` Toolchain)
+
+If you don't want to install `uv`/Python on the host just to run `configure`, you can set `ROBOROCK_SERVER_*` environment variables instead. On first boot, if `/data/config.toml` doesn't already exist, the container generates one from these variables and starts normally. If `config.toml` already exists (mounted or previously generated), it always wins and the env vars are ignored — this never overwrites a config you've already set up.
+
+Required variables:
+
+- `ROBOROCK_SERVER_STACK_FQDN`
+- Either `ROBOROCK_SERVER_CERT_FILE` + `ROBOROCK_SERVER_KEY_FILE` (bring your own certificate), or `ROBOROCK_SERVER_TLS_MODE=cloudflare_acme` + `ROBOROCK_SERVER_TLS_BASE_DOMAIN` + `ROBOROCK_SERVER_TLS_EMAIL` + `ROBOROCK_SERVER_CLOUDFLARE_TOKEN` (or `_CLOUDFLARE_TOKEN_FILE` for a Docker secret)
+
+The admin credentials are optional as a group:
+
+- Set all three of `ROBOROCK_SERVER_ADMIN_PASSWORD`, `ROBOROCK_SERVER_PROTOCOL_LOGIN_EMAIL`, and
+  `ROBOROCK_SERVER_PROTOCOL_LOGIN_PIN` (6 digits) for a fully headless boot straight into the running stack.
+- Leave all three unset, and the container still generates `config.toml`'s network/broker/TLS settings from
+  the env vars above, then boots into the setup wizard at `/admin` - which notices the rest is already
+  configured and asks only for admin credentials. Handy if you're driving the network/TLS/reverse-proxy side
+  from env vars or IaC, but would still rather pick the admin password in a browser.
+- Setting some but not all three is rejected with a clear error, to avoid a half-set credential.
+
+Commonly-set optional variables: `ROBOROCK_SERVER_HTTPS_PORT`, `ROBOROCK_SERVER_MQTT_TLS_PORT`, `ROBOROCK_SERVER_ADVERTISED_HTTPS_PORT`, `ROBOROCK_SERVER_ADVERTISED_MQTT_TLS_PORT`, `ROBOROCK_SERVER_LISTENER_MODE`, `ROBOROCK_SERVER_BROKER_MODE` + `ROBOROCK_SERVER_BROKER_HOST`. See `env_config.py` for the full list.
+
+**Important:** if you go this route, remove (or comment out) the `./config.toml:/app/config.toml:ro` line from `compose.yaml`. Docker will otherwise bind-mount a nonexistent host path as an empty file, which the container treats as an existing (but invalid) config and never falls through to the env vars. Keep the `./data:/data` and `./secrets:/run/secrets:ro` mounts.
+
+Fully headless (no browser step at all):
+
+```bash
+export ROBOROCK_SERVER_STACK_FQDN=api-roborock.example.com
+export ROBOROCK_SERVER_ADMIN_PASSWORD=super-secret-password
+export ROBOROCK_SERVER_PROTOCOL_LOGIN_EMAIL=user@example.com
+export ROBOROCK_SERVER_PROTOCOL_LOGIN_PIN=123456
+export ROBOROCK_SERVER_TLS_MODE=cloudflare_acme
+export ROBOROCK_SERVER_TLS_BASE_DOMAIN=example.com
+export ROBOROCK_SERVER_TLS_EMAIL=acme@example.com
+export ROBOROCK_SERVER_CLOUDFLARE_TOKEN=your-cloudflare-api-token
+docker compose up -d --build
+```
+
+Hybrid (network/TLS from env vars, admin credentials in the browser wizard at `/admin`):
+
+```bash
+export ROBOROCK_SERVER_STACK_FQDN=api-roborock.example.com
+export ROBOROCK_SERVER_TLS_MODE=cloudflare_acme
+export ROBOROCK_SERVER_TLS_BASE_DOMAIN=example.com
+export ROBOROCK_SERVER_TLS_EMAIL=acme@example.com
+export ROBOROCK_SERVER_CLOUDFLARE_TOKEN=your-cloudflare-api-token
+docker compose up -d --build
+```
+
 ## Method 2: Home Assistant Add-on
 
 Use [Home Assistant](home_assistant.md) as the installation guide if you want to run the stack as a Home Assistant add-on instead of Docker Compose.
@@ -158,6 +222,8 @@ Use [Home Assistant](home_assistant.md) as the installation guide if you want to
 3. Import your data from the cloud so things like routines and rooms will work. Enter your Roborock cloud email under cloud import, select **Send code**, then enter the returned code and select **Fetch data**.
 
 4. For any routines that use zones, re-save them so the server stores the zone data correctly. In the Roborock app, open each routine that has zones, open the zone, tap **Edit**, open any **Zone Cleaning** entry, then tap **Save**. Repeat for each zone in the routine.
+
+5. The dashboard's **Activity** panel shows recent HTTP/MQTT traffic between your vacuum(s)/app/Home Assistant and this server - useful for confirming a device is actually talking to the local stack. It only shows redacted metadata (method/path/topic/RPC method name, sizes, timestamps) by default, since the underlying logs can contain device keys and decrypted command payloads. Set `ROBOROCK_SERVER_ACTIVITY_RAW=1` if you need full unredacted entries for debugging.
 
 ## Next Steps
 

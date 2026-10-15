@@ -1,0 +1,318 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+import pytest
+
+from roborock_local_server.config import diagnose_config, load_config
+from roborock_local_server.management_app import (
+    DEFAULT_BOOTSTRAP_HTTPS_PORT,
+    _setup_wizard_html,
+    _wizard_prefill_from_env,
+    bootstrap_port_from_env,
+    create_management_app,
+)
+
+_VALID_PAYLOAD = {
+    "stack_fqdn": "api-roborock.example.com",
+    "https_port": 555,
+    "mqtt_tls_port": 8881,
+    "broker_mode": "embedded",
+    "tls_mode": "provided",
+    "admin_password": "super-secret-password",
+    "protocol_login_email": "user@example.com",
+    "protocol_login_pin": "123456",
+}
+
+_FULL_CONFIG = """
+[network]
+stack_fqdn = "api-roborock.example.com"
+
+[broker]
+mode = "embedded"
+
+[storage]
+data_dir = "data"
+
+[tls]
+mode = "provided"
+cert_file = "certs/fullchain.pem"
+key_file = "certs/privkey.pem"
+
+[admin]
+password_hash = "pbkdf2_sha256$600000$abc$def"
+session_secret = "abcdefghijklmnopqrstuvwxyz123456"
+protocol_login_email = "user@example.com"
+protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
+""".strip()
+
+_PARTIAL_CONFIG_MISSING_ADMIN = """
+[network]
+stack_fqdn = "api-roborock.example.com"
+
+[broker]
+mode = "embedded"
+
+[storage]
+data_dir = "data"
+
+[tls]
+mode = "provided"
+cert_file = "certs/fullchain.pem"
+key_file = "certs/privkey.pem"
+""".strip()
+
+
+def test_bootstrap_port_from_env_default() -> None:
+    assert bootstrap_port_from_env({}) == DEFAULT_BOOTSTRAP_HTTPS_PORT
+
+
+def test_bootstrap_port_from_env_reuses_https_port_var() -> None:
+    assert bootstrap_port_from_env({"ROBOROCK_SERVER_HTTPS_PORT": "9090"}) == 9090
+
+
+def test_bootstrap_port_from_env_rejects_bad_value() -> None:
+    with pytest.raises(ValueError, match="must be an integer"):
+        bootstrap_port_from_env({"ROBOROCK_SERVER_HTTPS_PORT": "not-a-port"})
+
+
+def test_index_serves_setup_wizard_when_unconfigured(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    client = TestClient(create_management_app(config_file=config_file))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Roborock Local Server Setup" in response.text
+
+
+def test_index_serves_status_page_when_configured(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_FULL_CONFIG, encoding="utf-8")
+    client = TestClient(create_management_app(config_file=config_file))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Setup is complete" in response.text
+
+
+def test_index_serves_admin_only_wizard_when_only_admin_missing(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_PARTIAL_CONFIG_MISSING_ADMIN, encoding="utf-8")
+    client = TestClient(create_management_app(config_file=config_file))
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    assert "Just add admin credentials" in response.text
+    assert 'name="stack_fqdn"' not in response.text
+
+
+def test_setup_status_reflects_config_state(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    client = TestClient(create_management_app(config_file=config_file))
+
+    assert client.get("/admin/api/setup/status").json() == {"status": "invalid"}
+
+    config_file.write_text(_PARTIAL_CONFIG_MISSING_ADMIN, encoding="utf-8")
+    assert client.get("/admin/api/setup/status").json() == {"status": "missing_admin"}
+
+    config_file.write_text(_FULL_CONFIG, encoding="utf-8")
+    assert client.get("/admin/api/setup/status").json() == {"status": "ok"}
+
+
+def test_submit_setup_writes_bootable_config(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    calls: list[str] = []
+    client = TestClient(create_management_app(config_file=config_file, on_configured=lambda: calls.append("done")))
+
+    response = client.post("/admin/api/setup", json=_VALID_PAYLOAD)
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert calls == ["done"]
+
+    config = load_config(config_file)
+    assert config.network.stack_fqdn == "api-roborock.example.com"
+    assert config.admin.protocol_login_email == "user@example.com"
+
+
+def test_submit_setup_with_external_broker_needs_no_manual_edit(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    client = TestClient(create_management_app(config_file=config_file))
+    payload = dict(_VALID_PAYLOAD, broker_mode="external", broker_host="mqtt.internal")
+
+    response = client.post("/admin/api/setup", json=payload)
+
+    assert response.status_code == 200
+    config = load_config(config_file)
+    assert config.broker.mode == "external"
+    assert config.broker.host == "mqtt.internal"
+
+
+def test_submit_setup_rejects_missing_external_broker_host(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    client = TestClient(create_management_app(config_file=config_file))
+    payload = dict(_VALID_PAYLOAD, broker_mode="external")
+
+    response = client.post("/admin/api/setup", json=payload)
+
+    assert response.status_code == 400
+    assert "broker_host" in response.json()["error"]
+    assert config_file.exists() is False
+
+
+def test_submit_setup_rejects_bad_stack_fqdn(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    client = TestClient(create_management_app(config_file=config_file))
+    payload = dict(_VALID_PAYLOAD, stack_fqdn="roborock.example.com")
+
+    response = client.post("/admin/api/setup", json=payload)
+
+    assert response.status_code == 400
+    assert "must start with api-" in response.json()["error"]
+
+
+def test_submit_setup_refuses_to_overwrite_a_fully_configured_stack(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_FULL_CONFIG, encoding="utf-8")
+    client = TestClient(create_management_app(config_file=config_file))
+
+    response = client.post("/admin/api/setup", json=_VALID_PAYLOAD)
+
+    assert response.status_code == 409
+    assert config_file.read_text(encoding="utf-8") == _FULL_CONFIG
+
+
+def test_submit_setup_refuses_to_overwrite_an_existing_broken_config(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text("existing = true\n", encoding="utf-8")
+    client = TestClient(create_management_app(config_file=config_file))
+
+    response = client.post("/admin/api/setup", json=_VALID_PAYLOAD)
+
+    assert response.status_code == 400
+    assert "Refusing to overwrite" in response.json()["error"]
+    assert config_file.read_text(encoding="utf-8") == "existing = true\n"
+
+
+def test_submit_setup_completes_admin_only_config(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_PARTIAL_CONFIG_MISSING_ADMIN, encoding="utf-8")
+    calls: list[str] = []
+    client = TestClient(create_management_app(config_file=config_file, on_configured=lambda: calls.append("done")))
+
+    response = client.post(
+        "/admin/api/setup",
+        json={
+            "admin_password": "super-secret-password",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "123456",
+        },
+    )
+
+    assert response.status_code == 200
+    assert calls == ["done"]
+
+    config = load_config(config_file)
+    # Network/broker/storage/tls came from the pre-existing partial config, untouched.
+    assert config.network.stack_fqdn == "api-roborock.example.com"
+    assert config.admin.protocol_login_email == "user@example.com"
+    assert str(config.admin.password_hash).startswith("pbkdf2_sha256$")
+
+
+def test_submit_setup_admin_only_rejects_bad_pin(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_PARTIAL_CONFIG_MISSING_ADMIN, encoding="utf-8")
+    client = TestClient(create_management_app(config_file=config_file))
+
+    response = client.post(
+        "/admin/api/setup",
+        json={
+            "admin_password": "super-secret-password",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "12",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "6 digits" in response.json()["error"]
+    assert diagnose_config(config_file) == "missing_admin"
+
+
+def test_submit_setup_cloudflare_actalis_requires_eab(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    client = TestClient(create_management_app(config_file=config_file))
+    payload = dict(
+        _VALID_PAYLOAD,
+        tls_mode="cloudflare_acme",
+        base_domain="example.com",
+        email="acme@example.com",
+        cloudflare_token="cf-token",
+        acme_server="actalis",
+    )
+
+    response = client.post("/admin/api/setup", json=payload)
+
+    assert response.status_code == 400
+    assert "Actalis" in response.json()["error"]
+
+
+def test_wizard_prefill_from_env_ignores_secrets() -> None:
+    env = {
+        "ROBOROCK_SERVER_STACK_FQDN": "api-rr.example.com",
+        "ROBOROCK_SERVER_ADMIN_PASSWORD": "super-secret",
+        "ROBOROCK_SERVER_PROTOCOL_LOGIN_PIN": "123456",
+        "ROBOROCK_SERVER_CLOUDFLARE_TOKEN": "cf-secret-token",
+    }
+
+    prefill = _wizard_prefill_from_env(env)
+
+    assert prefill == {"stack_fqdn": "api-rr.example.com"}
+
+
+def test_wizard_prefill_from_env_only_includes_set_values() -> None:
+    assert _wizard_prefill_from_env({}) == {}
+
+
+def test_setup_wizard_html_prefills_stack_fqdn_and_defaults_ports() -> None:
+    html = _setup_wizard_html(prefill={"stack_fqdn": "api-rr.binarycow.io"})
+
+    assert 'value="api-rr.binarycow.io"' in html
+    assert 'value="555"' in html
+    assert 'value="8881"' in html
+
+
+def test_setup_wizard_html_reveals_external_broker_section_when_prefilled() -> None:
+    html = _setup_wizard_html(prefill={"broker_mode": "external", "broker_host": "mqtt.internal"})
+
+    assert 'value="mqtt.internal"' in html
+    assert 'id="broker_external" class="row hidden"' not in html
+    assert 'name="broker_mode" type="radio" value="external" checked' in html
+
+
+def test_setup_wizard_html_reveals_provided_cert_section_when_prefilled() -> None:
+    html = _setup_wizard_html(prefill={"tls_mode": "provided"})
+
+    assert 'id="tls_cloudflare" class="hidden"' in html
+    assert 'name="tls_mode" type="radio" value="provided" checked' in html
+
+
+def test_setup_wizard_html_reveals_actalis_fields_when_prefilled() -> None:
+    html = _setup_wizard_html(prefill={"acme_server": "actalis"})
+
+    assert 'id="acme_actalis" class="row hidden"' not in html
+    assert 'value="actalis" selected' in html
+
+
+def test_setup_wizard_html_with_no_prefill_matches_original_defaults() -> None:
+    html = _setup_wizard_html()
+
+    assert 'input id="stack_fqdn" name="stack_fqdn" type="text" value="" required' in html
+    assert 'id="broker_external" class="row hidden"' in html
+    assert 'id="tls_cloudflare" class="">' in html
+    assert 'id="acme_actalis" class="row hidden"' in html
+    assert 'name="broker_mode" type="radio" value="embedded" checked' in html
+    assert 'name="tls_mode" type="radio" value="cloudflare_acme" checked' in html

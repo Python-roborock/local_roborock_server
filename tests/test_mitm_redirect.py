@@ -276,3 +276,97 @@ def test_host_only_local_api_still_defaults_to_555(monkeypatch) -> None:
 
     assert (host, port) == ("api-rr.example.com", 555)
     assert env_authority == "api-rr.example.com:555"
+
+
+def test_sync_callback_url_supports_custom_path(monkeypatch) -> None:
+    mitm_redirect = _load_mitm_redirect(monkeypatch)
+
+    assert (
+        mitm_redirect._sync_callback_url("api-roborock.example.com", path=mitm_redirect.MITM_ACTIVITY_SYNC_PATH)
+        == "https://api-roborock.example.com/internal/protocol/mitm-activity"
+    )
+
+
+def test_activity_sync_disabled_by_default_makes_no_request(monkeypatch) -> None:
+    mitm_redirect = _load_mitm_redirect(monkeypatch)
+    monkeypatch.setattr(mitm_redirect, "_log_flow", lambda *args, **kwargs: None)
+    mitm_redirect.LOCAL_SYNC_SECRET = "abcdefghijklmnopqrstuvwxyz123456"
+    mitm_redirect.LOCAL_API = "api-roborock.example.com"
+    assert mitm_redirect.ACTIVITY_SYNC_ENABLED is False
+
+    called = []
+    monkeypatch.setattr(mitm_redirect, "urlopen", lambda *a, **k: called.append(1) or _FakeResponse())
+
+    flow = _FakeResponseFlow("usiot.roborock.com", "/api/v1/userinfo", b"plain text")
+    flow.response.headers["content-type"] = "text/plain"
+    mitm_redirect.response(flow)
+
+    assert called == []
+
+
+def test_activity_sync_requires_secret(monkeypatch) -> None:
+    mitm_redirect = _load_mitm_redirect(monkeypatch)
+    monkeypatch.setattr(mitm_redirect, "_log_flow", lambda *args, **kwargs: None)
+    mitm_redirect.ACTIVITY_SYNC_ENABLED = True
+    mitm_redirect.LOCAL_SYNC_SECRET = ""
+    mitm_redirect.LOCAL_API = "api-roborock.example.com"
+
+    called = []
+    monkeypatch.setattr(mitm_redirect, "urlopen", lambda *a, **k: called.append(1) or _FakeResponse())
+
+    flow = _FakeResponseFlow("usiot.roborock.com", "/api/v1/userinfo", b"plain text")
+    flow.response.headers["content-type"] = "text/plain"
+    mitm_redirect.response(flow)
+
+    assert called == []
+
+
+def test_activity_sync_sends_entry_when_enabled(monkeypatch) -> None:
+    mitm_redirect = _load_mitm_redirect(monkeypatch)
+    monkeypatch.setattr(mitm_redirect, "_log_flow", lambda *args, **kwargs: None)
+    mitm_redirect.ACTIVITY_SYNC_ENABLED = True
+    mitm_redirect.LOCAL_SYNC_SECRET = "abcdefghijklmnopqrstuvwxyz123456"
+    mitm_redirect.LOCAL_API = "api-roborock.example.com"
+
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request, timeout, context):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
+        captured["headers"] = dict(request.headers)
+        return _FakeResponse()
+
+    monkeypatch.setattr(mitm_redirect, "urlopen", fake_urlopen)
+
+    flow = _FakeResponseFlow("usiot.roborock.com", "/api/v1/userinfo", b"plain text")
+    flow.response.headers["content-type"] = "text/plain"
+    mitm_redirect.response(flow)
+
+    assert captured["url"] == "https://api-roborock.example.com/internal/protocol/mitm-activity"
+    assert captured["headers"]["X-local-sync-secret"] == "abcdefghijklmnopqrstuvwxyz123456"
+    entries = captured["body"]["entries"]
+    assert len(entries) == 1
+    assert entries[0]["host"] == "usiot.roborock.com"
+    assert entries[0]["path"] == "/api/v1/userinfo"
+    assert entries[0]["method"] == "GET"
+    assert entries[0]["status"] == 200
+    assert entries[0]["rewritten"] is False
+
+
+def test_activity_sync_failure_does_not_raise(monkeypatch) -> None:
+    mitm_redirect = _load_mitm_redirect(monkeypatch)
+    monkeypatch.setattr(mitm_redirect, "_log_flow", lambda *args, **kwargs: None)
+    mitm_redirect.ACTIVITY_SYNC_ENABLED = True
+    mitm_redirect.LOCAL_SYNC_SECRET = "abcdefghijklmnopqrstuvwxyz123456"
+    mitm_redirect.LOCAL_API = "api-roborock.example.com"
+
+    def fake_urlopen(request, timeout, context):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(mitm_redirect, "urlopen", fake_urlopen)
+
+    flow = _FakeResponseFlow("usiot.roborock.com", "/api/v1/userinfo", b"plain text")
+    flow.response.headers["content-type"] = "text/plain"
+
+    # Must not raise - a broken activity-sync endpoint must never break the actual redirect.
+    mitm_redirect.response(flow)
