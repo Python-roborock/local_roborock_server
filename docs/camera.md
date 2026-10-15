@@ -4,12 +4,26 @@ Camera-capable robots can stream to a local WebRTC consumer such as
 [go2rtc](https://github.com/AlexxIT/go2rtc) with a `roborock://` source.
 Camera bootstrap, authentication and TURN all need to work.
 
+## Tested models
+
+Bootstrap input and activation differ per model and firmware. Only these
+combinations have been confirmed; report others through the
+[compatibility report form](https://github.com/Python-roborock/local_roborock_server/issues/new?template=compatibility.yml).
+
+| Vacuum | Model | Firmware | Bootstrap input | Activation | Viewer | Report |
+|---|---|---|---|---|---|---|
+| Saros 10R | `a144` | `02.33.88` (US) | `country_domain` | Remote-view PIN, then two-key: `set_camera_status` and Power on the robot within about 60 seconds | go2rtc | [#18](https://github.com/Python-roborock/local_roborock_server/issues/18#issuecomment-4939013342) |
+| Qrevo MaxV | `a87` | Not reported | `token.r`, including its explicit port | Not reported | Forced-relay preview | — |
+| Qrevo Master | `a117` | `02.28.26` | `token.r` (rejects a domain in `country_domain`) | Remote-view PIN, then two-key: the app sends `set_camera_status` and prompts for a button press on the robot | Official Roborock app (iOS) | — |
+
+
 ## Bootstrap DNS, ports and certificates
 
 Bootstrap depends on firmware. The tested Saros 10R (`roborock.vacuum.a144`,
 FCC/US firmware) uses the onboarding region (`country_domain`). Qrevo MaxV
-(`roborock.vacuum.a87`) was observed using `token.r`, including its explicit
-port, even when a separate camera domain was supplied.
+(`roborock.vacuum.a87`) and Qrevo Master (`roborock.vacuum.a117`) use
+`token.r`; the Qrevo MaxV keeps its explicit port, even when a separate camera
+domain was supplied.
 
 Firmware truncates the input to 15 characters and appends `iot.roborock.com`.
 The input used by that firmware needs a trailing `/` and must fit in **15 characters total**,
@@ -122,18 +136,26 @@ Keep the PIN out of shared logs and URLs.
 The tested Saros 10R required two-key activation: set the remote-view PIN
 (`set_homesec_password`), request activation through `set_camera_status` with
 the two-key request bits set and monitor bit off, then press Power on the robot
-within about 60 seconds. Activation varies by model.
+within about 60 seconds. Activation varies by model. The Qrevo Master, which
+also advertises two-key real-time video, used the same flow from the official
+app: the app sent `set_homesec_password` and `set_camera_status`, prompted for
+a physical button press on the robot, then sent `start_camera_preview`.
 
 ## Troubleshooting and tested behavior
 
 - Bootstrap falls back: inspect the actual hostname, port and path in server logs.
 - No bootstrap request: check DNS, trusted TLS, the trailing slash, length limits
   and routing from the robot's network for both inputs.
+- Vacuum never reconnects after onboarding, sends no DNS queries and keeps
+  rejoining Wi-Fi: its firmware may reject a hostname in `country_domain`
+  (observed on Qrevo Master `a117`). Onboard again without a camera domain.
 - Preview rejected: check the existing PIN and the model's activation flow.
 - Bootstrap succeeds without frames: check authenticated TURN allocation, UDP
   mappings, firewall rules and the advertised address.
 
 Saros 10R completed a WebRTC handshake with coturn and go2rtc received frames.
 Qrevo MaxV completed a forced-relay preview with frames after configuring the
-`token.r` hostname and its explicit port. These observations do not establish
+`token.r` hostname and its explicit port. Qrevo Master streamed to the official
+Roborock app after onboarding with a portless `token.r` and a region code in
+`country_domain`; its `createca` request arrived on the `token.r` host. These observations do not establish
 identical bootstrap or activation behavior on other firmware.
