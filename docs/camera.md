@@ -25,14 +25,6 @@ FCC/US firmware) uses the onboarding region (`country_domain`). Qrevo MaxV
 `token.r`; the Qrevo MaxV keeps its explicit port, even when a separate camera
 domain was supplied.
 
-> **Qrevo Master (`a117`): do not set a camera domain.** Firmware `02.28.26`
-> rejects a hostname in `country_domain`. After onboarding it joins Wi-Fi and
-> pings the gateway, but never sends a DNS query, and it reconnects to Wi-Fi
-> about every 50 seconds. Onboard with a short `token.r` instead (for example
-> `--server api-r.example.com:443`, giving `token.r = r.example.com/`) and leave
-> `country_domain` as a region code such as `eu`. Camera preflight does not
-> detect this, because it only checks DNS and TLS from the onboarding machine.
-
 Firmware truncates the input to 15 characters and appends `iot.roborock.com`.
 The input used by that firmware needs a trailing `/` and must fit in **15 characters total**,
 including any port. A hostname without a port may be at most 14 characters.
