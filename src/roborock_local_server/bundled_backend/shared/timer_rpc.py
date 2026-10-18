@@ -4,6 +4,18 @@ On cloud-managed robots the schedules live server-side, not on the robot, so
 clients such as LocalRock that ask the robot for its timers would otherwise see
 nothing and could never change the schedules the cloud imported. The topic
 bridge hands matching requests here instead of forwarding them to the robot.
+
+Deliberately not handled here: get/set/upd/del_server_timer, the newer sibling
+protocol some firmware speaks instead of (or alongside) this one. The robot
+stores those entries itself and the official app reads them back from it, so
+they must always forward to the robot untouched. Answering them from this store
+instead, tried once, hid the robot's real schedules from every client reading
+through the server, and the official app then deleted them (it removes
+server_timer entries it does not recognize when its schedule screen opens).
+
+What runs a server_timer schedule is the cloud's own record of it, the job the
+official app also writes to /user/devices/{duid}/jobs, which ScheduleRunner
+fires like any other. The robot was not seen to run them itself.
 """
 
 from __future__ import annotations

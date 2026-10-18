@@ -150,6 +150,17 @@ def test_interceptor_forwards_everything_that_is_not_a_timer_request(ctx):
     assert interceptor("unknown-duid", _encode_request("get_timer", [])) is None
 
 
+@pytest.mark.parametrize(
+    "method", ["get_server_timer", "set_server_timer", "upd_server_timer", "del_server_timer"]
+)
+def test_interceptor_leaves_server_timer_to_the_robot(ctx, method):
+    # A robot that speaks server_timer stores those entries itself and the official app reads
+    # them back from it; answering this locally hides the robot's real schedules from every
+    # client and has caused real data loss. This must always forward, never answer here.
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    assert interceptor(DUID, _encode_request(method, [])) is None
+
+
 def test_bridge_answers_timer_requests_locally_and_does_not_forward_them(ctx):
     class Client:
         def __init__(self):
