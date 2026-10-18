@@ -51,11 +51,22 @@ def _normalize_setting(key: str, value: Any) -> Any:
 
 
 def job_settings(job: dict[str, Any]) -> dict[str, Any]:
-    """The vac/mop settings a job carries, as a flat dict."""
+    """The vac/mop settings a job carries, as a flat dict.
+
+    ``name``, when the job has one, rides along too, outside ``JOB_SETTING_KEYS``: it is not a
+    vac/mop setting a client edits, it is the official app's own link from this job to the
+    robot's server_timer entry it saved alongside it (POST/PUT /user/devices/{duid}/jobs carries
+    it in exactly this spot, confirmed live). A client that reads the job back through get_timer
+    needs it to find the robot's entry to edit or delete.
+    """
     param = job.get("param")
     params = param.get("params") if isinstance(param, dict) else None
     entry = params[0] if isinstance(params, list) and params and isinstance(params[0], dict) else {}
-    return {key: entry[key] for key in JOB_SETTING_KEYS if key in entry}
+    settings = {key: entry[key] for key in JOB_SETTING_KEYS if key in entry}
+    name = entry.get("name")
+    if isinstance(name, str) and name:
+        settings["name"] = name
+    return settings
 
 
 def merge_job_settings(param: dict[str, Any] | None, settings: dict[str, Any]) -> dict[str, Any]:
