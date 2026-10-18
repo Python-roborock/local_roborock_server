@@ -18,7 +18,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .constants import DEFAULT_TIMEZONE
 from .data_helpers import as_bool
 from .inventory_io import load_inventory
-from .routine_runner import RoutineExecutionError, RoutineStep, get_routine_runner
+from .routine_runner import (
+    SCHEDULE_APP_START,
+    SCHEDULE_SERVER_START,
+    RoutineExecutionError,
+    RoutineStep,
+    get_routine_runner,
+)
 from .schedule_store import set_enabled
 
 if TYPE_CHECKING:
@@ -29,6 +35,7 @@ _LOGGER = logging.getLogger(__name__)
 TICK_SECONDS = 20
 _SUPPORTED_JOB_METHOD = "server_scheduled_start"
 _CARRIED_ENTRY_KEYS = ("repeat", "fan_power", "water_box_mode", "mop_mode", "mop_template_id")
+_START_ENTRY_KEYS = (*_CARRIED_ENTRY_KEYS, "segments", "clean_mop", "map_index")
 
 
 class CronError(ValueError):
@@ -191,9 +198,24 @@ def steps_for_job(job: dict[str, Any]) -> list[RoutineStep]:
         raise RoutineExecutionError("schedule params must contain one settings object")
 
     settings = {key: entry[key] for key in _CARRIED_ENTRY_KEYS if key in entry}
+    # A whole-home start also carries the rest of the entry, so one app_start can take it all.
+    start_settings = {key: entry[key] for key in _START_ENTRY_KEYS if key in entry}
+    # The robot-side timer id the official app (or LocalRock) saved this schedule under. A schedule
+    # that has one is run the way the cloud runs it: the robot is asked to start that timer.
+    timer_id = entry.get("name")
     name = str(entry.get("name") or job.get("name") or "").strip()
     if not name or name.isdigit():
         name = f"Schedule {job.get('id', '')}".strip()
+    if isinstance(timer_id, str) and timer_id.strip():
+        return [
+            RoutineStep(
+                step_id=1,
+                name=name,
+                method=SCHEDULE_SERVER_START,
+                params=[{**start_settings, "name": timer_id.strip()}],
+                finish_dp_ids=(),
+            )
+        ]
     segments = _segment_ids(entry.get("segments"))
     if segments:
         return [
@@ -209,8 +231,8 @@ def steps_for_job(job: dict[str, Any]) -> list[RoutineStep]:
         RoutineStep(
             step_id=1,
             name=name,
-            method="do_scenes_app_start",
-            params=[settings],
+            method=SCHEDULE_APP_START,
+            params=[start_settings],
             finish_dp_ids=(),
         )
     ]

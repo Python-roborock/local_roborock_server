@@ -30,7 +30,6 @@ def _job(**overrides):
                     "mop_mode": 300,
                     "clean_mop": 1,
                     "map_index": -1,
-                    "name": "1759965417864",
                 }
             ],
         },
@@ -78,9 +77,36 @@ def test_whole_house_job_becomes_an_app_start_step_carrying_vac_and_mop_settings
     steps = sr.steps_for_job(_job())
     assert len(steps) == 1
     step = steps[0]
-    assert step.method == "do_scenes_app_start"
-    assert step.params == [{"repeat": 1, "water_box_mode": 203, "fan_power": 104, "mop_mode": 300}]
+    assert step.method == "schedule_app_start"
+    assert step.params == [
+        {"repeat": 1, "water_box_mode": 203, "segments": "0", "fan_power": 104, "mop_mode": 300, "clean_mop": 1, "map_index": -1}
+    ]
     assert step.name == "Schedule 3549431"
+
+
+def test_job_with_a_robot_side_timer_id_is_run_by_asking_the_robot_to_start_it():
+    # The official app saves every schedule on the robot too and records its timer id as "name" in
+    # the cloud job's settings; the cloud runs such a job with server_scheduled_start (confirmed
+    # live: the robot records "Schedules" for it, for rooms and whole-home alike).
+    job = _job()
+    job["param"]["params"][0]["name"] = "1759965417864"
+    step = sr.steps_for_job(job)[0]
+    assert step.method == "schedule_server_start"
+    assert step.params == [
+        {
+            "repeat": 1, "water_box_mode": 203, "segments": "0", "fan_power": 104, "mop_mode": 300,
+            "clean_mop": 1, "map_index": -1, "name": "1759965417864",
+        }
+    ]
+
+
+def test_room_job_with_a_robot_side_timer_id_carries_its_rooms_in_the_same_step():
+    job = _job()
+    job["param"]["params"][0].update({"name": "1759965417864", "segments": "16,17", "map_index": 0})
+    step = sr.steps_for_job(job)[0]
+    assert step.method == "schedule_server_start"
+    assert step.params[0]["segments"] == "16,17"
+    assert step.params[0]["map_index"] == 0
 
 
 def test_segment_job_becomes_a_segment_clean_step():
@@ -123,7 +149,7 @@ def test_tick_fires_a_job_that_came_due_since_the_previous_tick(tmp_path, monkey
     results = runner.tick(_utc(2026, 9, 28, 15, 0, 5))
     assert [r["status"] for r in results] == ["started"]
     assert fake.started[0]["device_id"] == "duid-1"
-    assert fake.started[0]["steps"][0].method == "do_scenes_app_start"
+    assert fake.started[0]["steps"][0].method == "schedule_app_start"
 
 
 def test_tick_does_not_fire_twice_or_when_disabled(tmp_path, monkeypatch):
