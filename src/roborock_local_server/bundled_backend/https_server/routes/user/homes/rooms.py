@@ -54,5 +54,8 @@ def build_post(
         "homeId": home_id,
         "created": created,
     }
-    return wrap_response(response_payload)
+    response = wrap_response(response_payload)
+    # The official app's native layer reads the new room id from `result` as a bare number.
+    response["result"] = room_payload["id"]
+    return response
 
