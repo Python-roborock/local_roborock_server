@@ -8,7 +8,7 @@ uses the onboarding ``country_domain`` and the Qrevo MaxV (a87) uses ``token.r``
 including its explicit port. A short input with a trailing ``/`` resolves it to
 this server (see docs/camera.md). Until this route existed the request fell
 through to the catchall, the robot got no TURN config, and
-``start_camera_preview`` returned ``-10012 / request turnserver failed`` with the
+``start_camera_preview`` returned ``-10014 / request turnserver failed`` with the
 app showing an instant timeout.
 
 This route answers with a TURN/STUN server operated alongside the stack (for

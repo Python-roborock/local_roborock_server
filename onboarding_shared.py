@@ -81,10 +81,10 @@ def perform_onboarding_preflight(
 
 
 def perform_camera_preflight(*, api: Any, stack_server: str, country_domain: str,
-                             model: str, output: TextIO) -> None:
+                             model: str, output: TextIO, camera_enabled: bool = False) -> None:
     # Defer firmware-specific checks until a device is selected. Ordinary pairing
     # may coexist with TURN configured for another robot.
-    if "/" not in country_domain:
+    if not camera_enabled and "/" not in country_domain:
         return
     status = api.get_status()
     services = _service_map_from_status(status)
@@ -93,7 +93,7 @@ def perform_camera_preflight(*, api: Any, stack_server: str, country_domain: str
     turn = status["turn"]
     if turn.get("mode") == "disabled":
         raise RuntimeError("Camera preflight failed: TURN is disabled. Configure provided or external mode first.")
-    # Firmware varies: Saros uses country_domain, Qrevo a87 uses token.r.
+    # Firmware varies: Saros uses country_domain; S7 MaxV and Qrevo a87 use token.r.
     endpoints = camera_bootstrap_endpoints(stack_server=stack_server, country_domain=country_domain, model=model)
     for host, port in endpoints:
         label = f"https://{host}:{port}/iot.roborock.com/fwapi/createca"
@@ -121,7 +121,7 @@ def camera_bootstrap_endpoints(*, stack_server: str, country_domain: str, model:
     """Check the observed firmware input; unknown models conservatively need both."""
     endpoints: list[tuple[str, int]] = []
     inputs = [("token.r", stack_server), ("country_domain", country_domain)]
-    if model == "roborock.vacuum.a87":
+    if model in {"roborock.vacuum.a27", "roborock.vacuum.a87"}:
         inputs = inputs[:1]
     elif model == "roborock.vacuum.a144":
         inputs = inputs[1:]

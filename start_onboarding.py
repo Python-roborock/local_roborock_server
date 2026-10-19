@@ -299,6 +299,7 @@ class GuidedOnboardingConfig:
     cst: str
     country_domain: str
     allow_insecure_tls: bool = False
+    camera_enabled: bool = False
 
 
 class ApiReachabilityError(RuntimeError):
@@ -438,6 +439,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cst", default="")
     parser.add_argument("--country-domain", default="")
     parser.add_argument(
+        "--camera",
+        action="store_true",
+        help="Check camera bootstrap and TURN before pairing, without changing the country domain.",
+    )
+    parser.add_argument(
         "--camera-domain",
         default="",
         help="Optional domain for local camera TURN bootstrap (must be 14 characters or fewer; trailing slash appended automatically).",
@@ -494,6 +500,7 @@ def prompt_for_config(args: argparse.Namespace, output: TextIO = sys.stdout) -> 
         cst=cst,
         country_domain=country_domain,
         allow_insecure_tls=bool(args.allow_insecure_tls),
+        camera_enabled=bool(getattr(args, "camera", False)),
     )
 
 
@@ -695,7 +702,8 @@ def run_guided_onboarding(
         try:
             perform_camera_preflight(api=api, stack_server=config.stack_server,
                                      country_domain=config.country_domain,
-                                     model=str(selected.get("model") or ""), output=output)
+                                     model=str(selected.get("model") or ""), output=output,
+                                     camera_enabled=config.camera_enabled)
         except (RuntimeError, ValueError) as exc:
             output.write(f"Camera preflight failed: {exc}\nChoose another vacuum or quit to edit the settings.\n")
             continue
