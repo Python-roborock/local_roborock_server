@@ -61,6 +61,7 @@ from https_server.routes.auth.service import (
     load_cloud_full_snapshot,
     with_current_server_urls,
 )
+from .bundled_backend.shared.device_snapshot_store import DeviceSnapshotStore
 from .bundled_backend.shared.zone_ranges_store import ZoneRangesStore
 from .security import AdminSessionManager, verify_password
 
@@ -475,6 +476,7 @@ class ReleaseSupervisor:
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=zone_ranges_store,
+            snapshot_store=DeviceSnapshotStore(self.paths.http_jsonl_path.parent),
             timezone=self.config.network.timezone or None,
             turn_enabled=self.config.turn.mode != "disabled",
             turn_host=self.config.turn.host or self.config.network.stack_fqdn,
@@ -1903,6 +1905,7 @@ class ReleaseSupervisor:
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self.context.zone_ranges_store,
+            snapshot_store=self.context.snapshot_store,
             tls_enabled=self._uses_local_tls(),
             on_onboarding_credentials_learned=self.persist_active_onboarding_device,
         )
