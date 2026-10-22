@@ -117,6 +117,8 @@ from .routes.user.deviceshare import match_received_devices as _match_get_receiv
 from .routes.user.deviceshare import match_rooms as _match_get_shared_device_rooms
 from .routes.user.devices.jobs import build as _build_get_schedules
 from .routes.user.devices.jobs import match as _match_get_schedules
+from .routes.user.devices.last_known import build as _build_last_known
+from .routes.user.devices.last_known import match as _match_last_known
 from .routes.user.devices.newadd import build as _build_add_device
 from .routes.user.devices.newadd import match as _match_add_device
 from .routes.user.homes.item import build as _build_get_home_data
@@ -599,6 +601,7 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("get_device", _match_get_device, _build_get_device),
         EndpointRule("get_device_extra", _match_get_device_extra, _build_get_device_extra),
         EndpointRule("get_schedules", _match_get_schedules, _build_get_schedules),
+        EndpointRule("get_device_last_known", _match_last_known, _build_last_known),
         EndpointRule("post_app_info", _match_post_app_info, _build_post_app_info),
         EndpointRule("get_inbox_latest", _match_get_inbox_latest, _build_get_inbox_latest),
         EndpointRule("get_products_v4", _match_get_products_v4, _build_get_products_v4),
