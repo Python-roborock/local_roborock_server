@@ -54,6 +54,8 @@ from .backend import (
 )
 from shared.inventory_io import atomic_write_inventory, inventory_transaction
 from shared.protocol_auth import ProtocolAuthStore
+from shared.schedule_runner import ScheduleRunner
+from shared.timer_rpc import TimerRpcInterceptor
 from https_server.routes.user.scene import validity as scene_validity
 from https_server.routes.auth.service import (
     build_login_data_response,
@@ -362,6 +364,7 @@ class ReleaseSupervisor:
         self._mqtt_proxy: MqttTlsProxy | None = None
         self._http_server: ManagedFastApiServer | None = None
         self._renew_task: asyncio.Task[None] | None = None
+        self._schedule_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
 
         self.certificate_manager = CertificateManager(config=config, paths=paths)
@@ -1966,6 +1969,10 @@ class ReleaseSupervisor:
                 logger=self.loggers["mqtt"],
                 runtime_state=self.runtime_state,
                 inventory_path=self.paths.inventory_path,
+                request_interceptor=TimerRpcInterceptor(
+                    self.context,
+                    default_timezone=self.config.network.timezone,
+                ),
             )
             await self._topic_bridge.start()
             self.runtime_state.set_service("mqtt_topic_bridge", running=True, required=False, enabled=True)
@@ -1995,10 +2002,22 @@ class ReleaseSupervisor:
         if self._uses_local_tls() and self.config.tls.mode == "cloudflare_acme":
             self._renew_task = asyncio.create_task(self._renew_loop(), name="tls-renew-loop")
 
+        schedule_runner = ScheduleRunner(self.context, default_timezone=self.config.network.timezone)
+        self._schedule_task = asyncio.create_task(
+            schedule_runner.run(self._stop_event),
+            name="schedule-runner",
+        )
+
     async def stop(self) -> None:
         self._stop_event.set()
         self._turn_relay.stop()
         self._refresh_turn_health()
+        if self._schedule_task is not None:
+            self._schedule_task.cancel()
+            try:
+                await self._schedule_task
+            except asyncio.CancelledError:
+                pass
         if self._renew_task is not None:
             self._renew_task.cancel()
             try:

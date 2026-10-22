@@ -13,6 +13,7 @@ from shared.constants import DEFAULT_PRODUCT_SCHEMA, DEFAULT_TIMEZONE
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, as_int, default_product_name, get_value
 from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory
+from shared.schedule_runner import next_fire_time_utc
 _DEFAULT_DEVICE_NAME = "Vacuum 1"
 
 
@@ -652,6 +653,9 @@ def device_jobs_payload(ctx: ServerContext, device_id: str) -> list[dict[str, An
         payload["repeated"] = as_bool(get_value(raw, "repeated", default=True), True)
         payload["enabled"] = as_bool(get_value(raw, "enabled", default=True), True)
         payload["param"] = get_value(raw, "param", default={}) or {}
+        upcoming = next_fire_time_utc(payload, default_timezone=str(getattr(ctx, "timezone", "") or ""))
+        if upcoming is not None:
+            payload["nextFireTime"] = upcoming.strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
         schedules.append(payload)
     return schedules
 
