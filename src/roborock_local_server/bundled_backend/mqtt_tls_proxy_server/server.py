@@ -19,6 +19,7 @@ from shared.io_utils import append_jsonl, payload_preview
 from shared.protocol_auth import ProtocolAuthStore
 from shared.runtime_credentials import RuntimeCredentialsStore, parse_mqtt_connect_packet
 from shared.runtime_state import RuntimeState
+from shared.device_snapshot_store import DeviceSnapshotStore
 from shared.zone_ranges_store import ZoneRangesStore
 
 from .command_handlers import RpcCommandRegistry
@@ -45,6 +46,7 @@ class MqttTlsProxy:
         runtime_state: RuntimeState | None = None,
         runtime_credentials: RuntimeCredentialsStore | None = None,
         zone_ranges_store: ZoneRangesStore | None = None,
+        snapshot_store: DeviceSnapshotStore | None = None,
         tls_enabled: bool = True,
         on_onboarding_credentials_learned: Callable[[], None] | None = None,
     ) -> None:
@@ -64,6 +66,8 @@ class MqttTlsProxy:
         self.runtime_state = runtime_state
         self.runtime_credentials = runtime_credentials
         self.zone_ranges_store = zone_ranges_store
+        self.snapshot_store = snapshot_store
+        self._conn_duids: dict[str, set[str]] = {}
         self._on_onboarding_credentials_learned = on_onboarding_credentials_learned
         self._server_socket: socket.socket | None = None
         self._running = False
@@ -520,6 +524,54 @@ class MqttTlsProxy:
             parsed["error"] = rpc_obj.get("error")
         return parsed
 
+    def _duid_for_topic(self, topic: str) -> str:
+        parts = topic.split("/")
+        if topic.startswith("rr/m/") and len(parts) >= 6:
+            return parts[5]
+        if topic.startswith("rr/d/") and len(parts) >= 5 and self.runtime_credentials is not None:
+            device = self.runtime_credentials.resolve_device(did=parts[3])
+            return str(device.get("duid") or "") if device else ""
+        return ""
+
+    def _observe_snapshot(
+        self,
+        conn_id: str,
+        direction: str,
+        topic: str,
+        proto_value: int,
+        decoded_entry: dict[str, Any],
+        payload_bytes: bytes,
+    ) -> None:
+        """Feed what the robot says into the last-known-state store."""
+        if self.snapshot_store is None:
+            return
+        try:
+            duid = self._duid_for_topic(topic)
+            if not duid:
+                return
+            payload_utf8 = decoded_entry.get("payload_utf8")
+            payload_utf8 = payload_utf8 if isinstance(payload_utf8, str) else None
+            if proto_value == 101:
+                # Any client's request: the nonce in it is what decrypts the map reply it gets.
+                self.snapshot_store.note_request(duid, payload_utf8)
+                return
+            if not (topic.startswith("rr/d/i/") and direction == "c2b"):
+                return
+            with self._lock:
+                self._conn_duids.setdefault(conn_id, set()).add(duid)
+            self.snapshot_store.mark_seen(duid)
+            if proto_value == 301:
+                self.snapshot_store.record_map(duid, payload_bytes)
+            elif proto_value == 102:
+                response_to = decoded_entry.get("response_to")
+                if isinstance(response_to, dict):
+                    if response_to.get("request_method") == "get_status" and response_to.get("error") is None:
+                        self.snapshot_store.record_status_result(duid, response_to.get("result"))
+                else:
+                    self.snapshot_store.record_dps(duid, payload_utf8)
+        except Exception:
+            self.logger.exception("[conn %s] snapshot update failed", conn_id)
+
     def _trace_packet(self, conn_id: str, direction: str, packet: bytes) -> None:
         packet_type = packet[0] >> 4
         if packet_type in (12, 13):  # PINGREQ, PINGRESP
@@ -660,6 +712,7 @@ class MqttTlsProxy:
                             response_to.get("request_method"),
                             response_to.get("error"),
                         )
+            self._observe_snapshot(conn_id, direction, topic, proto_value, decoded_entry, payload_bytes)
             decoded_messages.append(decoded_entry)
             self.logger.info(
                 "[conn %s %s] PUBLISH topic=%s proto=%s(%d) ver=%s seq=%s key_source=%s payload=%s",
@@ -814,6 +867,10 @@ class MqttTlsProxy:
                 self.runtime_state.record_mqtt_disconnect(conn_id=conn_id)
             with self._lock:
                 self._conn_protocol_levels.pop(conn_id, None)
+                gone_duids = self._conn_duids.pop(conn_id, set())
+            if self.snapshot_store is not None:
+                for duid in gone_duids:
+                    self.snapshot_store.mark_offline(duid)
             self.logger.info("[conn %s] closed", conn_id)
 
     def start(self) -> threading.Thread:

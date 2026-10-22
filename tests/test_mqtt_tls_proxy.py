@@ -1103,3 +1103,78 @@ def test_onboarding_candidate_from_trusted_proxy_still_requires_region_and_nc(tm
     assert authorized is False
     assert reason == "invalid_mqtt_credentials"
     assert candidate is None
+
+
+class _FakeCredentials:
+    def resolve_device(self, *, did: str = "", duid: str = "", model: str = "") -> dict[str, str] | None:
+        return {"duid": "DUID1"} if did == "1103829226788" else None
+
+
+def _snapshot_proxy(tmp_path):
+    from roborock_local_server.bundled_backend.shared.device_snapshot_store import DeviceSnapshotStore
+
+    store = DeviceSnapshotStore(tmp_path, flush_interval_s=0.0, map_interval_s=0.0)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        runtime_credentials=_FakeCredentials(),
+        snapshot_store=store,
+    )
+    return proxy, store
+
+
+def test_robot_status_push_updates_the_snapshot_and_remembers_the_connection(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+
+    proxy._observe_snapshot(
+        "7", "c2b", "rr/d/i/1103829226788/abc", 102, {"payload_utf8": '{"t":1,"dps":{"122":5}}'}, b"",
+    )
+
+    assert store.get("DUID1")["status"]["battery"] == 5
+    assert proxy._conn_duids["7"] == {"DUID1"}
+
+
+def test_get_status_answer_updates_the_snapshot(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+
+    proxy._observe_snapshot(
+        "7",
+        "c2b",
+        "rr/d/i/1103829226788/abc",
+        102,
+        {"response_to": {"request_method": "get_status", "error": None, "result": [{"state": 8, "battery": 100}]}},
+        b"",
+    )
+
+    assert store.get("DUID1")["status"]["state"] == 8
+
+
+def test_frames_that_are_not_from_the_robot_do_not_mark_it_seen(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+
+    # An app's request travels on rr/m/i; the broker's copy toward the robot is rr/d/o.
+    proxy._observe_snapshot(
+        "9", "c2b", "rr/m/i/user/abcd1234/DUID1", 102, {"payload_utf8": '{"dps":{"122":5}}'}, b"",
+    )
+    proxy._observe_snapshot(
+        "9", "b2c", "rr/d/o/1103829226788/abc", 102, {"payload_utf8": '{"dps":{"122":5}}'}, b"",
+    )
+
+    assert store.get("DUID1") is None
+    assert "9" not in proxy._conn_duids
+
+
+def test_a_request_with_a_nonce_is_remembered_for_its_map_reply(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+    payload = '{"dps":{"101":"{\\"security\\":{\\"endpoint\\":\\"w5Mpv215\\",\\"nonce\\":\\"00ff\\"}}"}}'
+
+    proxy._observe_snapshot("9", "c2b", "rr/m/i/user/abcd1234/DUID1", 101, {"payload_utf8": payload}, b"")
+
+    assert store._nonces["DUID1"] == {"w5Mpv215": "00ff"}
