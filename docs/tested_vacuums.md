@@ -106,6 +106,7 @@ Setup notes:
 - QRevo Curv 2 Pro: the map initially failed to load; regenerating the server public key and re-onboarding restored it.
 - QRevo S Pro: the successful report used an RSA-2048 Let's Encrypt certificate. An [earlier attempt](https://github.com/Python-roborock/local_roborock_server/issues/67) on the same firmware stopped before Wi-Fi configuration was sent.
 - QRevo Master: the SSL.com result used a Sectigo Public Server Authentication CA DV R36 chain and a workaround for the proxy MQTT onboarding issue in [#83](https://github.com/Python-roborock/local_roborock_server/issues/83).
+- QRevo Master (a117) `02.28.26`: live camera works in the official app with a TURN relay. The firmware rejects a hostname in `country_domain`, so do not set a camera domain; see [Camera](camera.md#tested-models).
 
 ## Unlisted Vacuums
 
