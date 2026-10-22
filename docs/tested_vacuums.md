@@ -94,6 +94,7 @@ Cloudflare can provide DNS validation for several certificate issuers. Its use a
 Setup notes:
 
 - S6 MaxV: initial LocalRock and Home Assistant controls worked, but the reporter noted intermittent connectivity shortly after onboarding and had not tested it long term.
+- S7 MaxV `02.59.36`: local video and a forced-relay stream worked with the robot's Internet access blocked, a provided RSA-2048 Let's Encrypt certificate, a short `token.r` on HTTPS port 443 and the normal `eu` region. Preview was rejected while charging. See [Camera](camera.md) for the tested setup and limitations.
 - S7 Pro Ultra: the Actalis success used an RSA-2048 certificate. The Let's Encrypt failure was reported with an R3/E1 chain.
 - Saros 10: the reporter blocked the vacuum's Internet access to complete onboarding and kept it blocked afterward. Camera preview did not work.
 - Saros 10R `02.50.56`: the reported pfSense/HAProxy setup used provided certificates and the MITM redirect fix in [PR #77](https://github.com/Python-roborock/local_roborock_server/pull/77).

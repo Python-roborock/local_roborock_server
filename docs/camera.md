@@ -9,7 +9,9 @@ Camera bootstrap, authentication and TURN all need to work.
 Bootstrap depends on firmware. The tested Saros 10R (`roborock.vacuum.a144`,
 FCC/US firmware) uses the onboarding region (`country_domain`). Qrevo MaxV
 (`roborock.vacuum.a87`) was observed using `token.r`, including its explicit
-port, even when a separate camera domain was supplied.
+port, even when a separate camera domain was supplied. S7 MaxV
+(`roborock.vacuum.a27`, firmware `02.59.36`) streamed with a short `token.r`
+on port 443 while retaining the normal `eu` country domain.
 
 Firmware truncates the input to 15 characters and appends `iot.roborock.com`.
 The input used by that firmware needs a trailing `/` and must fit in **15 characters total**,
@@ -21,7 +23,7 @@ For example, onboarding server `api-vac.cc:555` produces `token.r = vac.cc:555/`
 Camera domain `api-vac.cc` produces `country_domain = api-vac.cc/`.
 Qrevo requires DNS, trusted TLS and routing for `vac.cc:555`; Saros requires
 `api-vac.cc:443`. Explicit ports are retained; inputs without a port use 443.
-After device selection, onboarding checks the observed input for a87 and a144.
+After device selection, onboarding checks the observed input for a27, a87 and a144.
 For an unknown model or a new vacuum whose model is not known yet, it checks
 both inputs conservatively; configure both endpoints or first identify the model.
 The initial configuration check only tests the API and MQTT listeners. Camera
@@ -29,6 +31,23 @@ checks always verify certificates, even if the CLI's insecure option is used
 for the admin connection. A Saros can use a short camera domain with a longer
 API/token hostname; a Qrevo with an explicit token port does not require a
 separate camera-domain listener on 443.
+
+For a model using `token.r`, pass `--camera` to enable camera preflight without
+changing its normal country domain. For example, the tested S7 MaxV used the
+equivalent of:
+
+```sh
+uv run start_onboarding.py --server https://api-vac.cc:443 --camera --country-domain eu
+```
+
+This sends `token.r = vac.cc/` and keeps `country_domain = eu`. Both
+`api-vac.cc:443` and `vac.cc:443` need trusted TLS and routing to the server.
+Use the appropriate normal region for your robot; `eu` is the tested region,
+not a requirement for all S7 MaxV units. Changing the server address requires
+another Wi-Fi pairing cycle. A recovered public key can be reused.
+The `--camera-domain` option still sets `country_domain` for firmware that
+uses that field for bootstrap, and continues to enable preflight automatically.
+Ordinary pairing without either camera option does not require TURN.
 
 Preflight also POSTs to the bootstrap route and checks that its advertised TURN
 endpoint matches server status. An older server without TURN status is rejected
@@ -130,6 +149,12 @@ within about 60 seconds. Activation varies by model.
 - No bootstrap request: check DNS, trusted TLS, the trailing slash, length limits
   and routing from the robot's network for both inputs.
 - Preview rejected: check the existing PIN and the model's activation flow.
+- S7 MaxV (`roborock.vacuum.a27`, firmware `02.59.36`): preview while charging
+  returned `-10011` (`robot in charge, denied preview`), even after
+  `check_homesec_password` accepted the existing PIN. Move the robot off the
+  dock before testing preview. A subsequent `-10014` (`request turnserver failed`)
+  was resolved by running a camera-capable server with provided TURN and
+  re-pairing with a short `token.r` on port 443, leaving `country_domain = eu`.
 - Bootstrap succeeds without frames: check authenticated TURN allocation, UDP
   mappings, firewall rules and the advertised address.
 
@@ -137,3 +162,12 @@ Saros 10R completed a WebRTC handshake with coturn and go2rtc received frames.
 Qrevo MaxV completed a forced-relay preview with frames after configuring the
 `token.r` hostname and its explicit port. These observations do not establish
 identical bootstrap or activation behavior on other firmware.
+
+S7 MaxV (`a27`, `02.59.36`) delivered H.264 video at 640×480 using go2rtc
+1.9.14 after the setup above, with the robot's Internet access blocked at the
+router. The existing remote-view PIN was accepted; no new activation sequence
+was needed. The server used a provided RSA-2048 Let's Encrypt certificate
+covering both the API and bootstrap hostnames. Audio and remote driving were
+not tested. A second go2rtc build with Pion's `ICETransportPolicyRelay` forced
+for the Roborock connection decoded 240 frames over 20 seconds through the
+local coturn relay, with no decoder errors reported during that sample.

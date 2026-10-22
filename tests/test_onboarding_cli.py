@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from io import StringIO
 
 import pytest
@@ -10,6 +11,7 @@ from start_onboarding import (
     ApiReachabilityError,
     GuidedOnboardingConfig,
     RemoteOnboardingApi,
+    build_parser,
     choose_device,
     country_from_iana,
     normalize_api_base_url,
@@ -19,6 +21,37 @@ from start_onboarding import (
     run_guided_onboarding,
     sanitize_stack_server,
 )
+
+
+def test_camera_flag_preserves_normal_country_domain() -> None:
+    args = build_parser().parse_args([
+        "--server", "https://api-vac.cc:443", "--admin-password", "admin",
+        "--ssid", "test", "--password", "wifi", "--timezone", "Europe/Amsterdam",
+        "--camera", "--country-domain", "eu",
+    ])
+    config = prompt_for_config(args)
+    assert config.camera_enabled is True
+    assert config.country_domain == "eu"
+    assert config.stack_server == "vac.cc/"
+
+
+def test_camera_flag_blocks_pairing_when_turn_is_disabled(monkeypatch, config):
+    config = replace(config, camera_enabled=True, country_domain="eu", stack_server="vac.cc/")
+    api = FakeApi(devices=[{
+        "duid": "s7", "name": "S7 MaxV", "model": "roborock.vacuum.a27",
+    }], baseline_statuses=[])
+    api.get_status = lambda: {"turn": {"mode": "disabled"}, "health": {"services": []}}
+    answers = iter(["1", "quit"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    output = StringIO()
+    sent = []
+    assert run_guided_onboarding(
+        config=config, api=api, output=output,
+        send_onboarding=lambda *args: sent.append(args),
+    ) == 0
+    assert "TURN is disabled" in output.getvalue()
+    assert api.started_duids == []
+    assert sent == []
 
 
 

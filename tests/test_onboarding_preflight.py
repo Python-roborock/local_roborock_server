@@ -81,16 +81,38 @@ def test_initial_configuration_defers_camera_checks_until_device_selection(monke
 @pytest.mark.parametrize(("model", "token", "country", "endpoint"), [
     ("roborock.vacuum.a144", "roborock.example.com:555/", "api-vac.cc/", ("api-vac.cc", 443)),
     ("roborock.vacuum.a87", "vac.cc:556/", "api-vac.cc/", ("vac.cc", 556)),
+    ("roborock.vacuum.a27", "vac.cc/", "eu", ("vac.cc", 443)),
 ])
 def test_selected_model_only_requires_observed_camera_endpoint(monkeypatch, model, token, country, endpoint):
     calls = []
     monkeypatch.setattr(onboarding_shared, "_probe_tls_endpoint", lambda **kw: calls.append(kw))
     onboarding_shared.perform_camera_preflight(
         api=_FakeApi(_camera_status()), stack_server=token, country_domain=country,
-        model=model, output=StringIO(),
+        model=model, output=StringIO(), camera_enabled=True,
     )
     assert [(c["host"], c["port"]) for c in calls] == [endpoint]
     assert calls[0]["allow_insecure_tls"] is False
+
+
+def test_s7_camera_preflight_rejects_long_token_with_normal_region(monkeypatch):
+    calls = []
+    monkeypatch.setattr(onboarding_shared, "_probe_tls_endpoint", lambda **kw: calls.append(kw))
+    with pytest.raises(ValueError, match="Camera token.r.*15 characters"):
+        onboarding_shared.perform_camera_preflight(
+            api=_FakeApi(_camera_status()), stack_server="vacuum.example.com:555/",
+            country_domain="eu", model="roborock.vacuum.a27", output=StringIO(),
+            camera_enabled=True,
+        )
+    assert calls == []
+
+
+def test_s7_ordinary_pairing_does_not_require_camera_support():
+    api = _FakeApi({})
+    onboarding_shared.perform_camera_preflight(
+        api=api, stack_server="vacuum.example.com:555/", country_domain="eu",
+        model="roborock.vacuum.a27", output=StringIO(),
+    )
+    assert api.status_calls == 0
 
 
 @pytest.mark.parametrize("value", ["vac.cc:555", "too-long.example:555/", "123456789012345"])
