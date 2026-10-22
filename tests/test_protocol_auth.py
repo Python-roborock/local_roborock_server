@@ -102,6 +102,23 @@ def _build_supervisor_with_protocol_toggle(
     return supervisor, paths
 
 
+def test_hawk_auth_failures_record_the_reason(tmp_path: Path) -> None:
+    supervisor, paths = _build_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    unauth_inbox = client.get("/user/inbox/latest")
+    assert unauth_inbox.status_code == 401
+    assert unauth_inbox.json()["data"]["reason"] == "missing_authorization"
+
+    log_entries = [
+        json.loads(line)
+        for line in paths.http_jsonl_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    failure = next(entry for entry in log_entries if entry.get("route") == "hawk_auth_failed")
+    assert failure["auth_reason"] == "missing_authorization"
+
+
 def test_protected_routes_require_native_token_and_hawk_auth(tmp_path: Path) -> None:
     supervisor, paths = _build_supervisor(tmp_path)
     client = TestClient(supervisor.app)
