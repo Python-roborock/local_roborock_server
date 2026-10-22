@@ -127,6 +127,8 @@ from .routes.user.devices.jobs import match as _match_get_schedules
 from .routes.user.devices.jobs import match_create as _match_create_schedule
 from .routes.user.devices.jobs import match_delete as _match_delete_schedule
 from .routes.user.devices.jobs import match_update as _match_update_schedule
+from .routes.user.devices.last_known import build as _build_last_known
+from .routes.user.devices.last_known import match as _match_last_known
 from .routes.user.devices.newadd import build as _build_add_device
 from .routes.user.devices.newadd import match as _match_add_device
 from .routes.user.homes.item import build as _build_get_home_data
@@ -618,6 +620,7 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("create_schedule", _match_create_schedule, _build_create_schedule),
         EndpointRule("update_schedule", _match_update_schedule, _build_update_schedule),
         EndpointRule("delete_schedule", _match_delete_schedule, _build_delete_schedule),
+        EndpointRule("get_device_last_known", _match_last_known, _build_last_known),
         EndpointRule("post_app_info", _match_post_app_info, _build_post_app_info),
         EndpointRule("get_inbox_latest", _match_get_inbox_latest, _build_get_inbox_latest),
         EndpointRule("get_products_v4", _match_get_products_v4, _build_get_products_v4),
