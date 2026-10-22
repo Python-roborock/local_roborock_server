@@ -1635,3 +1635,31 @@ def test_create_room_with_new_capitalization_updates_existing_room(tmp_path: Pat
     stored_inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
     for stored_rooms in (stored_inventory["home"]["rooms"], stored_inventory["rooms"]):
         assert stored_rooms == [{"id": 11100, "name": "Master Bedroom"}, {"id": 11101, "name": "Hallway"}]
+
+
+def test_last_known_route_returns_the_stored_snapshot(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+    device_id = "6HL2zfniaoYYV01CkVuhkO"
+    path = f"/user/devices/{device_id}/last_known"
+
+    from https_server.routes.user.devices.last_known import build as build_last_known
+
+    assert build_last_known(supervisor.context, {}, {}, path)["data"] == {"duid": device_id, "known": False}
+
+    store = supervisor.context.snapshot_store
+    store.record_dps(device_id, json.dumps({"dps": {"122": 5, "121": 12}}))
+    store.mark_offline(device_id)
+
+    known = client.get(path, headers=_hawk_headers(paths.cloud_snapshot_path, path))
+    assert known.status_code == 200
+    data = known.json()["data"]
+    assert data["known"] is True
+    assert data["status"]["battery"] == 5
+    assert data["offline_at"]
+    assert data["has_map"] is False
+    assert "map" not in data
