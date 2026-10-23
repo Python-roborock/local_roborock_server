@@ -1,4 +1,4 @@
-"""Local answer for the firmware ``POST /f/c`` "rrcheck" access renewal.
+"""Local answer for firmware access renewal (rrcheck) via ``POST /f/c`` and ``GET /devices/{did}/sh``.
 
 Background (issue #120): the vacuum periodically calls ``/f/c`` to renew a local
 access grant. When the server had no route for it, the request fell through to the
@@ -19,13 +19,11 @@ Roborock cloud. The response contract is reconstructed from the S7-family firmwa
 same RSA private key it uses for ``/region``, so the public key the server already
 recovered during onboarding is exactly what we need -- no Roborock key is involved.
 
-Note: the ``{k, d}`` / ``{f, c, t}`` shape and the absence of a response signature
-are verified only on S7 firmware. If a newer model (e.g. a298) expects a different
-shape or checks a signature, this response is simply treated as another failed check
--- identical to the previous catchall behaviour -- so enabling it cannot regress a
-working device. See the issue for the one-capture validation that would confirm the
-a298 contract. If we have no recovered key for the device we fall back to the
-catchall so behaviour is unchanged.
+Note: the ``{k, d}`` / ``{f, c, t}`` shape is verified on S7 firmware (via ``/f/c``)
+and on the Saros 10R / a143 (via ``/devices/{did}/sh``). For ``/sh`` requests,
+the payload is wrapped in the expected response envelope. Other newer models
+querying ``/sh`` fall into this same flow. If we have no recovered key for the
+device we fall back to the catchall so behaviour is unchanged.
 """
 
 from __future__ import annotations
@@ -57,7 +55,12 @@ _MAX_INNER_BYTES = 120
 
 
 def match(path: str, _method: str = "POST") -> bool:
-    return path.rstrip("/") in _MATCH_PATHS
+    clean = path.rstrip("/")
+    if clean in _MATCH_PATHS:
+        return True
+    if clean.startswith("/devices/") and clean.endswith("/sh"):
+        return True
+    return False
 
 
 def build_fw_check_payload(pubkey: Any, country: str, now: int) -> dict[str, str]:
@@ -100,12 +103,27 @@ def build(
     clean_path: str,
 ) -> dict[str, Any]:
     did = ctx.extract_did(query_params, body_params)
+    if not did and clean_path.startswith("/devices/"):
+        parts = clean_path.strip("/").split("/")
+        if len(parts) >= 2:
+            did = parts[1]
     pubkey = ctx.device_public_key(did) if did else None
     if pubkey is None:
         # No recovered key -> we cannot forge a valid grant; keep prior behaviour.
         return _build_catchall(ctx, query_params, body_params, clean_path)
     country = (getattr(ctx, "region", "") or "us").upper()
     try:
-        return build_fw_check_payload(pubkey, country, int(time.time()))
+        payload = build_fw_check_payload(pubkey, country, int(time.time()))
+        if clean_path.rstrip("/").endswith("/sh"):
+            return {
+                "k": payload["k"],
+                "d": payload["d"],
+                "success": True,
+                "code": 200,
+                "msg": "success",
+                "data": payload,
+                "result": payload,
+            }
+        return payload
     except Exception:
         return _build_catchall(ctx, query_params, body_params, clean_path)
