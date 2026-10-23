@@ -89,6 +89,7 @@ Cloudflare can provide DNS validation for several certificate issuers. Its use a
 | QRevo S5V (a170) | `02.09.70` | ❓ | ❓ | ❓ | ❓ | [#52](https://github.com/Python-roborock/local_roborock_server/issues/52#issuecomment-4826867624) |
 | QRevo S5V (a170) | `02.16.64` | ❓ | ❓ | ✅ | ❓ | [#52](https://github.com/Python-roborock/local_roborock_server/issues/52) |
 | QRevo S Pro (a326) | `02.36.38` | ❓ | ❓ | ✅ | ❓ | [#132](https://github.com/Python-roborock/local_roborock_server/issues/132) |
+| QX Revo Ultra 2 (a298) | `02.15.44` | ✅ | ✅ | ✅ | ❓ | [#193](https://github.com/Python-roborock/local_roborock_server/issues/193) |
 | QX Revo Plus (Costco version) | Not reported | ❓ | ❓ | ✅ | ❓ | [#89](https://github.com/Python-roborock/local_roborock_server/pull/89) |
 
 Setup notes:
@@ -106,6 +107,7 @@ Setup notes:
 - QRevo Curv 2 Pro: the map initially failed to load; regenerating the server public key and re-onboarding restored it.
 - QRevo S Pro: the successful report used an RSA-2048 Let's Encrypt certificate. An [earlier attempt](https://github.com/Python-roborock/local_roborock_server/issues/67) on the same firmware stopped before Wi-Fi configuration was sent.
 - QRevo Master: the SSL.com result used a Sectigo Public Server Authentication CA DV R36 chain and a workaround for the proxy MQTT onboarding issue in [#83](https://github.com/Python-roborock/local_roborock_server/issues/83).
+- QX Revo Ultra 2 (a298): shares its model code and firmware (`02.15.44`) with the QRevo Edge 2 Set row. Onboarded with the project CLI after LocalRock's v5 auth flow returned `401 missing_authorization`. Public key recovery used `header_samples` rather than `query_samples`. Cloud-free operation was verified under a full router outbound block, and the `/f/c` rrcheck was accepted on 6 daily requests over 5 days. Live video works with the provided TURN relay and a video-only WebRTC offer; remote viewing needs the local two-key activation in [camera.md](camera.md), which `camera-activate` performs.
 
 ## Unlisted Vacuums
 

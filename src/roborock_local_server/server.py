@@ -54,6 +54,9 @@ from .backend import (
 )
 from shared.inventory_io import atomic_write_inventory, inventory_transaction
 from shared.protocol_auth import ProtocolAuthStore
+from shared.routine_runner import RoutineMqttClient
+from roborock.roborock_typing import RoborockCommand
+from .camera import activate_camera
 from https_server.routes.user.scene import validity as scene_validity
 from https_server.routes.auth.service import (
     build_login_data_response,
@@ -2058,6 +2061,104 @@ async def run_server(*, config_file: Path, enable_standalone_admin: bool = True)
     return await supervisor.serve_forever()
 
 
+def _build_runtime_context(
+    config: AppConfig,
+    paths: AppPaths,
+    runtime_credentials: RuntimeCredentialsStore,
+) -> ServerContext:
+    """Build the minimal context the MQTT command client needs outside ``serve``."""
+
+    return ServerContext(
+        api_host=config.network.stack_fqdn,
+        mqtt_host=config.network.stack_fqdn,
+        wood_host=config.network.stack_fqdn,
+        region=config.network.region,
+        protocol_login_email=config.admin.protocol_login_email,
+        localkey=str(runtime_credentials.bootstrap_value("localkey", "") or ""),
+        duid=str(runtime_credentials.bootstrap_value("duid", "") or ""),
+        mqtt_usr=str(runtime_credentials.bootstrap_value("mqtt_usr", "") or ""),
+        mqtt_passwd=str(runtime_credentials.bootstrap_value("mqtt_passwd", "") or ""),
+        mqtt_clientid=str(runtime_credentials.bootstrap_value("mqtt_clientid", "") or ""),
+        https_port=config.network.advertised_https_port,
+        mqtt_tls_port=config.network.advertised_mqtt_tls_port,
+        http_jsonl=paths.http_jsonl_path,
+        mqtt_jsonl=paths.mqtt_jsonl_path,
+        loggers={},
+        key_state_file=paths.device_key_state_path,
+        bootstrap_encryption_enabled=False,
+        runtime_state=None,
+        runtime_credentials=runtime_credentials,
+        timezone=config.network.timezone or None,
+    )
+
+
+def _single_onboarded_duid(runtime_credentials: RuntimeCredentialsStore) -> str:
+    duids = sorted(
+        {str(device.get("duid") or "").strip() for device in runtime_credentials.devices()} - {""}
+    )
+    if not duids:
+        raise SystemExit("No onboarded vacuum found in runtime credentials; onboard first or pass --duid.")
+    if len(duids) > 1:
+        raise SystemExit("Multiple vacuums are onboarded; pass --duid with one of: " + ", ".join(duids))
+    return duids[0]
+
+
+async def _run_camera_activation(
+    client: RoutineMqttClient,
+    device: dict[str, str],
+    *,
+    timeout: float,
+) -> int:
+    name = str(device.get("name") or device.get("duid") or "vacuum")
+    await client.connect()
+    try:
+        raw_status = await client.send_command(RoborockCommand.GET_STATUS)
+        status = raw_status[0] if isinstance(raw_status, list) and raw_status else raw_status
+        if isinstance(status, dict):
+            error_code = int(status.get("error_code") or 0)
+            if error_code:
+                raise SystemExit(
+                    f"{name} reports error_code {error_code}; clear the robot error before activating."
+                )
+        print(f"Arming the two-key camera request on {name}.")
+        print("Press the Power button once on the robot now.")
+        result = await activate_camera(client, timeout_seconds=timeout)
+    finally:
+        await client.close()
+
+    if result.activated:
+        print(
+            f"Camera view authorized: camera_status={result.final_status} "
+            f"(was {result.initial_status})."
+        )
+        print("This stays enabled until the robot is re-onboarded or its camera PIN changes.")
+        return 0
+
+    print(f"Timed out after {timeout:.0f}s: camera_status={result.final_status}.")
+    print("Dock the robot, clear any error, rerun this command, then press Power within 60s.")
+    return 1
+
+
+def activate_camera_command(*, config_file: Path, duid: str = "", timeout: float = 90.0) -> int:
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    runtime_credentials = RuntimeCredentialsStore(
+        paths.runtime_credentials_path,
+        inventory_path=paths.inventory_path,
+        key_state_file=paths.device_key_state_path,
+    )
+    runtime_credentials.sync_inventory()
+
+    selector = duid.strip() or _single_onboarded_duid(runtime_credentials)
+    device = runtime_credentials.device_for_selector(selector)
+    if device is None:
+        raise SystemExit(f"Vacuum '{selector}' was not found in {paths.runtime_credentials_path}")
+
+    context = _build_runtime_context(config, paths, runtime_credentials)
+    client = RoutineMqttClient(context, device, logging.getLogger("roborock_local_server.camera_activate"))
+    return asyncio.run(_run_camera_activation(client, device, timeout=timeout))
+
+
 def repair_runtime_identities(*, config_file: Path, links: list[str]) -> int:
     config = load_config(config_file)
     paths = resolve_paths(config_file, config)
@@ -2070,28 +2171,7 @@ def repair_runtime_identities(*, config_file: Path, links: list[str]) -> int:
 
     inventory = _load_inventory(paths.inventory_path)
     inventory_vacuums = _extract_inventory_vacuums(
-        ServerContext(
-            api_host=config.network.stack_fqdn,
-            mqtt_host=config.network.stack_fqdn,
-            wood_host=config.network.stack_fqdn,
-            region=config.network.region,
-            protocol_login_email=config.admin.protocol_login_email,
-            localkey=str(runtime_credentials.bootstrap_value("localkey", "") or ""),
-            duid=str(runtime_credentials.bootstrap_value("duid", "") or ""),
-            mqtt_usr=str(runtime_credentials.bootstrap_value("mqtt_usr", "") or ""),
-            mqtt_passwd=str(runtime_credentials.bootstrap_value("mqtt_passwd", "") or ""),
-            mqtt_clientid=str(runtime_credentials.bootstrap_value("mqtt_clientid", "") or ""),
-            https_port=config.network.advertised_https_port,
-            mqtt_tls_port=config.network.advertised_mqtt_tls_port,
-            http_jsonl=paths.http_jsonl_path,
-            mqtt_jsonl=paths.mqtt_jsonl_path,
-            loggers={},
-            key_state_file=paths.device_key_state_path,
-            bootstrap_encryption_enabled=False,
-            runtime_state=None,
-            runtime_credentials=runtime_credentials,
-            timezone=config.network.timezone or None,
-        ),
+        _build_runtime_context(config, paths, runtime_credentials),
         inventory,
     )
     inventory_by_duid = {str(item.get("duid") or "").strip(): item for item in inventory_vacuums}
@@ -2182,5 +2262,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Explicit DID=DUID mapping to repair existing state; can be supplied multiple times",
+    )
+
+    camera_activate = subparsers.add_parser(
+        "camera-activate",
+        help="Arm the local two-key camera activation and wait for the Power press",
+    )
+    camera_activate.add_argument("--config", default="config.toml")
+    camera_activate.add_argument("--duid", default="", help="Vacuum to activate; defaults to the only onboarded one")
+    camera_activate.add_argument(
+        "--timeout",
+        type=float,
+        default=90.0,
+        help="Seconds to wait for the Power press after arming",
     )
     return parser

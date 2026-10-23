@@ -36,6 +36,7 @@ from .context import ServerContext
 __all__ = [
     "RoutineCommand",
     "RoutineExecutionError",
+    "RoutineMqttClient",
     "RoutineRunner",
     "RoutineStep",
     "commands_for_step",
@@ -431,7 +432,7 @@ def _enum_or_int_value(value: Any) -> int:
     return int(getattr(value, "value", value))
 
 
-class _RoutineMqttClient:
+class RoutineMqttClient:
     def __init__(
         self,
         context: ServerContext,
@@ -887,7 +888,7 @@ class RoutineRunner:
     async def _sync_scene_tids(
         self,
         *,
-        client: _RoutineMqttClient,
+        client: RoutineMqttClient,
         scene: dict[str, Any],
         device_id: str,
         logger: logging.LoggerAdapter,
@@ -912,7 +913,7 @@ class RoutineRunner:
             },
         )
         logger.info("Stopping routine scene=%s device=%s", scene_name, device_id)
-        client = _RoutineMqttClient(self._context, device, logger)
+        client = RoutineMqttClient(self._context, device, logger)
         await client.connect()
         try:
             await client.send_command(RoborockCommand.APP_STOP, [])
@@ -922,7 +923,7 @@ class RoutineRunner:
     async def _send_step_command(
         self,
         *,
-        client: _RoutineMqttClient,
+        client: RoutineMqttClient,
         logger: logging.LoggerAdapter,
         step: RoutineStep,
         routine_command: RoutineCommand,
@@ -985,7 +986,7 @@ class RoutineRunner:
             device_id,
         )
 
-        client = _RoutineMqttClient(self._context, device, logger)
+        client = RoutineMqttClient(self._context, device, logger)
         await client.connect()
         try:
             await self._sync_scene_tids(client=client, scene=scene, device_id=device_id, logger=logger)
