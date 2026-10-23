@@ -131,3 +131,91 @@ def test_map_reply_is_decrypted_and_its_position_stored(tmp_path: Path, monkeypa
     assert base64.b64decode(snapshot["map"]) == map_bytes
     assert snapshot["has_map"] is True
     assert "map" not in store.get(DUID)
+
+
+def _log_line(time: str, direction: str, topic: str, *messages: dict) -> str:
+    return json.dumps({"time": time, "direction": direction, "topic": topic, "decoded_messages": list(messages)}) + "\n"
+
+
+def _seed_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_bytes: bytes = b"last map bytes") -> Path:
+    from roborock.protocol import Utils
+
+    from roborock_local_server.bundled_backend.shared import device_snapshot_store as module
+
+    class Point:
+        def __init__(self, x: int, y: int, a: int) -> None:
+            self.x, self.y, self.a = x, y, a
+
+    monkeypatch.setattr(
+        module,
+        "_parse_map",
+        lambda data: (module._point(Point(24343, 38108, 170)), module._point(Point(26306, 25598, -177)))
+        if data == map_bytes
+        else (None, None),
+    )
+    nonce = bytes(range(16))
+    header = b"w5Mpv215" + b"\x00" * 8 + b"\x01\x00" + b"\x00" * 6
+    reply = header + Utils.encrypt_cbc(gzip.compress(map_bytes), nonce)
+    request = '{"dps":{"101":"{\\"security\\":{\\"endpoint\\":\\"w5Mpv215\\",\\"nonce\\":\\"%s\\"}}"}}' % nonce.hex()
+    robot = "rr/d/i/1103829226788/abc"
+    path = tmp_path / "decoded.jsonl"
+    path.write_text(
+        _log_line("2026-10-22T00:20:00+00:00", "c2b", f"rr/m/i/user/abcd1234/{DUID}", {"protocol_value": 101, "payload_utf8": request})
+        + _log_line("2026-10-22T00:24:17+00:00", "c2b", robot, {"protocol_value": 102, "payload_utf8": '{"dps":{"122":7}}'})
+        + _log_line("2026-10-22T00:25:00+00:00", "c2b", robot, {"protocol_value": 301, "payload_hex": reply.hex()})
+        + _log_line(
+            "2026-10-22T00:30:00+00:00", "c2b", robot,
+            {"protocol_value": 102, "response_to": {"request_method": "get_status", "error": None, "result": [{"state": 2, "battery": 6}]}},
+        )
+        + _log_line("2026-10-22T00:33:57+00:00", "c2b", robot, {"protocol_value": 102, "payload_utf8": '{"dps":{"122":5}}'})
+        # An app's own traffic and unrelated lines must not count as the robot speaking.
+        + _log_line("2026-10-22T03:00:00+00:00", "b2c", "rr/d/o/1103829226788/abc", {"protocol_value": 102, "payload_utf8": '{"dps":{"122":99}}'})
+        + "not json at all\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_seed_recovers_the_last_status_map_and_time_from_the_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = _seed_log(tmp_path, monkeypatch)
+    store = _store(tmp_path / "state")
+
+    added = store.seed_from_mqtt_jsonl(log, lambda did: DUID if did == "1103829226788" else "")
+
+    snapshot = store.get(DUID, include_map=True)
+    assert added == 1
+    assert snapshot["last_seen_at"] == "2026-10-22T00:33:57+00:00"
+    assert snapshot["status"]["battery"] == 5
+    assert snapshot["status"]["state"] == 2
+    assert snapshot["position"]["robot"] == {"x": 24343, "y": 38108, "angle": 170}
+    assert snapshot["position"]["map_updated_at"] == "2026-10-22T00:25:00+00:00"
+    assert base64.b64decode(snapshot["map"]) == b"last map bytes"
+
+
+def test_seed_persists_so_a_restart_keeps_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = _seed_log(tmp_path, monkeypatch)
+    _store(tmp_path / "state").seed_from_mqtt_jsonl(log, lambda did: DUID)
+
+    reopened = _store(tmp_path / "state").get(DUID)
+
+    assert reopened["status"]["battery"] == 5
+    assert reopened["position"]["robot"]["x"] == 24343
+
+
+def test_seed_leaves_a_device_that_already_has_a_snapshot_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = _seed_log(tmp_path, monkeypatch)
+    store = _store(tmp_path / "state")
+    store.record_dps(DUID, json.dumps({"dps": {"122": 80}}))
+
+    added = store.seed_from_mqtt_jsonl(log, lambda did: DUID)
+
+    assert added == 0
+    assert store.get(DUID)["status"]["battery"] == 80
+
+
+def test_seed_skips_robots_it_cannot_name_and_missing_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = _seed_log(tmp_path, monkeypatch)
+    store = _store(tmp_path / "state")
+
+    assert store.seed_from_mqtt_jsonl(log, lambda did: "") == 0
+    assert store.seed_from_mqtt_jsonl(tmp_path / "missing.jsonl", lambda did: DUID) == 0
