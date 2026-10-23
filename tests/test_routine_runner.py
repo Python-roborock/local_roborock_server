@@ -245,7 +245,7 @@ def test_run_scene_syncs_scene_tids_before_step_commands(tmp_path: Path, monkeyp
             async def wait_for_step_complete(self) -> None:
                 return None
 
-        monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+        monkeypatch.setattr(routine_runner_module, "RoutineMqttClient", FakeRoutineClient)
 
         runner = RoutineRunner(_test_context(tmp_path))
         await runner._run_scene(scene=current_scene, steps=parse_scene_steps(current_scene))
@@ -295,7 +295,7 @@ def test_run_scene_sends_repeat_times_as_object_before_app_start(
             async def wait_for_step_complete(self) -> None:
                 return None
 
-        monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+        monkeypatch.setattr(routine_runner_module, "RoutineMqttClient", FakeRoutineClient)
 
         runner = RoutineRunner(_test_context(tmp_path))
         await runner._run_scene(scene=scene, steps=parse_scene_steps(scene))
@@ -418,7 +418,7 @@ def test_run_scene_retries_step_start_when_device_is_action_locked(tmp_path: Pat
             async def wait_for_dock_settle(self, *, initial_delay_seconds=15.0) -> None:
                 settle_calls.append(float(initial_delay_seconds))
 
-        monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+        monkeypatch.setattr(routine_runner_module, "RoutineMqttClient", FakeRoutineClient)
 
         runner = RoutineRunner(_test_context(tmp_path))
         await runner._run_scene(scene=scene, steps=parse_scene_steps(scene))
@@ -445,7 +445,7 @@ def test_run_scene_retries_step_start_when_device_is_action_locked(tmp_path: Pat
 
 
 class _ScriptedStatusClient:
-    """Minimal stand-in for _RoutineMqttClient that replays a status sequence."""
+    """Minimal stand-in for RoutineMqttClient that replays a status sequence."""
 
     def __init__(self, status_sequence: list[dict]) -> None:
         self._statuses = [StatusV2.from_dict(s) for s in status_sequence]
@@ -465,10 +465,10 @@ class _ScriptedStatusClient:
 
 
 _ScriptedStatusClient.wait_for_step_complete = (
-    routine_runner_module._RoutineMqttClient.wait_for_step_complete
+    routine_runner_module.RoutineMqttClient.wait_for_step_complete
 )
 _ScriptedStatusClient.wait_for_dock_settle = (
-    routine_runner_module._RoutineMqttClient.wait_for_dock_settle
+    routine_runner_module.RoutineMqttClient.wait_for_dock_settle
 )
 
 

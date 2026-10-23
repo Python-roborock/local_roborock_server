@@ -124,6 +124,26 @@ The tested Saros 10R required two-key activation: set the remote-view PIN
 the two-key request bits set and monitor bit off, then press Power on the robot
 within about 60 seconds. Activation varies by model.
 
+The QX Revo Ultra 2 (a298, firmware `02.15.44`) uses the same flow, and the
+server can drive it:
+
+```bash
+uv run start_local_roborock_server.py camera-activate --config config.toml
+```
+
+Dock the robot first and clear any error (`error_code` must be 0). The command
+reads `camera_status` and writes the two request values — bit 5, then bit 12 —
+which for an out-of-box a298 (`385`) is `417` then `4513`. Press the robot's
+Power button once while it is polling. The firmware clears bit 12 and sets the
+read-only monitor bit 2 itself, and `camera_status` becomes `8613`. Writing the
+monitor bit directly is rejected (`-10005`), and writing the result bit
+(`8611`) is rejected (`-10007`).
+
+Activation resets when the robot is re-onboarded or its camera PIN changes, so
+rerun the command after either. With the monitor bit set, `start_camera_preview`
+reaches the TURN bootstrap above; a viewer that offers an audio track gets no
+SDP answer on this firmware, so the offer must be video-only.
+
 ## Troubleshooting and tested behavior
 
 - Bootstrap falls back: inspect the actual hostname, port and path in server logs.

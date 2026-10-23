@@ -10,7 +10,12 @@ import sys
 
 from .configure import run_configure
 from .security import hash_password
-from .server import build_arg_parser, repair_runtime_identities, run_server
+from .server import (
+    activate_camera_command,
+    build_arg_parser,
+    repair_runtime_identities,
+    run_server,
+)
 
 
 def main() -> int:
@@ -57,6 +62,13 @@ def main() -> int:
 
     if args.command == "repair-identities":
         return repair_runtime_identities(config_file=Path(args.config), links=list(args.link))
+
+    if args.command == "camera-activate":
+        return activate_camera_command(
+            config_file=Path(args.config),
+            duid=str(args.duid),
+            timeout=float(args.timeout),
+        )
 
     parser.error(f"Unhandled command: {args.command}")
     return 2
