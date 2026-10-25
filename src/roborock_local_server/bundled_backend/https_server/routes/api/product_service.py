@@ -57,7 +57,7 @@ def build_product_response(ctx: ServerContext) -> dict[str, Any]:
         icon_url = product.get("iconUrl")
         if isinstance(icon_url, str) and icon_url:
             product_entry["picurl"] = icon_url
-            product_entry["cardPicUrl"] = icon_url
+            product_entry["cardpicurl"] = icon_url
             product_entry["pluginPicUrl"] = icon_url
         categories[category_name]["productList"].append(product_entry)
     return {"categoryDetailList": list(categories.values())}

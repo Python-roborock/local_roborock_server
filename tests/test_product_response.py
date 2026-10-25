@@ -99,3 +99,15 @@ def test_product_rriotid_matches_home_data_device_product_id(tmp_path: Path) -> 
         for product in category_detail["productList"]
     }
     assert device_product_ids == rriotids
+
+
+def test_product_picture_fields_use_app_json_names(tmp_path: Path) -> None:
+    device = dict(_DEVICE, iconUrl="https://images.example.com/vacuum.png")
+
+    data = _products_v5(tmp_path, [device])
+
+    [product] = data["categoryDetailList"][0]["productList"]
+    # Product$$serializer only knows the lower-case names picurl/cardpicurl.
+    assert product["picurl"] == "https://images.example.com/vacuum.png"
+    assert product["cardpicurl"] == "https://images.example.com/vacuum.png"
+    assert "cardPicUrl" not in product
