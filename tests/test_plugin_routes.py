@@ -1,8 +1,10 @@
+import asyncio
 import json
 import urllib.parse
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
@@ -189,3 +191,59 @@ def test_non_plugin_routes_still_resolve_to_same_handlers(tmp_path: Path) -> Non
     )
     assert route_name == "user_info"
     assert payload["code"] == 200
+
+
+class _FakePluginResponse:
+    def __init__(self, payload: bytes) -> None:
+        self.status = 200
+        self.headers = {"Content-Type": "application/zip"}
+        self._payload = payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc) -> None:
+        return None
+
+    async def read(self) -> bytes:
+        return self._payload
+
+
+def _fake_client_session(payload: bytes):
+    class _FakeClientSession:
+        def __init__(self, *args, **kwargs) -> None:
+            _ = args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc) -> None:
+            return None
+
+        def get(self, *_args, **_kwargs) -> _FakePluginResponse:
+            return _FakePluginResponse(payload)
+
+    return _FakeClientSession
+
+
+def test_download_plugin_zip_accepts_large_device_plugin(monkeypatch) -> None:
+    from https_server.routes.plugin import common as plugin_common
+
+    # Real device plugins have grown past the former 32 MB limit (~55 MB seen).
+    payload = b"\0" * (55 * 1024 * 1024)
+    monkeypatch.setattr(plugin_common.aiohttp, "ClientSession", _fake_client_session(payload))
+
+    data, content_type = asyncio.run(plugin_common.download_plugin_zip("https://files.roborock.com/plugin.zip"))
+
+    assert len(data) == len(payload)
+    assert content_type == "application/zip"
+
+
+def test_download_plugin_zip_still_rejects_oversized_payload(monkeypatch) -> None:
+    from https_server.routes.plugin import common as plugin_common
+
+    monkeypatch.setattr(plugin_common, "PLUGIN_PROXY_MAX_BYTES", 1024)
+    monkeypatch.setattr(plugin_common.aiohttp, "ClientSession", _fake_client_session(b"\0" * 1025))
+
+    with pytest.raises(RuntimeError, match="plugin too large"):
+        asyncio.run(plugin_common.download_plugin_zip("https://files.roborock.com/plugin.zip"))
