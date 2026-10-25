@@ -711,3 +711,89 @@ def test_wait_for_dock_settle_timeout_raises(monkeypatch) -> None:
             await client.wait_for_dock_settle(initial_delay_seconds=0.0)
 
     asyncio.run(exercise())
+
+
+def _app_start_scene(*, scene_id: int, device_id: str, settings: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": scene_id,
+        "name": "Start",
+        "device_id": device_id,
+        "param": json.dumps(
+            {
+                "action": {
+                    "items": [
+                        {
+                            "id": 1,
+                            "type": "CMD",
+                            "name": "Start",
+                            "finishDpIds": [130],
+                            "param": json.dumps(
+                                {"method": "do_scenes_app_start", "params": [{**settings, "repeat": 1}]},
+                                separators=(",", ":"),
+                            ),
+                        }
+                    ]
+                }
+            },
+            separators=(",", ":"),
+        ),
+    }
+
+
+def test_commands_for_step_skips_unset_settings() -> None:
+    """-1 marks a setting the user did not configure; it must not be sent."""
+    scene = _app_start_scene(
+        scene_id=1001,
+        device_id="device-a",
+        settings={"fan_power": 104, "water_box_mode": 200, "mop_mode": -1, "mop_template_id": -1},
+    )
+    [step] = parse_scene_steps(scene)
+
+    commands = routine_runner_module.commands_for_step(step)
+
+    assert [(command.command, command.params) for command in commands] == [
+        (RoborockCommand.SET_CUSTOM_MODE, [104]),
+        (RoborockCommand.SET_WATER_BOX_CUSTOM_MODE, [200]),
+        (RoborockCommand.SET_CLEAN_REPEAT_TIMES, {"repeat": 1}),
+        (RoborockCommand.APP_START, None),
+    ]
+
+
+def test_run_scene_with_unset_mop_mode_reaches_app_start(tmp_path: Path, monkeypatch) -> None:
+    async def exercise() -> None:
+        scene = _app_start_scene(
+            scene_id=1002,
+            device_id="device-a",
+            settings={"fan_power": 104, "water_box_mode": 200, "mop_mode": -1},
+        )
+        sent_commands: list[tuple[RoborockCommand, object]] = []
+
+        class FakeRoutineClient:
+            def __init__(self, context, device, logger) -> None:
+                _ = context, device, logger
+
+            async def connect(self) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+            async def send_command(self, command, params=None):
+                # Firmware rejects out-of-range settings such as [-1].
+                if params == [-1]:
+                    raise RoborockException({"code": -10007, "message": "invalid params"})
+                sent_commands.append((command, params))
+                return ["ok"]
+
+            async def wait_for_step_complete(self) -> None:
+                return None
+
+        monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+
+        runner = RoutineRunner(_test_context(tmp_path))
+        await runner._run_scene(scene=scene, steps=parse_scene_steps(scene))
+
+        assert RoborockCommand.SET_MOP_MODE not in [command for command, _ in sent_commands]
+        assert sent_commands[-1] == (RoborockCommand.APP_START, None)
+
+    asyncio.run(exercise())

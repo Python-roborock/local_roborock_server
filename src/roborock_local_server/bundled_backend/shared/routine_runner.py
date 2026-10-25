@@ -308,6 +308,11 @@ def _single_start_entry(step: RoutineStep) -> dict[str, Any]:
     return entry
 
 
+# Scene definitions use -1 for a setting the user did not configure, e.g.
+# {"fan_power": 104, "water_box_mode": 200, "mop_mode": -1, "mop_template_id": -1}.
+_UNSET_SETTING_VALUE = -1
+
+
 def _settings_commands(entry: dict[str, Any]) -> list[RoutineCommand]:
     commands: list[RoutineCommand] = []
     if "fan_power" in entry:
@@ -338,7 +343,10 @@ def _settings_commands(entry: dict[str, Any]) -> list[RoutineCommand]:
                 [_as_int(entry.get("mop_template_id"), 0)],
             )
         )
-    return commands
+    # Sending an unset value (e.g. set_mop_mode [-1]) makes the firmware reject
+    # the command, which aborts the routine before its start command is sent:
+    # the vacuum acknowledges the scene but never starts cleaning.
+    return [command for command in commands if command.params != [_UNSET_SETTING_VALUE]]
 
 
 def commands_for_step(step: RoutineStep) -> list[RoutineCommand]:
