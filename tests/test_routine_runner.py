@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from roborock.data import StatusV2
-from roborock.exceptions import RoborockException
+from roborock.exceptions import RoborockException, RoborockUnsupportedFeature
 from roborock_local_server.bundled_backend.shared.context import ServerContext
 import roborock_local_server.bundled_backend.shared.routine_runner as routine_runner_module
 from roborock_local_server.bundled_backend.shared.routine_runner import RoutineRunner, parse_scene_steps
@@ -795,5 +795,85 @@ def test_run_scene_with_unset_mop_mode_reaches_app_start(tmp_path: Path, monkeyp
 
         assert RoborockCommand.SET_MOP_MODE not in [command for command, _ in sent_commands]
         assert sent_commands[-1] == (RoborockCommand.APP_START, None)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "unsupported_command",
+    [
+        RoborockCommand.SET_MOP_MODE,
+        RoborockCommand.SET_MOP_TEMPLATE_ID,
+        RoborockCommand.SET_CLEAN_REPEAT_TIMES,
+    ],
+)
+def test_run_scene_skips_unsupported_setting_and_still_starts(
+    tmp_path: Path, monkeypatch, unsupported_command: RoborockCommand
+) -> None:
+    async def exercise() -> None:
+        scene = _app_start_scene(
+            scene_id=1003,
+            device_id="device-a",
+            settings={"fan_power": 104, "mop_mode": 300, "mop_template_id": 1},
+        )
+        sent_commands: list[RoborockCommand] = []
+
+        class FakeRoutineClient:
+            def __init__(self, context, device, logger) -> None:
+                _ = context, device, logger
+
+            async def connect(self) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+            async def send_command(self, command, params=None):
+                if command == unsupported_command:
+                    raise RoborockUnsupportedFeature("The method called is not recognized by the device.")
+                sent_commands.append(command)
+                return ["ok"]
+
+            async def wait_for_step_complete(self) -> None:
+                return None
+
+        monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+
+        runner = RoutineRunner(_test_context(tmp_path))
+        await runner._run_scene(scene=scene, steps=parse_scene_steps(scene))
+
+        assert unsupported_command not in sent_commands
+        assert sent_commands[-1] == RoborockCommand.APP_START
+
+    asyncio.run(exercise())
+
+
+def test_run_scene_aborts_when_start_command_is_unsupported(tmp_path: Path, monkeypatch) -> None:
+    async def exercise() -> None:
+        scene = _app_start_scene(scene_id=1004, device_id="device-a", settings={"fan_power": 104})
+
+        class FakeRoutineClient:
+            def __init__(self, context, device, logger) -> None:
+                _ = context, device, logger
+
+            async def connect(self) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+            async def send_command(self, command, params=None):
+                if command == RoborockCommand.APP_START:
+                    raise RoborockUnsupportedFeature("The method called is not recognized by the device.")
+                return ["ok"]
+
+            async def wait_for_step_complete(self) -> None:
+                return None
+
+        monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+
+        runner = RoutineRunner(_test_context(tmp_path))
+        with pytest.raises(RoborockUnsupportedFeature):
+            await runner._run_scene(scene=scene, steps=parse_scene_steps(scene))
 
     asyncio.run(exercise())

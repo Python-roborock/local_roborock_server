@@ -387,8 +387,21 @@ def commands_for_step(step: RoutineStep) -> list[RoutineCommand]:
     raise RoutineExecutionError(f"Unsupported step method {step.method!r}")
 
 
+# Preset commands a step sends before its start command. If the device does not
+# know one of them ("unknown_method"), the step still starts with the device's
+# current setting instead of not starting at all. Start commands are never
+# optional: a failed start must abort the routine and surface the error.
+_OPTIONAL_SETTING_COMMANDS = {
+    RoborockCommand.SET_CUSTOM_MODE,
+    RoborockCommand.SET_WATER_BOX_CUSTOM_MODE,
+    RoborockCommand.SET_MOP_MODE,
+    RoborockCommand.SET_MOP_TEMPLATE_ID,
+    RoborockCommand.SET_CLEAN_REPEAT_TIMES,
+}
+
+
 def _is_optional_unsupported_command(command: RoborockCommand, exc: Exception) -> bool:
-    return command == RoborockCommand.SET_MOP_TEMPLATE_ID and isinstance(exc, RoborockUnsupportedFeature)
+    return command in _OPTIONAL_SETTING_COMMANDS and isinstance(exc, RoborockUnsupportedFeature)
 
 
 def _exception_error_payload(exc: Exception) -> dict[str, Any] | None:
