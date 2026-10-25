@@ -111,3 +111,48 @@ def test_product_picture_fields_use_app_json_names(tmp_path: Path) -> None:
     assert product["picurl"] == "https://images.example.com/vacuum.png"
     assert product["cardpicurl"] == "https://images.example.com/vacuum.png"
     assert "cardPicUrl" not in product
+
+
+def test_product_entry_enables_scene_tiles(tmp_path: Path) -> None:
+    data = _products_v5(tmp_path, [_DEVICE])
+
+    category_detail = data["categoryDetailList"][0]
+    [product] = category_detail["productList"]
+    category = category_detail["category"]
+
+    # ProductEntity.sceneProduct() looks up exactly this tag.
+    assert {"name": "scene_2.0", "forceShow": True, "pluginLevel": 0, "requirePlugin": False} in product[
+        "productTags"
+    ]
+    # CardSpecV2 holds the four data points directly, without a "data" wrapper.
+    for key in ("cardspec", "cardSpec"):
+        card_spec = category[key]
+        assert set(card_spec) == {"state", "extra", "battery", "offline"}
+        assert card_spec["state"]["dps"] == 121
+        assert card_spec["battery"]["dps"] == 122
+        assert card_spec["extra"]["dps"] == 128
+        assert card_spec["offline"]["dps"] == 135
+        for entry in card_spec["state"]["value"]:
+            assert set(entry) == {"desc", "value"}
+            assert entry["desc"]["en"]
+            assert all(isinstance(code, int) for code in entry["value"])
+
+
+def test_card_spec_is_not_shared_between_responses(tmp_path: Path) -> None:
+    first = _products_v5(tmp_path, [_DEVICE])
+    first["categoryDetailList"][0]["category"]["cardSpec"]["state"]["value"].clear()
+
+    second = _products_v5(tmp_path, [_DEVICE])
+
+    assert second["categoryDetailList"][0]["category"]["cardSpec"]["state"]["value"]
+
+
+def test_unknown_category_has_no_card_spec(tmp_path: Path) -> None:
+    device = dict(_DEVICE, category="other.category")
+
+    data = _products_v5(tmp_path, [device])
+
+    category = data["categoryDetailList"][0]["category"]
+    assert category["displayName"] == "other.category"
+    assert "cardSpec" not in category
+    assert "cardspec" not in category
