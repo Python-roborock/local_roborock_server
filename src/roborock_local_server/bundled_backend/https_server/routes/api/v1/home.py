@@ -62,4 +62,16 @@ def build_home_devices_order(
         for device in devices
         if isinstance(device, dict) and str(get_value(device, "duid", "did", default="")).strip()
     ]
-    return ok(device_order)
+    # The app reads this as ApiWrapper<DeviceSortContainerV2>, an object:
+    #   {"type": DeviceSortType, "listOrders": [{"source", "did", "order"}]}
+    # A bare list of duids fails with "Expected start of the object '{', but
+    # had '[' at path: $.data".
+    return ok(
+        {
+            "type": "HOME",
+            "listOrders": [
+                {"source": "RR", "did": duid, "order": index}
+                for index, duid in enumerate(device_order)
+            ],
+        }
+    )
