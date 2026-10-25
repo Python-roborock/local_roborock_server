@@ -7,6 +7,7 @@ from shared.context import ServerContext
 from shared.data_helpers import as_int, default_product_name, stable_int
 
 from ..user.homes.service import home_payload
+from .card_spec import card_spec_for_category
 
 
 def build_product_response(ctx: ServerContext) -> dict[str, Any]:
@@ -21,15 +22,23 @@ def build_product_response(ctx: ServerContext) -> dict[str, Any]:
         category_name = str(product.get("category") or "robot.vacuum.cleaner")
         if category_name not in categories:
             category_id = len(categories) + 1
+            category_entry: dict[str, Any] = {
+                "id": category_id,
+                # CategoryEntity.code becomes Product.code in the app, which
+                # the device plugin receives as deviceCategory.
+                "code": category_name,
+                "displayName": category_name,
+                "iconUrl": "",
+            }
+            card_spec = card_spec_for_category(category_name)
+            if card_spec is not None:
+                # Required for the scene tiles. CategoryEntity declares both
+                # spellings; which one is the JSON name could not be decided
+                # from the bytecode, so both are sent.
+                category_entry["cardspec"] = card_spec
+                category_entry["cardSpec"] = card_spec
             categories[category_name] = {
-                "category": {
-                    "id": category_id,
-                    # CategoryEntity.code becomes Product.code in the app, which
-                    # the device plugin receives as deviceCategory.
-                    "code": category_name,
-                    "displayName": category_name,
-                    "iconUrl": "",
-                },
+                "category": category_entry,
                 "productList": [],
             }
         model = str(product.get("model") or "roborock.vacuum.a117")
@@ -53,6 +62,17 @@ def build_product_response(ctx: ServerContext) -> dict[str, Any]:
             # Read by PluginSDKModule.getProductAgreements; a missing field is
             # null and the device plugin's privacy check never completes.
             "agreements": [],
+            # ProductEntity.sceneProduct() looks up the "scene_2.0" tag; without
+            # it the scene tiles stay hidden. The app builds productTagsMap from
+            # this list itself.
+            "productTags": [
+                {
+                    "name": "scene_2.0",
+                    "forceShow": True,
+                    "pluginLevel": 0,
+                    "requirePlugin": False,
+                }
+            ],
         }
         icon_url = product.get("iconUrl")
         if isinstance(icon_url, str) and icon_url:
