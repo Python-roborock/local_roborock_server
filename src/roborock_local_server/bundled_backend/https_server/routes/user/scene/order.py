@@ -5,7 +5,7 @@ from typing import Any
 from shared.context import ServerContext
 from shared.http_helpers import wrap_response
 
-from .service import scene_order
+from .service import scene_order_by_device
 
 
 def match(path: str) -> bool:
@@ -18,5 +18,8 @@ def build(
     _body_params: dict[str, list[str]],
     _clean_path: str,
 ) -> dict[str, Any]:
-    return wrap_response(scene_order(ctx, query_params))
+    # The app reads ApiReturn<List<SceneOrder>> with
+    # SceneOrder = {"duid": String, "sceneIds": List<Long>}, the same shape the
+    # cloud returns. A flat id list fails with "Expected start of the object".
+    return wrap_response(scene_order_by_device(ctx, query_params))
 
