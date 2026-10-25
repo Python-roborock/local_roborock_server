@@ -178,6 +178,54 @@ def test_interceptor_leaves_server_timer_to_the_robot(ctx, method):
     assert interceptor(DUID, _encode_request(method, [])) is None
 
 
+def test_native_write_observation_preserves_wire_payload_and_waits_for_confirmation(ctx):
+    from shared.native_schedule_sync import NativeScheduleSync
+    from roborock_local_server.bundled_backend.mqtt_broker_server.topic_bridge import DeviceTopicKey
+
+    coordinator = NativeScheduleSync(ctx)
+    bridge = MqttTopicBridge(
+        host="127.0.0.1", port=1883, logger=logging.getLogger("native-sync-test"),
+        request_interceptor=timer_rpc.TimerRpcInterceptor(ctx),
+        request_observer=coordinator.observe_request,
+    )
+    device = DeviceTopicKey(did="robot-did", mqtt_usr="robot-user")
+    bridge._remember_device_seen(device)
+    before = schedule_store.list_jobs(ctx, DUID)
+    sent = []
+
+    class Client:
+        async def publish(self, topic, payload, **kwargs):
+            sent.append((topic, payload))
+
+    async def exercise():
+        for session, enabled in (("homebridge", False), ("oem", True), ("localrock", False)):
+            cloud = CloudTopicKey(rriot_u=session, mqtt_username=session, duid=DUID)
+            payload = _encode_request("upd_server_timer", [["native-timer", "on" if enabled else "off"]])
+            message = SimpleNamespace(payload=payload, qos=0, retain=False)
+            await bridge._handle_cloud_message(Client(), message, cloud, cloud.topic_in)
+            assert sent[-1] == (device.topic_out, payload)
+            assert schedule_store.list_jobs(ctx, DUID) == before
+        assert coordinator._generation[DUID] == 3
+
+    asyncio.run(exercise())
+
+
+def test_retained_native_write_is_not_observed_as_a_new_change(ctx):
+    from shared.native_schedule_sync import NativeScheduleSync
+    from roborock_local_server.bundled_backend.mqtt_broker_server.topic_bridge import DeviceTopicKey
+    coordinator = NativeScheduleSync(ctx)
+    bridge = MqttTopicBridge(host="127.0.0.1", port=1883, logger=logging.getLogger("native-sync-test"),
+                             request_observer=coordinator.observe_request)
+    bridge._remember_device_seen(DeviceTopicKey(did="robot-did", mqtt_usr="robot-user"))
+    cloud = CloudTopicKey(rriot_u="app", mqtt_username="app", duid=DUID)
+    class Client:
+        async def publish(self, *args, **kwargs):
+            pass
+    message = SimpleNamespace(payload=_encode_request("upd_server_timer", [["native-timer", "on"]]), qos=0, retain=True)
+    asyncio.run(bridge._handle_cloud_message(Client(), message, cloud, cloud.topic_in))
+    assert not coordinator._dirty
+
+
 def test_bridge_answers_timer_requests_locally_and_does_not_forward_them(ctx):
     class Client:
         def __init__(self):

@@ -20,15 +20,15 @@ restoration, daily reset, and recovery. The server provides the underlying APIs.
 | --- | --- |
 | GET `/user/devices/{duid}/jobs` | Stored jobs with calculated UTC `nextFireTime` for enabled, valid jobs |
 | POST to the collection | Persist a new job with a unique numeric ID |
-| PUT/PATCH `/user/devices/{duid}/jobs/{id}` | Update supplied fields; preserve omitted fields and unknown model fields |
+| PUT/PATCH `/user/devices/{duid}/jobs/{id}` | Verify native enablement when supplied, then save; preserve omitted fields and unknown model fields |
 | DELETE an item | Remove the stored job and its occurrence record |
 | `get/set/upd/del_server_timer` | Forward unchanged to the robot, which owns these timer entries |
 | Legacy `get/set/upd/del_timer` | Local compatibility view for jobs without a native timer name |
 | Native scheduled execution | Verify the robot timer is on, then send `server_scheduled_start` with the complete settings entry |
 
 A job's numeric `id` is different from the robot timer's string ID in
-`param.params[0].name`. Cloud job `enabled: true` can coexist with a robot timer
-that is off. The server checks both rather than assuming they are equivalent.
+`param.params[0].name`. Imported or previously unsynchronized jobs can disagree with the native timer.
+The server now reconciles enablement and still checks both before execution.
 Native jobs are not duplicated in the legacy `get_timer` view; both captured
 robots returned an empty legacy list while holding native timers.
 
@@ -39,6 +39,39 @@ Settings such as `clean_order_mode`, `mop_template_id`, `map_index`, room-list
 strings, and unknown future options survive storage and native dispatch.
 Invalid cron/timezone/body values are rejected. A persistence failure does not
 receive a successful write acknowledgement.
+
+## Enablement synchronization across clients
+
+Native schedule on/off changes are synchronized by the server, independent of
+whether Homebridge, LocalRock, the OEM app, or the dashboard made the change.
+A forwarded `upd/set/del_server_timer` request prompts a fresh native timer read.
+The request and the robot's reply remain unchanged; sending a request or receiving
+an `ok` is not used as proof of the final state. No client-specific HTTP write is
+required after a native toggle.
+
+A background read also runs at startup and approximately every 30 seconds to
+recover missed traffic, reconnects, and changes made directly over the LAN.
+Successful reconciliation changes only `enabled` on existing, uniquely matched
+jobs. It preserves IDs, cron/timezone, settings, unknown fields, and occurrence
+claims. The dashboard's normal refresh shows the updated saved state. Other
+clients see it on their next normal read; this is eventual synchronization,
+not an unsolicited push into every app.
+
+An HTTP job PUT/PATCH that supplies `enabled` verifies the matching native timer
+before saving. A timer already in the requested state needs no extra write,
+so the OEM app's native-update-then-PUT sequence remains compatible. A lost
+acknowledgement is checked with one read-back, without repeating the write.
+Time-only requests that omit `enabled` remain store-only edits.
+
+Background reads and server edits share a per-vacuum lock. A native write that
+overlaps a background read invalidates that read; edits/deletions during a read
+are checked again before persistence. Missing, malformed, ambiguous or unreachable
+timers leave the last saved state intact and never create replacement timers.
+A normally polled, still-on timer does not re-enable a consumed one-time job.
+An explicit native enable request can do so only after a fresh matching read;
+that intent expires after two minutes. Unlinked server-only jobs retain their
+existing behavior. Native timer time/settings edits are not imported into job
+cron/settings by this enablement reconciliation.
 
 ## Execution and missed runs
 
@@ -104,8 +137,8 @@ Build the selected Git commit into a versioned Docker image. The CI runs the ful
 2. Import current jobs and verify every numeric job ID maps to the expected
    native timer name. Confirm local jobs reads and robot timer reads separately.
 3. Disable a recurring test schedule through Homebridge. Confirm the robot timer
-   reads off and no clean begins at the scheduled time, even if job `enabled`
-   remains true. Re-enable it and confirm a later occurrence runs exactly once.
+   reads off and the saved job becomes disabled without a separate HTTP update.
+   Re-enable it and confirm both states agree and a later occurrence runs once.
 4. Test a room schedule and a whole-home schedule. Compare settings, rooms, map,
    and history against the app. A refusal should stop dispatch, with no fallback
    ordinary clean.

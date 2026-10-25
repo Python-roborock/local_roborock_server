@@ -69,6 +69,78 @@ def has_native_timer(job: dict[str, Any]) -> bool:
     return "name" in _settings_entry(job)
 
 
+def native_timer_name(job: dict[str, Any]) -> str | None:
+    """Return an exact native reference, refusing malformed or multiple references."""
+    param = job.get("param")
+    if isinstance(param, str):
+        try:
+            param = json.loads(param)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(param, dict) or param.get("method") != "server_scheduled_start":
+        return None
+    params = param.get("params")
+    if isinstance(params, list):
+        if len(params) != 1:
+            if any(isinstance(entry, dict) and "name" in entry for entry in params):
+                raise SettingsError("Schedule has multiple or ambiguous native timer references")
+            return None
+        params = params[0]
+    if not isinstance(params, dict) or "name" not in params:
+        return None
+    name = params["name"]
+    if not isinstance(name, str) or not name.strip():
+        raise SettingsError("Schedule has an invalid native timer reference")
+    return name
+
+
+@inventory_mutation
+def reconcile_native_enabled(
+    ctx: ServerContext, duid: str, snapshot: list[dict[str, Any]], states: dict[str, bool],
+    *, explicit_enable: dict[str, Any] | None = None,
+) -> list[Any]:
+    """Merge a fresh robot read only into unchanged, uniquely linked jobs.
+
+    Preserve complete records and occurrence claims. A still-on robot timer
+    must not resurrect a consumed one-time job after a restart or routine poll.
+    """
+    inventory = load_inventory(ctx)
+    jobs = _jobs_for(inventory, duid, create=False) or []
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        try:
+            name = native_timer_name(job)
+        except SettingsError:
+            continue
+        if name is not None:
+            by_name.setdefault(name, []).append(job)
+    changed = []
+    claims = inventory.get("schedule_occurrences", {}).get(duid, {})
+    for name, linked in by_name.items():
+        if len(linked) != 1 or name not in states:
+            continue
+        job = linked[0]
+        before = [entry for entry in snapshot if _same_id(entry, job.get("id"))]
+        if before != [job] or sum(_same_id(entry, job.get("id")) for entry in jobs) != 1:
+            continue
+        enabled = states[name]
+        if as_bool(job.get("enabled", True), True) == enabled:
+            continue
+        if (enabled and not as_bool(job.get("repeated", True), True)
+                and str(job.get("id")) in claims
+                and (name not in (explicit_enable or {})
+                     or claims[str(job.get("id"))] != explicit_enable[name])):
+            continue
+        job["enabled"] = enabled
+        job.pop("nextFireTime", None)
+        changed.append(job["id"])
+    if changed:
+        _persist(ctx, inventory)
+    return changed
+
+
 def job_settings(job: dict[str, Any]) -> dict[str, Any]:
     """The vac/mop settings a job carries, as a flat dict.
 

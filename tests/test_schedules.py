@@ -1,5 +1,7 @@
 import json
+import copy
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -271,7 +273,40 @@ def _native_job():
     }
 
 
-def test_homebridge_delay_and_restore_put_round_trip_preserves_native_job(tmp_path):
+@pytest.fixture
+def native_robot(monkeypatch):
+    from shared import routine_runner
+    robot = SimpleNamespace(timers=[["1800000000001", "on"]], calls=[], apply=True,
+                            error=None, after_read=None)
+
+    class Client:
+        def __init__(self, context, device, logger):
+            assert device["duid"] == "robot-test"
+
+        async def connect(self):
+            pass
+
+        async def send_command(self, command, params):
+            robot.calls.append((str(command), copy.deepcopy(params)))
+            if str(command) == "get_server_timer":
+                if robot.after_read:
+                    robot.after_read()
+                return copy.deepcopy(robot.timers)
+            assert str(command) == "upd_server_timer"
+            if robot.apply:
+                robot.timers[0][1] = params[0][1]
+            if robot.error:
+                raise robot.error
+            return ["ok"]
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(routine_runner, "_RoutineMqttClient", Client)
+    return robot
+
+
+def test_homebridge_delay_and_restore_put_round_trip_preserves_native_job(tmp_path, native_robot):
     original = _native_job()
     client, paths = _jobs_client(tmp_path, "robot-test", [original])
     collection = "/user/devices/robot-test/jobs"
@@ -287,6 +322,62 @@ def test_homebridge_delay_and_restore_put_round_trip_preserves_native_job(tmp_pa
     listed = client.get(collection, headers=_hawk_headers(paths.cloud_snapshot_path, collection)).json()["result"]
     assert {k: v for k, v in listed[0].items() if k != "nextFireTime"} == original
     assert listed[0]["param"]["params"][0]["name"] != str(listed[0]["id"])
+    assert all(method == "get_server_timer" for method, _ in native_robot.calls)
+
+
+def test_direct_http_enablement_updates_robot_then_store_for_any_client(tmp_path, native_robot):
+    original = _native_job()
+    client, paths = _jobs_client(tmp_path, "robot-test", [original])
+    item = "/user/devices/robot-test/jobs/42001"
+    for enabled in (False, True):
+        raw, headers = _signed_json(paths, item, {"enabled": enabled})
+        result = client.put(item, content=raw, headers=headers).json()
+        assert result["success"] is True
+        assert result["result"] == {**original, "enabled": enabled}
+        assert native_robot.timers[0][1] == ("on" if enabled else "off")
+        assert native_robot.calls[-2:] == [
+            ("upd_server_timer", [["1800000000001", "on" if enabled else "off"]]),
+            ("get_server_timer", []),
+        ]
+
+
+def test_oem_timer_then_job_put_does_not_write_native_timer_again(tmp_path, native_robot):
+    native_robot.timers[0][1] = "off"
+    client, paths = _jobs_client(tmp_path, "robot-test", [_native_job()])
+    item = "/user/devices/robot-test/jobs/42001"
+    raw, headers = _signed_json(paths, item, {"enabled": False})
+    result = client.put(item, content=raw, headers=headers).json()
+    assert result["success"] is True
+    assert native_robot.calls == [("get_server_timer", [])]
+
+
+@pytest.mark.parametrize("lost_ack", [False, True])
+def test_http_requires_actual_confirmation_and_does_not_retry_write(tmp_path, native_robot, lost_ack):
+    native_robot.error = TimeoutError("lost ack") if lost_ack else None
+    native_robot.apply = lost_ack
+    client, paths = _jobs_client(tmp_path, "robot-test", [_native_job()])
+    before = paths.inventory_path.read_bytes()
+    item = "/user/devices/robot-test/jobs/42001"
+    raw, headers = _signed_json(paths, item, {"enabled": False})
+    result = client.put(item, content=raw, headers=headers).json()
+    assert result["success"] is lost_ack
+    assert sum(method == "upd_server_timer" for method, _ in native_robot.calls) == 1
+    if not lost_ack:
+        assert paths.inventory_path.read_bytes() == before
+
+
+def test_http_change_during_timer_read_refuses_stale_native_write(tmp_path, native_robot):
+    client, paths = _jobs_client(tmp_path, "robot-test", [_native_job()])
+    def change():
+        data = json.loads(paths.inventory_path.read_text())
+        data["schedules"]["robot-test"][0]["cron"] = "0 10 * * *"
+        paths.inventory_path.write_text(json.dumps(data))
+    native_robot.after_read = change
+    item = "/user/devices/robot-test/jobs/42001"
+    raw, headers = _signed_json(paths, item, {"enabled": False})
+    result = client.put(item, content=raw, headers=headers).json()
+    assert result["success"] is False and result["code"] == 409
+    assert native_robot.calls == [("get_server_timer", [])]
 
 
 def test_put_replaces_param_exactly_when_app_removes_optional_fields(tmp_path):
