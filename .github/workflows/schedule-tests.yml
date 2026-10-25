@@ -1,0 +1,52 @@
+name: Schedule support checks
+
+on:
+  push:
+    branches: [upstream/schedule-support, upstream/admin-schedules]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: schedule-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked --extra dev
+      - run: uv run pytest -q
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: local/roborock-server:schedule-ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify schedule module in the built image
+        run: >-
+          docker run --rm --network none local/roborock-server:schedule-ci
+          python -c 'import roborock_local_server.bundled_backend.shared.schedule_runner'
