@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from enum import StrEnum
 import json
 import logging
@@ -33,6 +35,7 @@ from roborock.roborock_message import RoborockDataProtocol, RoborockMessage, Rob
 from roborock.roborock_typing import RoborockCommand
 
 from .context import ServerContext
+from .schedule_store import claimed_job_is_current
 
 __all__ = [
     "RoutineCommand",
@@ -68,6 +71,7 @@ class SchedulerCommand(StrEnum):
     # without the entry it answers -10005 "Invalid timer", and with a bare id "Param should be
     # name + fan + segment".
     SERVER_SCHEDULED_START = "server_scheduled_start"
+    GET_SERVER_TIMER = "get_server_timer"
 
 
 # A whole-home clean started by a schedule rather than a scene; see commands_for_step.
@@ -92,7 +96,6 @@ _PARAM_ERROR_CODE = -10005
 # -10005 "Param error" to a value it does not support, such as a route its model lacks.
 _APP_START_KEYS = ("repeat", "water_box_mode", "segments", "fan_power", "mop_mode", "clean_mop", "map_index")
 _APP_START_DEFAULTS = {"repeat": 1, "segments": "0", "clean_mop": 1, "map_index": -1}
-_SETTING_ENTRY_KEYS = ("repeat", "fan_power", "water_box_mode", "mop_mode", "mop_template_id")
 # app_start's "source" field is how the robot learns who started a clean, for its history. 3 is
 # python-roborock's RoborockStartType.schedule, and a robot recorded the clean as "Schedule" in the
 # official app's history; an app start is 2. "start_type", "startType", "start_from", "from" and
@@ -407,8 +410,9 @@ def commands_for_step(step: RoutineStep) -> list[RoutineCommand]:
         ]
     if step.method == SCHEDULE_SERVER_START:
         entry = _single_start_entry(step)
-        body = {key: entry[key] for key in (*_APP_START_KEYS, "name") if key in entry}
-        return [RoutineCommand(SchedulerCommand.SERVER_SCHEDULED_START, [body])]
+        # Preserve the captured payload, including settings introduced by newer
+        # models. Filtering through app_start's keys loses schedule semantics.
+        return [RoutineCommand(SchedulerCommand.SERVER_SCHEDULED_START, [copy.deepcopy(entry)])]
     if step.method == SCHEDULE_APP_START:
         entry = _single_start_entry(step)
         body = {**_APP_START_DEFAULTS, **{key: entry[key] for key in _APP_START_KEYS if key in entry}}
@@ -418,26 +422,11 @@ def commands_for_step(step: RoutineStep) -> list[RoutineCommand]:
 
 
 def fallback_commands_for_step(step: RoutineStep) -> list[RoutineCommand] | None:
-    """The longer way to run [step], for when the robot refuses the short one; None if there is none.
+    """Alternative settings transport for a legacy schedule, never a native timer.
 
-    A schedule is started by asking the robot to run it (server_scheduled_start), and failing that
-    by one app_start carrying its settings. A refused command changes nothing, so on "Param error"
-    or "Invalid timer" the next, plainer way is tried: a room schedule as a segment clean, a
-    whole-home one as separate setting commands, which is how a routine starts a whole-home clean.
+    A refused server_scheduled_start can mean the timer is disabled or gone.
+    An ordinary clean would bypass that decision, so native starts never fall back.
     """
-    if step.method == SCHEDULE_SERVER_START:
-        entry = _single_start_entry(step)
-        rooms = [
-            int(part)
-            for part in str(entry.get("segments") or "").replace(";", ",").split(",")
-            if part.strip().isdigit() and int(part) > 0
-        ]
-        if rooms:
-            settings = {key: entry[key] for key in _SETTING_ENTRY_KEYS if key in entry}
-            return commands_for_step(
-                replace(step, method="do_scenes_segments", params={"data": [{**settings, "segs": rooms}]})
-            )
-        return commands_for_step(replace(step, method=SCHEDULE_APP_START))
     if step.method != SCHEDULE_APP_START:
         return None
     return commands_for_step(replace(step, method="do_scenes_app_start"))
@@ -872,6 +861,8 @@ class RoutineRunner:
         job_id: int,
         name: str,
         steps: list[RoutineStep],
+        expected_job: dict[str, Any] | None = None,
+        deadline: datetime | None = None,
     ) -> dict[str, Any]:
         """Run a scheduled job's steps; never interrupts a routine already running."""
         existing = self._tasks_by_device.get(device_id)
@@ -885,7 +876,8 @@ class RoutineRunner:
             }
         scene = {"id": job_id, "name": name, "device_id": device_id}
         task = asyncio.get_running_loop().create_task(
-            self._run_steps(scene=scene, steps=steps, sync_scene_tids=False),
+            self._run_steps(scene=scene, steps=steps, sync_scene_tids=False,
+                            schedule_job=copy.deepcopy(expected_job), schedule_deadline=deadline),
             name=f"routine-job-{job_id}-{device_id}",
         )
         self._tasks_by_device[device_id] = _ActiveRoutine(task=task, scene_id=job_id, scene_name=name)
@@ -1038,6 +1030,7 @@ class RoutineRunner:
             except Exception as exc:  # noqa: BLE001
                 if (
                     routine_command.command in _STEP_START_COMMANDS
+                    and step.method != SCHEDULE_SERVER_START
                     and attempts < _ACTION_LOCK_RETRY_ATTEMPTS
                     and _is_retryable_action_locked_error(exc)
                 ):
@@ -1089,6 +1082,8 @@ class RoutineRunner:
         scene: dict[str, Any],
         steps: list[RoutineStep],
         sync_scene_tids: bool,
+        schedule_job: dict[str, Any] | None = None,
+        schedule_deadline: datetime | None = None,
     ) -> None:
         device_id = scene_device_id(scene)
         device = self._device_record(device_id)
@@ -1114,6 +1109,29 @@ class RoutineRunner:
             if sync_scene_tids:
                 await self._sync_scene_tids(client=client, scene=scene, device_id=device_id, logger=logger)
             for step_index, step in enumerate(steps):
+                if step.method == SCHEDULE_SERVER_START:
+                    timer_name = _single_start_entry(step).get("name")
+                    timers = await client.send_command(SchedulerCommand.GET_SERVER_TIMER, [])
+                    # The cloud job's enabled field can remain true when the
+                    # robot timer is off. A failed/malformed read must not start
+                    # cleaning, nor enqueue a start for an offline robot.
+                    if not isinstance(timers, list):
+                        raise RoutineExecutionError("Cannot verify native schedule timer state")
+                    matching = [entry for entry in timers if isinstance(entry, list) and len(entry) >= 2
+                                and entry[0] == timer_name]
+                    if len(matching) != 1 or matching[0][1] != "on":
+                        logger.info("Skipping schedule: robot timer is off, missing, or ambiguous")
+                        continue
+                elif schedule_job is not None:
+                    # Legacy jobs have no native flag to read, but still require
+                    # a live robot before sending cleaning commands.
+                    await client.get_status()
+                if schedule_job is not None and not claimed_job_is_current(self._context, device_id, schedule_job):
+                    logger.info("Skipping schedule: job changed during dispatch")
+                    return
+                if schedule_deadline is not None and datetime.now(timezone.utc) >= schedule_deadline:
+                    logger.info("Skipping schedule: dispatch window expired")
+                    return
                 waits_for_step_complete = RoborockDataProtocol.TASK_COMPLETE.value in step.finish_dp_ids
                 try:
                     await self._send_step_commands(

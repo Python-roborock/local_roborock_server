@@ -74,10 +74,12 @@ class MqttTopicBridge:
         runtime_state: Any | None = None,
         inventory_path: Path | None = None,
         request_interceptor: Callable[[str, bytes], bytes | None] | None = None,
+        request_observer: Callable[[str, bytes], None] | None = None,
     ) -> None:
         # Given (duid, payload) for each rr/m request; returns an encoded reply to
         # publish back to the requester instead of forwarding, or None to forward.
         self._request_interceptor = request_interceptor
+        self._request_observer = request_observer
         self._host = host
         self._port = port
         self._logger = logger
@@ -433,6 +435,11 @@ class MqttTopicBridge:
         self._d_to_m[device_topic] = cloud_topic
 
         target_topic = device_topic.topic_out
+        if self._request_observer is not None and not bool(getattr(message, "retain", False)):
+            try:
+                self._request_observer(cloud_topic.duid, bytes(message.payload))
+            except Exception:  # Observation must never prevent forwarding.
+                self._logger.warning("MQTT request observer failed for %s", src_topic, exc_info=True)
         await self._publish_mirror(client, message, target_topic)
         self._logger.info(
             "MQTT bridge m->d %s -> %s bytes=%d",

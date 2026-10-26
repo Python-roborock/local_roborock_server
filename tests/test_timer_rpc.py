@@ -66,6 +66,23 @@ def test_get_timer_lists_cloud_schedules_in_the_shape_localrock_parses(ctx):
     ]
 
 
+@pytest.mark.parametrize("serialized", [False, True])
+def test_native_jobs_are_not_fabricated_as_legacy_timers(ctx, serialized):
+    for job in schedule_store.list_jobs(ctx, DUID):
+        param = job["param"]
+        param["params"][0]["name"] = "native-" + str(job["id"])
+        schedule_store.upsert_job(ctx, DUID, job_id=job["id"], cron=job["cron"],
+                                  enabled=job["enabled"], param=param)
+    if serialized:
+        path = ctx.http_jsonl.parent / "web_api_inventory.json"
+        inventory = json.loads(path.read_text())
+        for job in inventory["schedules"][DUID]:
+            job["param"] = json.dumps(job["param"])
+        path.write_text(json.dumps(inventory))
+    assert timer_rpc.handle_timer_request(ctx, DUID, "get_timer", []) == []
+    assert len(schedule_store.list_jobs(ctx, DUID)) == 3
+
+
 @pytest.mark.parametrize(
     ("cron", "expected"),
     [
@@ -159,6 +176,54 @@ def test_interceptor_leaves_server_timer_to_the_robot(ctx, method):
     # client and has caused real data loss. This must always forward, never answer here.
     interceptor = timer_rpc.TimerRpcInterceptor(ctx)
     assert interceptor(DUID, _encode_request(method, [])) is None
+
+
+def test_native_write_observation_preserves_wire_payload_and_waits_for_confirmation(ctx):
+    from shared.native_schedule_sync import NativeScheduleSync
+    from roborock_local_server.bundled_backend.mqtt_broker_server.topic_bridge import DeviceTopicKey
+
+    coordinator = NativeScheduleSync(ctx)
+    bridge = MqttTopicBridge(
+        host="127.0.0.1", port=1883, logger=logging.getLogger("native-sync-test"),
+        request_interceptor=timer_rpc.TimerRpcInterceptor(ctx),
+        request_observer=coordinator.observe_request,
+    )
+    device = DeviceTopicKey(did="robot-did", mqtt_usr="robot-user")
+    bridge._remember_device_seen(device)
+    before = schedule_store.list_jobs(ctx, DUID)
+    sent = []
+
+    class Client:
+        async def publish(self, topic, payload, **kwargs):
+            sent.append((topic, payload))
+
+    async def exercise():
+        for session, enabled in (("homebridge", False), ("oem", True), ("localrock", False)):
+            cloud = CloudTopicKey(rriot_u=session, mqtt_username=session, duid=DUID)
+            payload = _encode_request("upd_server_timer", [["native-timer", "on" if enabled else "off"]])
+            message = SimpleNamespace(payload=payload, qos=0, retain=False)
+            await bridge._handle_cloud_message(Client(), message, cloud, cloud.topic_in)
+            assert sent[-1] == (device.topic_out, payload)
+            assert schedule_store.list_jobs(ctx, DUID) == before
+        assert coordinator._generation[DUID] == 3
+
+    asyncio.run(exercise())
+
+
+def test_retained_native_write_is_not_observed_as_a_new_change(ctx):
+    from shared.native_schedule_sync import NativeScheduleSync
+    from roborock_local_server.bundled_backend.mqtt_broker_server.topic_bridge import DeviceTopicKey
+    coordinator = NativeScheduleSync(ctx)
+    bridge = MqttTopicBridge(host="127.0.0.1", port=1883, logger=logging.getLogger("native-sync-test"),
+                             request_observer=coordinator.observe_request)
+    bridge._remember_device_seen(DeviceTopicKey(did="robot-did", mqtt_usr="robot-user"))
+    cloud = CloudTopicKey(rriot_u="app", mqtt_username="app", duid=DUID)
+    class Client:
+        async def publish(self, *args, **kwargs):
+            pass
+    message = SimpleNamespace(payload=_encode_request("upd_server_timer", [["native-timer", "on"]]), qos=0, retain=True)
+    asyncio.run(bridge._handle_cloud_message(Client(), message, cloud, cloud.topic_in))
+    assert not coordinator._dirty
 
 
 def test_bridge_answers_timer_requests_locally_and_does_not_forward_them(ctx):

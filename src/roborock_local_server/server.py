@@ -55,7 +55,9 @@ from .backend import (
 from shared.inventory_io import atomic_write_inventory, inventory_transaction
 from shared.protocol_auth import ProtocolAuthStore
 from shared.schedule_runner import ScheduleRunner
+from shared.native_schedule_sync import NativeScheduleSync
 from shared.timer_rpc import TimerRpcInterceptor
+from https_server.routes.user.devices import jobs as schedule_jobs
 from https_server.routes.user.scene import validity as scene_validity
 from https_server.routes.auth.service import (
     build_login_data_response,
@@ -365,6 +367,7 @@ class ReleaseSupervisor:
         self._http_server: ManagedFastApiServer | None = None
         self._renew_task: asyncio.Task[None] | None = None
         self._schedule_task: asyncio.Task[None] | None = None
+        self._schedule_sync_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
 
         self.certificate_manager = CertificateManager(config=config, paths=paths)
@@ -488,6 +491,7 @@ class ReleaseSupervisor:
             turn_ttl=self.config.turn.ttl,
         )
         self.endpoint_rules = default_endpoint_rules()
+        self.schedule_sync = NativeScheduleSync(self.context)
         self.app = self._create_app()
 
     def _init_zone_ranges_store(self) -> ZoneRangesStore:
@@ -1354,14 +1358,20 @@ class ReleaseSupervisor:
             )
             return response
 
-        route_name, response_payload = resolve_route(
-            rules=self.endpoint_rules,
-            context=self.context,
-            clean_path=clean_path,
-            query_params=query_params,
-            body_params=body_params,
-            method=request.method,
-        )
+        if schedule_jobs.match_update(clean_path, request.method):
+            route_name = "update_schedule"
+            response_payload = await schedule_jobs.build_update_synced(
+                self.context, query_params, body_params, clean_path, self.schedule_sync,
+            )
+        else:
+            route_name, response_payload = resolve_route(
+                rules=self.endpoint_rules,
+                context=self.context,
+                clean_path=clean_path,
+                query_params=query_params,
+                body_params=body_params,
+                method=request.method,
+            )
         entry["route"] = route_name
         if route_name == "fw_createca":
             # Persist metadata, but retain the exact credential response sent to firmware.
@@ -1971,6 +1981,7 @@ class ReleaseSupervisor:
                 logger=self.loggers["mqtt"],
                 runtime_state=self.runtime_state,
                 inventory_path=self.paths.inventory_path,
+                request_observer=self.schedule_sync.observe_request,
                 request_interceptor=TimerRpcInterceptor(
                     self.context,
                     default_timezone=self.config.network.timezone,
@@ -2005,6 +2016,9 @@ class ReleaseSupervisor:
             self._renew_task = asyncio.create_task(self._renew_loop(), name="tls-renew-loop")
 
         schedule_runner = ScheduleRunner(self.context, default_timezone=self.config.network.timezone)
+        self._schedule_sync_task = asyncio.create_task(
+            self.schedule_sync.run(self._stop_event), name="native-schedule-sync",
+        )
         self._schedule_task = asyncio.create_task(
             schedule_runner.run(self._stop_event),
             name="schedule-runner",
@@ -2014,6 +2028,13 @@ class ReleaseSupervisor:
         self._stop_event.set()
         self._turn_relay.stop()
         self._refresh_turn_health()
+        if self._schedule_sync_task is not None:
+            self._schedule_sync_task.cancel()
+            try:
+                await self._schedule_sync_task
+            except asyncio.CancelledError:
+                pass
+            self._schedule_sync_task = None
         if self._schedule_task is not None:
             self._schedule_task.cancel()
             try:

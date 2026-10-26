@@ -656,6 +656,8 @@ def device_jobs_payload(ctx: ServerContext, device_id: str) -> list[dict[str, An
         upcoming = next_fire_time_utc(payload, default_timezone=str(getattr(ctx, "timezone", "") or ""))
         if upcoming is not None:
             payload["nextFireTime"] = upcoming.strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
+        else:
+            payload.pop("nextFireTime", None)
         schedules.append(payload)
     return schedules
 
