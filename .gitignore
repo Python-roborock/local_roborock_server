@@ -11,3 +11,8 @@ secrets/
 config.toml
 mitm_logs
 .tmp*
+# Local setup scripts, notes, exports, backups, and temporary build files.
+/backups/
+/local-work/
+node_modules/
+tests/browser/artifacts/

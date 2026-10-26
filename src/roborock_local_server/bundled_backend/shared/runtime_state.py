@@ -448,6 +448,23 @@ class RuntimeState:
             self._pairing_session = None
             return self._pairing_snapshot_locked()
 
+    def clear_device_mqtt_state(self, *, did: str, duid: str) -> None:
+        """Forget connection evidence and an active pairing only for this vacuum."""
+        identities = {value for value in (did, duid) if value}
+        with self._lock:
+            for identity in identities:
+                vac = self._vacuums.get(identity)
+                if vac is not None:
+                    vac["connected"] = False
+                    vac["last_mqtt_at"] = ""
+                    vac["last_mqtt_conn_id"] = ""
+                    vac["last_disconnect_at"] = utcnow_iso()
+            for vacuums in self._conn_to_vacuums.values():
+                vacuums.difference_update(identities)
+            session = self._pairing_session
+            if session and (session.get("target_did") in identities or session.get("target_duid") in identities):
+                self._pairing_session = None
+
     def onboarding_session_snapshot(self) -> dict[str, Any]:
         with self._lock:
             return self._pairing_snapshot_locked()

@@ -69,6 +69,9 @@ class MqttTlsProxy:
         self._running = False
         self._counter = 0
         self._lock = threading.Lock()
+        self._device_auth_lock = threading.RLock()
+        self._conn_devices: dict[str, dict[str, str]] = {}
+        self._revoked_connections: set[str] = set()
         self._conn_protocol_levels: dict[str, int] = {}
         self._conn_endpoints: dict[str, tuple[socket.socket, socket.socket]] = {}
         self._pending_onboarding_auth: dict[str, dict[str, str]] = {}
@@ -91,9 +94,30 @@ class MqttTlsProxy:
             self._counter += 1
             return str(self._counter)
 
-    def _register_conn_endpoints(self, conn_id: str, client_conn: socket.socket, backend_conn: socket.socket) -> None:
-        with self._lock:
-            self._conn_endpoints[conn_id] = (client_conn, backend_conn)
+    def _register_conn_endpoints(self, conn_id: str, client_conn: socket.socket, backend_conn: socket.socket) -> bool:
+        with self._device_auth_lock:
+            if conn_id in self._revoked_connections:
+                return False
+            with self._lock:
+                self._conn_endpoints[conn_id] = (client_conn, backend_conn)
+            return True
+
+    def clear_device_mqtt_credentials(self, *, duid: str) -> dict[str, str]:
+        """Revoke a device login and its live connections without restarting the proxy."""
+        if self.runtime_credentials is None:
+            raise KeyError(duid)
+        with self._device_auth_lock:
+            device = self.runtime_credentials.clear_device_mqtt_credentials(duid=duid)
+            if self.runtime_state is not None:
+                self.runtime_state.clear_device_mqtt_state(did=device.get("did", ""), duid=duid)
+            for conn_id, identity in self._conn_devices.items():
+                if identity.get("duid") == duid or (
+                    device.get("did") and identity.get("did") == device["did"]
+                ):
+                    self._revoked_connections.add(conn_id)
+                    self._pop_pending_onboarding_auth(conn_id)
+                    self._close_conn_endpoints(conn_id)
+            return device
 
     def _pop_conn_endpoints(self, conn_id: str) -> tuple[socket.socket, socket.socket] | None:
         with self._lock:
@@ -104,6 +128,10 @@ class MqttTlsProxy:
         if endpoints is None:
             return
         for endpoint in endpoints:
+            try:
+                endpoint.shutdown(socket.SHUT_RDWR)
+            except (OSError, AttributeError):
+                pass
             try:
                 endpoint.close()
             except OSError:
@@ -315,6 +343,7 @@ class MqttTlsProxy:
             "username": username.strip(),
             "password": password.strip(),
             "client_ip": client_ip.strip(),
+            "reset_at": device.get("device_mqtt_reset_at", ""),
         }
 
     def _confirm_pending_onboarding_auth(self, conn_id: str, *, direction: str, topic: str) -> bool:
@@ -339,6 +368,7 @@ class MqttTlsProxy:
             duid=candidate.get("duid", ""),
             username=candidate["username"],
             password=candidate["password"],
+            expected_reset_at=candidate.get("reset_at", ""),
         )
         self._pop_pending_onboarding_auth(conn_id)
         if learned is None:
@@ -521,6 +551,12 @@ class MqttTlsProxy:
         return parsed
 
     def _trace_packet(self, conn_id: str, direction: str, packet: bytes) -> None:
+        with self._device_auth_lock:
+            if conn_id in self._revoked_connections:
+                return
+            self._trace_packet_locked(conn_id, direction, packet)
+
+    def _trace_packet_locked(self, conn_id: str, direction: str, packet: bytes) -> None:
         packet_type = packet[0] >> 4
         if packet_type in (12, 13):  # PINGREQ, PINGRESP
             return
@@ -685,6 +721,15 @@ class MqttTlsProxy:
             if item is None:
                 return
             conn_id, direction, packet = item
+            if not packet:
+                # Queued packets must retain their revocation state until both relays finish.
+                with self._device_auth_lock:
+                    self._conn_devices.pop(conn_id, None)
+                    self._revoked_connections.discard(conn_id)
+                    self._pop_pending_onboarding_auth(conn_id)
+                    with self._lock:
+                        self._conn_protocol_levels.pop(conn_id, None)
+                continue
             try:
                 self._trace_packet(conn_id, direction, packet)
             except Exception:
@@ -728,6 +773,20 @@ class MqttTlsProxy:
                 except OSError:
                     pass
 
+    def _authorize_client_connect(self, conn_id: str, packet: bytes, *, client_ip: str):
+        with self._device_auth_lock:
+            result = self._authorize_connect_packet_for_client(packet, client_ip=client_ip)
+            authorized, reason, info, candidate = result
+            if authorized and reason.startswith("device_mqtt") and self.runtime_credentials is not None:
+                device = candidate or self.runtime_credentials.resolve_device_by_mqtt_username(
+                    str((info or {}).get("username") or "")
+                )
+                if device is not None:
+                    self._conn_devices[conn_id] = {key: device.get(key, "") for key in ("did", "duid")}
+                if candidate is not None:
+                    self._set_pending_onboarding_auth(conn_id, candidate)
+            return result
+
     def _handle_client(self, tls_conn: socket.socket | ssl.SSLSocket, addr: tuple[str, int]) -> None:
         conn_id = self._next_conn()
         backend: socket.socket | None = None
@@ -748,8 +807,8 @@ class MqttTlsProxy:
                 self.logger.warning("[conn %s] client closed before MQTT CONNECT", conn_id)
                 return
             connect_packet, initial_remainder = first_packet
-            authorized, auth_reason, connect_info, onboarding_candidate = self._authorize_connect_packet_for_client(
-                connect_packet,
+            authorized, auth_reason, connect_info, _candidate = self._authorize_client_connect(
+                conn_id, connect_packet,
                 client_ip=addr[0],
             )
             if connect_info is not None:
@@ -779,9 +838,8 @@ class MqttTlsProxy:
 
             backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             backend.connect((self.backend_host, self.backend_port))
-            self._register_conn_endpoints(conn_id, tls_conn, backend)
-            if onboarding_candidate is not None:
-                self._set_pending_onboarding_auth(conn_id, onboarding_candidate)
+            if not self._register_conn_endpoints(conn_id, tls_conn, backend):
+                return
             c2b_frame_buf = bytearray(initial_remainder)
             for packet in self._extract_packets(c2b_frame_buf):
                 self._queue_trace_packet(conn_id, "c2b", packet)
@@ -800,7 +858,6 @@ class MqttTlsProxy:
         except Exception as exc:
             self.logger.error("[conn %s] connection error: %s", conn_id, exc)
         finally:
-            self._pop_pending_onboarding_auth(conn_id)
             self._pop_conn_endpoints(conn_id)
             if not relay_started:
                 for endpoint in (tls_conn, backend):
@@ -812,8 +869,7 @@ class MqttTlsProxy:
                         pass
             if self.runtime_state is not None:
                 self.runtime_state.record_mqtt_disconnect(conn_id=conn_id)
-            with self._lock:
-                self._conn_protocol_levels.pop(conn_id, None)
+            self._queue_trace_packet(conn_id, "cleanup", b"")
             self.logger.info("[conn %s] closed", conn_id)
 
     def start(self) -> threading.Thread:

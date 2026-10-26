@@ -1724,3 +1724,68 @@ def test_catchall_requests_are_not_logged_as_activity_but_named_routes_are(tmp_p
     routes = [entry.get("route") for entry in log_entries]
     assert "catchall" not in routes
     assert "region" in routes
+
+
+def test_admin_assets_are_local_allowlisted_and_do_not_expose_templates(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    supervisor = ReleaseSupervisor(config=config, paths=resolve_paths(config_file, config))
+    client = TestClient(supervisor.app)
+
+    for name, media_type in (("schedules.css", "text/css"), ("schedules.js", "text/javascript")):
+        response = client.get(f"/admin/assets/{name}")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith(media_type)
+        assert response.headers["cache-control"] == "no-cache"
+        assert response.text.strip()
+
+    for name in ("schedule_sections.html", "dashboard.html", "login.html", "config.toml", "missing.js"):
+        assert client.get(f"/admin/assets/{name}").status_code == 404
+    assert client.get("/admin/api/auth").status_code == 401
+
+
+def test_admin_support_payload_cannot_break_out_of_inline_script() -> None:
+    from html.parser import HTMLParser
+    from roborock_local_server.standalone_admin import _admin_dashboard_html
+
+    class Scripts(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.scripts = []
+            self.in_script = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "script":
+                self.scripts.append("")
+                self.in_script = True
+
+        def handle_data(self, data):
+            if self.in_script:
+                self.scripts[-1] += data
+
+        def handle_endtag(self, tag):
+            if tag == "script":
+                self.in_script = False
+
+    support = {"title": '</script><script>alert("example")</script>', "links": []}
+    parser = Scripts()
+    parser.feed(_admin_dashboard_html(support))
+    inline = [script for script in parser.scripts if script.strip()]
+    assert len(inline) == 1
+    serialized = inline[0].split("const support = ", 1)[1].split(";", 1)[0]
+    assert json.loads(serialized) == support
+    assert "</script>" not in inline[0]
+
+
+def test_admin_pages_are_not_cached(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    supervisor = ReleaseSupervisor(config=config, paths=resolve_paths(config_file, config))
+    client = TestClient(supervisor.app)
+    assert client.get("/admin").headers["cache-control"] == "no-store"
+    assert client.post("/admin/api/login", json={"password": "correct horse battery staple"}).status_code == 200
+    page = client.get("/admin")
+    assert page.headers["cache-control"] == "no-store"
+    assert 'id="schedulePanel"' in page.text
+    assert 'id="credentialPanel"' in page.text
+    assert 'id="activityList"' in page.text

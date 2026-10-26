@@ -1551,6 +1551,17 @@ class ReleaseSupervisor:
         inventory = _load_inventory(self.paths.inventory_path)
         inventory_vacuums = _extract_inventory_vacuums(self.context, inventory)
         vacuums = _merge_vacuum_state(context=self.context, inventory_vacuums=inventory_vacuums)
+        for vacuum in vacuums:
+            device = self.runtime_credentials.resolve_device(duid=str(vacuum.get("duid") or ""))
+            if device is None:
+                continue
+            saved = bool(device.get("device_mqtt_usr") or device.get("device_mqtt_pass"))
+            vacuum["mqtt_credentials"] = {
+                "saved": saved,
+                "cleared_at": device.get("device_mqtt_reset_at", ""),
+            }
+            if device.get("device_mqtt_reset_at") and not saved:
+                vacuum["connected"] = False
         return {
             "inventory_path": str(self.paths.inventory_path),
             "vacuums": vacuums,
@@ -1728,6 +1739,19 @@ class ReleaseSupervisor:
 
     def remove_protocol_session(self, *, hawk_id: str, hawk_session: str) -> bool:
         return self.protocol_auth.remove_session(hawk_id=hawk_id, hawk_session=hawk_session)
+
+    def clear_device_mqtt_credentials(self, *, duid: str) -> dict[str, Any]:
+        if self._mqtt_proxy is not None:
+            device = self._mqtt_proxy.clear_device_mqtt_credentials(duid=duid)
+        else:
+            device = self.runtime_credentials.clear_device_mqtt_credentials(duid=duid)
+            self.runtime_state.clear_device_mqtt_state(did=device.get("did", ""), duid=duid)
+        return {
+            "ok": True,
+            "duid": device["duid"],
+            "name": device.get("name") or device["duid"],
+            "mqtt_credentials": {"saved": False, "cleared_at": device["device_mqtt_reset_at"]},
+        }
 
     def start_onboarding_session(
         self,

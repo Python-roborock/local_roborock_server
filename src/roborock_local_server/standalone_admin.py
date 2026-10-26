@@ -3,14 +3,25 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
+from importlib.resources import files
 from textwrap import dedent
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from .security import verify_password
 from .web_theme import HEAD_ASSETS, NAV_HTML, SCRIPT_ASSETS, register_theme_routes
+
+
+_ADMIN_ASSETS = {"schedules.css": "text/css", "schedules.js": "text/javascript"}
+
+
+@lru_cache(maxsize=3)
+def _admin_asset(name: str) -> str:
+    return files("roborock_local_server").joinpath("admin_ui", name).read_text(encoding="utf-8")
 
 
 def _admin_login_html() -> str:
@@ -71,12 +82,14 @@ def _admin_login_html() -> str:
 
 
 def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
-    support_payload = json.dumps(project_support)
+    support_payload = json.dumps(project_support).replace("<", "\\u003c")
     return dedent(
         f"""\
         <!doctype html><html><head><meta charset="utf-8">
         <title>Roborock Local Server</title>
         {HEAD_ASSETS}
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="stylesheet" href="/admin/assets/schedules.css">
         </head><body>
         <nav>
           <div class="nav-wrapper container">
@@ -100,6 +113,8 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
             <div id="deviceFacts" class="rls-facts" style="margin-top:14px"></div>
             <div id="deviceNotice" class="alert-banner"></div>
           </div>
+
+          {_admin_asset("schedule_sections.html")}
 
           <div class="container">
             <h4 class="header rls-heading">Activity</h4>
@@ -175,6 +190,7 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
         </div>
         </div>
         {SCRIPT_ASSETS}
+        <script src="/admin/assets/schedules.js"></script>
         <script>
         const support = {support_payload};
         let cloudSessionId = "";
@@ -206,6 +222,8 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           return value ? "Yes" : "No";
         }}
         let vacuumList = [];
+        let vacuumRevision = 0;
+        window.addEventListener("rls:vacuum-mutation", () => {{ vacuumRevision += 1; }});
         const deviceKey = (vac) => vac.duid || vac.did || "";
         const vacuumLabel = (vac) => vac.name || vac.did || vac.duid || "Unknown vacuum";
         function currentSelection() {{
@@ -424,11 +442,13 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
         }}
 
         async function refresh() {{
+          const revision = vacuumRevision;
           const status = await fetchJson("/admin/api/status");
           document.getElementById("overall").textContent = status.health.overall_ok ? "Healthy" : "Needs Attention";
           document.getElementById("health").textContent = JSON.stringify(status.health, null, 2);
           renderAuth(await fetchJson("/admin/api/auth"));
           const vacuums = await fetchJson("/admin/api/vacuums");
+          if (revision !== vacuumRevision) return;
           vacuumList = Array.isArray(vacuums.vacuums) ? vacuums.vacuums : [];
 
           const selected = currentSelection();
@@ -436,12 +456,18 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           const showServer = selected === "server";
           document.getElementById("serverPanel").classList.toggle("hidden", !showServer);
           document.getElementById("devicePanel").classList.toggle("hidden", showServer);
-          if (showServer) return;
+          if (showServer) {{
+            window.dispatchEvent(new CustomEvent("rls:vacuum-selected", {{detail: null}}));
+            return;
+          }}
           const vac = vacuumList.find((item) => deviceKey(item) === selected || item.did === selected);
           if (!vac) return;
           renderDevice(vac);
-          renderActivity(await fetchJson(`/admin/api/activity?device=${{encodeURIComponent(deviceKey(vac))}}`));
+          window.dispatchEvent(new CustomEvent("rls:vacuum-selected", {{detail: vac}}));
+          const activity = await fetchJson(`/admin/api/activity?device=${{encodeURIComponent(deviceKey(vac))}}`);
+          if (currentSelection() === selected) renderActivity(activity);
         }}
+        window.addEventListener("rls:refresh", () => refresh().catch(() => {{}}));
         window.addEventListener("hashchange", () => refresh().catch(() => {{}}));
         document.getElementById("sendCode").addEventListener("click", async () => {{
           try {{
@@ -523,12 +549,23 @@ def register_standalone_admin_routes(
     project_support: dict[str, Any],
 ) -> None:
     register_theme_routes(app)
+    from .admin_schedules import register_schedule_routes
+
+    register_schedule_routes(app, supervisor)
+
+    @app.get("/admin/assets/{asset_name}")
+    async def admin_asset(asset_name: str) -> Response:
+        media_type = _ADMIN_ASSETS.get(asset_name)
+        if media_type is None:
+            return JSONResponse({"error": "Asset not found"}, status_code=404)
+        return Response(_admin_asset(asset_name), media_type=media_type,
+                        headers={"Cache-Control": "no-cache"})
 
     @app.get("/admin", response_class=HTMLResponse)
     async def admin_page(request: Request) -> HTMLResponse:
         if not supervisor._authenticated(request):
-            return HTMLResponse(_admin_login_html())
-        return HTMLResponse(_admin_dashboard_html(project_support))
+            return HTMLResponse(_admin_login_html(), headers={"Cache-Control": "no-store"})
+        return HTMLResponse(_admin_dashboard_html(project_support), headers={"Cache-Control": "no-store"})
 
     @app.post("/admin/api/login")
     async def admin_login(request: Request) -> JSONResponse:
@@ -571,6 +608,25 @@ def register_standalone_admin_routes(
     async def admin_auth(request: Request) -> JSONResponse:
         supervisor._require_admin(request)
         return JSONResponse(supervisor._auth_payload())
+
+    @app.delete("/admin/api/vacuums/{duid}/mqtt-credentials")
+    async def admin_clear_mqtt_credentials(duid: str, request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        origin = request.headers.get("origin")
+        if origin:
+            try:
+                parsed = urlsplit(origin)
+            except ValueError:
+                return JSONResponse({"error": "Invalid request origin"}, status_code=403)
+            if parsed.scheme not in ("http", "https") or parsed.netloc.casefold() != request.headers.get("host", "").casefold():
+                return JSONResponse({"error": "Cross-origin credential changes are not allowed"}, status_code=403)
+        try:
+            payload = supervisor.clear_device_mqtt_credentials(duid=duid)
+        except KeyError:
+            return JSONResponse({"error": "Vacuum not found"}, status_code=404)
+        except OSError:
+            return JSONResponse({"error": "Could not save the credential reset. Please try again."}, status_code=500)
+        return JSONResponse(payload)
 
     @app.get("/admin/api/activity")
     async def admin_activity(request: Request) -> JSONResponse:
