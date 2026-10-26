@@ -4,6 +4,6 @@ I have tried to copy over most functionality into this server, but some is not 1
 
 - Vacuum camera live streaming — available; see the [model-specific results](camera.md#reported-camera-results). Bootstrap, activation and audio support vary by firmware, and some reports require custom builds.
 - Firmware Updates
-- Schedules (Routines/Scenes do work though)
+- Schedules are experimental. A scheduled start has been reported on an S7; broader hardware compatibility, DST parity, and expired one-time jobs still need validation. See [schedule support](schedules.md). Routines/Scenes are separate.
 - China-market devices have model/firmware-specific region and access-renewal restrictions. Unresolved a143/a146/a96 reports reject ordinary commands with `-10002 / rrcheck access denied` after local onboarding. See [known failures](tested_vacuums.md#known-failures). Factory-firmware a184 success was reported with custom interception and compromised-intermediate certificates; it does not establish support through the standard setup or resolve those other reports.
     - Some users report success with the official cloud through a China-exit VPN; see [this comment](https://github.com/iobroker-community-adapters/ioBroker.mihome-vacuum/issues/842#issuecomment-1736230673). A China VPN did not resolve the G30 local-server report [#161](https://github.com/Python-roborock/local_roborock_server/issues/161), so it is not an established general workaround here.

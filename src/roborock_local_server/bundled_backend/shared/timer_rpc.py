@@ -34,6 +34,7 @@ from .schedule_store import (
     JOB_SETTING_KEYS,
     SettingsError,
     delete_job,
+    has_native_timer,
     job_settings,
     list_jobs,
     merge_job_settings,
@@ -72,6 +73,10 @@ def device_cron(cron: str) -> str | None:
 
 
 def _timer_entry(job: dict[str, Any]) -> list[Any] | None:
+    # Captured a15/a27 cloud jobs have native server timers while get_timer is
+    # empty. Do not fabricate a second legacy timer for the same native job.
+    if has_native_timer(job):
+        return None
     cron = device_cron(str(job.get("cron") or ""))
     if cron is None:
         return None
