@@ -8,6 +8,7 @@ itself and hands each due job to the routine runner.
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
 import json
@@ -25,7 +26,7 @@ from .routine_runner import (
     RoutineStep,
     get_routine_runner,
 )
-from .schedule_store import set_enabled
+from .schedule_store import claim_occurrence
 
 if TYPE_CHECKING:
     from .context import ServerContext
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 TICK_SECONDS = 20
+MAX_LATENESS_SECONDS = 60
 _SUPPORTED_JOB_METHOD = "server_scheduled_start"
 _CARRIED_ENTRY_KEYS = ("repeat", "fan_power", "water_box_mode", "mop_mode", "mop_template_id")
 _START_ENTRY_KEYS = (*_CARRIED_ENTRY_KEYS, "segments", "clean_mop", "map_index")
@@ -123,36 +125,36 @@ def parse_cron(expression: str) -> CronSpec:
 
 
 def next_fire(spec: CronSpec, after: datetime) -> datetime | None:
-    """First fire instant strictly after ``after`` (an aware datetime), in its timezone."""
+    """Next wall-clock match; skip DST gaps and use only the first repeated hour.
+
+    This explicit DST policy is provisional until compared with cloud behavior.
+    Compare UTC instants because local datetime arithmetic can hide DST folds.
+    """
     zone = after.tzinfo
     if zone is None:
         raise ValueError("after must be timezone-aware")
-    start = after.replace(second=0, microsecond=0) + timedelta(minutes=1)
-    start_utc = start.astimezone(timezone.utc)
-    first_day = start.date()
-    for offset in range(0, 800):
+    after_utc = after.astimezone(timezone.utc)
+    first_day = after.date()
+    # Eight years also covers the leap-day gap across a non-leap century.
+    for offset in range(8 * 366):
         day = first_day + timedelta(days=offset)
         if not spec.day_matches(day):
             continue
         for hour in spec.hours:
             for minute in spec.minutes:
                 candidate = datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone)
-                if candidate.astimezone(timezone.utc) >= start_utc:
+                candidate_utc = candidate.astimezone(timezone.utc)
+                if candidate_utc.astimezone(zone).replace(tzinfo=None) != candidate.replace(tzinfo=None):
+                    continue  # Nonexistent wall-clock time during spring forward.
+                if candidate_utc > after_utc:
                     return candidate
     return None
 
 
 def _zone(name: str, fallback: str) -> tzinfo:
     # DEFAULT_TIMEZONE is what /location tells the robot when none is configured.
-    for candidate in (name, fallback, DEFAULT_TIMEZONE):
-        candidate = str(candidate or "").strip()
-        if not candidate:
-            continue
-        try:
-            return ZoneInfo(candidate)
-        except (ZoneInfoNotFoundError, ValueError):
-            continue
-    return timezone.utc
+    candidate = str(name or fallback or DEFAULT_TIMEZONE).strip()
+    return ZoneInfo(candidate)
 
 
 def _segment_ids(value: Any) -> list[int]:
@@ -193,6 +195,8 @@ def steps_for_job(job: dict[str, Any]) -> list[RoutineStep]:
     if method != _SUPPORTED_JOB_METHOD:
         raise RoutineExecutionError(f"unsupported schedule method {method!r}")
     params = param.get("params")
+    if isinstance(params, list) and len(params) != 1:
+        raise RoutineExecutionError("schedule params must contain exactly one settings object")
     entry = params[0] if isinstance(params, list) and params else params
     if not isinstance(entry, dict):
         raise RoutineExecutionError("schedule params must contain one settings object")
@@ -203,6 +207,8 @@ def steps_for_job(job: dict[str, Any]) -> list[RoutineStep]:
     # The robot-side timer id the official app (or LocalRock) saved this schedule under. A schedule
     # that has one is run the way the cloud runs it: the robot is asked to start that timer.
     timer_id = entry.get("name")
+    if "name" in entry and (not isinstance(timer_id, str) or not timer_id.strip()):
+        raise RoutineExecutionError("native schedule timer name must be a nonempty string")
     name = str(entry.get("name") or job.get("name") or "").strip()
     if not name or name.isdigit():
         name = f"Schedule {job.get('id', '')}".strip()
@@ -212,7 +218,7 @@ def steps_for_job(job: dict[str, Any]) -> list[RoutineStep]:
                 step_id=1,
                 name=name,
                 method=SCHEDULE_SERVER_START,
-                params=[{**start_settings, "name": timer_id.strip()}],
+                params=[copy.deepcopy(entry)],
                 finish_dp_ids=(),
             )
         ]
@@ -243,9 +249,9 @@ def next_fire_time_utc(job: dict[str, Any], *, default_timezone: str = "", now: 
         return None
     try:
         spec = parse_cron(str(job.get("cron") or ""))
-    except CronError:
+        zone = _zone(str(job.get("timeZoneId") or ""), default_timezone)
+    except (CronError, ZoneInfoNotFoundError, ValueError):
         return None
-    zone = _zone(str(job.get("timeZoneId") or ""), default_timezone)
     current = (now or datetime.now(timezone.utc)).astimezone(zone)
     upcoming = next_fire(spec, current)
     return upcoming.astimezone(timezone.utc) if upcoming is not None else None
@@ -258,55 +264,65 @@ class ScheduleRunner:
         self._last_tick: datetime | None = None
         self._logger = context.loggers.get("api") or context.loggers.get("unknown") or _LOGGER
 
-    def due_jobs(self, since: datetime, until: datetime) -> list[tuple[str, dict[str, Any]]]:
+    def due_jobs(self, since: datetime, until: datetime) -> list[tuple[str, dict[str, Any], datetime]]:
         inventory = load_inventory(self._context)
         schedules = inventory.get("schedules")
         if not isinstance(schedules, dict):
             return []
-        due: list[tuple[str, dict[str, Any]]] = []
+        due: list[tuple[str, dict[str, Any], datetime]] = []
         for device_id, jobs in schedules.items():
             if not isinstance(jobs, list):
                 continue
             for job in jobs:
                 if not isinstance(job, dict) or not as_bool(job.get("enabled", True), True):
                     continue
+                if job.get("id") in (None, ""):
+                    self._logger.warning("Skipping schedule without an id on %s", device_id)
+                    continue
                 try:
                     spec = parse_cron(str(job.get("cron") or ""))
-                except CronError as exc:
+                    zone = _zone(str(job.get("timeZoneId") or ""), self._default_timezone)
+                except (CronError, ZoneInfoNotFoundError, ValueError) as exc:
                     self._logger.warning("Skipping schedule %s on %s: %s", job.get("id"), device_id, exc)
                     continue
-                zone = _zone(str(job.get("timeZoneId") or ""), self._default_timezone)
                 upcoming = next_fire(spec, since.astimezone(zone))
                 if upcoming is not None and upcoming.astimezone(timezone.utc) <= until:
-                    due.append((str(device_id), job))
+                    due.append((str(device_id), job, upcoming))
         return due
 
     def tick(self, now: datetime | None = None) -> list[dict[str, Any]]:
         """Fire anything that came due since the previous tick. Needs a running event loop."""
         current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         previous = self._last_tick
+        if previous is not None and current <= previous:
+            return []
         self._last_tick = current
         if previous is None:
             return []
         results: list[dict[str, Any]] = []
         runner = get_routine_runner(self._context)
-        for device_id, job in self.due_jobs(previous, current):
+        # Never drain a backlog after suspension or an event-loop stall. Startup
+        # establishes a fresh baseline; normal ticks get a bounded grace period.
+        previous = max(previous, current - timedelta(seconds=MAX_LATENESS_SECONDS))
+        for device_id, job, due in self.due_jobs(previous, current):
             job_id = job.get("id")
             try:
                 steps = steps_for_job(job)
+                if not claim_occurrence(self._context, device_id, job, due):
+                    continue
                 result = runner.start_job(
                     device_id=device_id,
                     job_id=int(job_id) if str(job_id).isdigit() else 0,
                     name=steps[0].name,
                     steps=steps,
+                    expected_job=job,
+                    deadline=due.astimezone(timezone.utc) + timedelta(seconds=MAX_LATENESS_SECONDS),
                 )
-            except (RoutineExecutionError, ValueError) as exc:
+            except (RoutineExecutionError, ValueError, OSError) as exc:
                 self._logger.warning("Schedule %s on %s not started: %s", job_id, device_id, exc)
                 result = {"accepted": False, "status": "error", "error": str(exc), "deviceId": device_id}
             else:
                 self._logger.info("Schedule %s on %s fired: %s", job_id, device_id, result.get("status"))
-                if result.get("accepted") and not as_bool(job.get("repeated", True), True):
-                    set_enabled(self._context, device_id, job_id, False)
             results.append({"jobId": job_id, **result})
         return results
 

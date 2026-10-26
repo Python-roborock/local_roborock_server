@@ -182,6 +182,16 @@ def test_cloud_inventory_merge_preserves_local_rooms_and_scenes() -> None:
     assert merged["scene_order"] == [90, 10, 20]
 
 
+def test_cloud_refresh_preserves_schedule_occurrence_claims():
+    existing = {"schedule_occurrences": {"robot-test": {"42001": 1792789740}}}
+    cloud = {"schedules": {"robot-test": [{"id": 42001, "enabled": True}]}}
+    merged = _merge_existing_inventory_mutations(cloud, existing)
+    assert merged["schedule_occurrences"] == existing["schedule_occurrences"]
+    assert merged["schedules"] == cloud["schedules"]
+    merged["schedule_occurrences"]["robot-test"]["42001"] += 60
+    assert existing["schedule_occurrences"]["robot-test"]["42001"] == 1792789740
+
+
 def _make_manager(tmp_path: Path) -> CloudImportManager:
     return CloudImportManager(
         inventory_path=tmp_path / "inventory.json",
