@@ -184,3 +184,104 @@ def test_next_fire_time_utc_is_none_when_disabled():
     now = _utc(2026, 9, 28, 12, 0)
     assert sr.next_fire_time_utc(_job(), now=now) == _utc(2026, 9, 28, 15, 0)
     assert sr.next_fire_time_utc(_job(enabled=False), now=now) is None
+
+
+def test_native_settings_survive_dispatch_preparation_without_filtering_or_mutation():
+    job = _job()
+    entry = job["param"]["params"][0]
+    entry.update(name="timer-42", clean_order_mode=0, mop_template_id=7, future_option={"x": [1, 2]})
+    step = sr.steps_for_job(job)[0]
+    assert step.params == [entry]
+    step.params[0]["future_option"]["x"].append(3)
+    assert entry["future_option"] == {"x": [1, 2]}
+
+
+@pytest.mark.parametrize("timer_name", [None, "", "   ", 123])
+def test_invalid_native_timer_name_cannot_turn_into_an_ordinary_start(timer_name):
+    job = _job()
+    job["param"]["params"][0]["name"] = timer_name
+    with pytest.raises(RoutineExecutionError, match="timer name"):
+        sr.steps_for_job(job)
+
+
+def test_observed_weekday_next_fire_advances_to_monday_after_offline_occurrence():
+    job = _job(cron="09 14 ? * 1,2,3,4,5", timeZoneId="America/Los_Angeles")
+    assert sr.next_fire_time_utc(job, now=_utc(2026, 10, 23, 21, 7)) == _utc(2026, 10, 23, 21, 9)
+    assert sr.next_fire_time_utc(job, now=_utc(2026, 10, 23, 21, 10)) == _utc(2026, 10, 26, 21, 9)
+
+
+@pytest.mark.parametrize("cron,after,expected", [
+    ("30 2 * * *", _utc(2026, 3, 8, 9, 59), _utc(2026, 3, 9, 9, 30)),
+    ("30 1 * * *", _utc(2026, 11, 1, 8, 29), _utc(2026, 11, 1, 8, 30)),
+    ("30 1 * * *", _utc(2026, 11, 1, 8, 30), _utc(2026, 11, 2, 9, 30)),
+    ("30 1 * * *", _utc(2026, 11, 1, 9, 20), _utc(2026, 11, 2, 9, 30)),
+    ("0 0 * * 0", _utc(2026, 10, 25, 6, 59), _utc(2026, 10, 25, 7, 0)),
+    ("0 0 29 2 ?", _utc(2024, 3, 1), _utc(2028, 2, 29, 8, 0)),
+])
+def test_timezone_and_provisional_dst_policy(cron, after, expected):
+    job = _job(cron=cron, timeZoneId="America/Los_Angeles")
+    assert sr.next_fire_time_utc(job, now=after) == expected
+
+
+def test_invalid_explicit_timezone_never_runs_in_a_fallback_zone(tmp_path, monkeypatch):
+    job = _job(timeZoneId="Invalid/Zone")
+    assert sr.next_fire_time_utc(job, default_timezone="UTC", now=_utc(2026, 9, 28, 14)) is None
+    runner, _, fake = _runner_with_inventory(tmp_path, monkeypatch, [job])
+    runner.tick(_utc(2026, 9, 28, 14, 59, 40))
+    runner.tick(_utc(2026, 9, 28, 15, 0, 5))
+    assert fake.started == []
+
+
+def test_missed_occurrence_is_skipped_and_future_schedule_stays_enabled(tmp_path, monkeypatch):
+    runner, ctx, fake = _runner_with_inventory(tmp_path, monkeypatch, [_job()])
+    runner.tick(_utc(2026, 9, 28, 14, 59, 40))
+    assert runner.tick(_utc(2026, 9, 28, 15, 2)) == []
+    restarted = sr.ScheduleRunner(ctx)
+    assert restarted.tick(_utc(2026, 9, 28, 15, 3)) == []
+    assert fake.started == []
+    runner.tick(_utc(2026, 9, 30, 14, 59, 40))
+    runner.tick(_utc(2026, 9, 30, 15, 0, 5))
+    assert len(fake.started) == 1
+    assert sr.load_inventory(ctx)["schedules"]["duid-1"][0]["enabled"] is True
+
+
+def test_persisted_claim_prevents_replay_after_restart_and_clock_rollback(tmp_path, monkeypatch):
+    runner, ctx, fake = _runner_with_inventory(tmp_path, monkeypatch, [_job()])
+    runner.tick(_utc(2026, 9, 28, 14, 59, 40))
+    runner.tick(_utc(2026, 9, 28, 15, 0, 5))
+    runner.tick(_utc(2026, 9, 28, 14, 59, 40))
+    runner.tick(_utc(2026, 9, 28, 15, 0, 10))
+    restarted = sr.ScheduleRunner(ctx)
+    restarted.tick(_utc(2026, 9, 28, 14, 59, 40))
+    restarted.tick(_utc(2026, 9, 28, 15, 0, 5))
+    assert len(fake.started) == 1
+
+
+def test_failed_persistence_prevents_robot_dispatch(tmp_path, monkeypatch):
+    from shared import schedule_store
+    runner, _, fake = _runner_with_inventory(tmp_path, monkeypatch, [_job()])
+    monkeypatch.setattr(schedule_store, "write_inventory", lambda *args: False)
+    runner.tick(_utc(2026, 9, 28, 14, 59, 40))
+    result = runner.tick(_utc(2026, 9, 28, 15, 0, 5))
+    assert result[0]["accepted"] is False
+    assert fake.started == []
+
+
+def test_job_edit_between_tick_and_claim_cancels_stale_occurrence(tmp_path, monkeypatch):
+    from shared import schedule_store
+    runner, ctx, fake = _runner_with_inventory(tmp_path, monkeypatch, [_job()])
+    original_steps = sr.steps_for_job
+    def edit_then_prepare(job):
+        schedule_store.set_enabled(ctx, "duid-1", job["id"], False)
+        return original_steps(job)
+    monkeypatch.setattr(sr, "steps_for_job", edit_then_prepare)
+    runner.tick(_utc(2026, 9, 28, 14, 59, 40))
+    runner.tick(_utc(2026, 9, 28, 15, 0, 5))
+    assert fake.started == []
+
+
+def test_malformed_import_does_not_block_other_jobs(tmp_path, monkeypatch):
+    runner, _, fake = _runner_with_inventory(tmp_path, monkeypatch, [_job(id=None), _job()])
+    runner.tick(_utc(2026, 9, 28, 14, 59, 40))
+    runner.tick(_utc(2026, 9, 28, 15, 0, 5))
+    assert len(fake.started) == 1
