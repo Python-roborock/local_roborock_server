@@ -567,6 +567,8 @@ class MqttTlsProxy:
                 if isinstance(response_to, dict):
                     if response_to.get("request_method") == "get_status" and response_to.get("error") is None:
                         self.snapshot_store.record_status_result(duid, response_to.get("result"))
+                    elif response_to.get("request_method") == "get_room_mapping" and response_to.get("error") is None:
+                        self.snapshot_store.record_room_mapping(duid, response_to.get("result"))
                 else:
                     self.snapshot_store.record_dps(duid, payload_utf8)
         except Exception:

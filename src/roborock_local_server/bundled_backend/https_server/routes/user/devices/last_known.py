@@ -6,6 +6,8 @@ from typing import Any
 from shared.context import ServerContext
 from shared.http_helpers import wrap_response
 
+from ..homes.service import home_rooms_payload
+
 
 def match(path: str) -> bool:
     clean = path.rstrip("/")
@@ -32,4 +34,8 @@ def build(
         snapshot = store.get(duid, include_map=include_map)
     if snapshot is None:
         return wrap_response({"duid": duid, "known": False})
+    # The robot's room table says which segment is which room; the home data knows the names.
+    names = {str(room.get("id")): room.get("name") for room in home_rooms_payload(ctx) if isinstance(room, dict)}
+    for room in snapshot.get("rooms") or []:
+        room["name"] = names.get(str(room.get("iot_id")))
     return wrap_response({**snapshot, "known": True})
