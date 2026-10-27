@@ -219,3 +219,26 @@ def test_seed_skips_robots_it_cannot_name_and_missing_logs(tmp_path: Path, monke
 
     assert store.seed_from_mqtt_jsonl(log, lambda did: "") == 0
     assert store.seed_from_mqtt_jsonl(tmp_path / "missing.jsonl", lambda did: DUID) == 0
+
+
+def test_room_mapping_answer_is_kept_and_survives_a_restart(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.record_room_mapping(DUID, [[21, "1001", 6], [16, "1002", 8], [18, "1003"]])
+    store.flush()
+
+    rooms = _store(tmp_path).get(DUID)["rooms"]
+
+    assert rooms == [
+        {"segment": 21, "iot_id": "1001", "tag": 6},
+        {"segment": 16, "iot_id": "1002", "tag": 8},
+        {"segment": 18, "iot_id": "1003", "tag": None},
+    ]
+
+
+def test_room_mapping_ignores_empty_and_malformed_answers(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.record_room_mapping(DUID, [])
+    store.record_room_mapping(DUID, "nope")
+    store.record_room_mapping(DUID, [["x", "1"], [3], [4, None]])
+
+    assert store.get(DUID) is None
