@@ -112,6 +112,19 @@ def _status_update(result: Any) -> dict[str, int]:
     return update
 
 
+def _room_table(result: Any) -> list[dict[str, Any]]:
+    """The rows of a ``get_room_mapping`` answer, ``[segment, iot room id, type tag]``, as dicts."""
+    rows: list[dict[str, Any]] = []
+    for row in result if isinstance(result, list) else []:
+        if not isinstance(row, (list, tuple)) or len(row) < 2:
+            continue
+        segment = _int_or_none(row[0])
+        if segment is None or row[1] in (None, ""):
+            continue
+        rows.append({"segment": segment, "iot_id": str(row[1]), "tag": _int_or_none(row[2]) if len(row) > 2 else None})
+    return rows
+
+
 def _security_of(payload_utf8: str | None) -> tuple[str, str] | None:
     """(endpoint, nonce) from a request that asked for a map, or None."""
     if not payload_utf8 or "security" not in payload_utf8:
@@ -247,6 +260,17 @@ class DeviceSnapshotStore:
         if update and _SAFE_DUID.match(duid or ""):
             self._update_status(duid, update)
 
+    def record_room_mapping(self, duid: str, result: Any) -> None:
+        """The answer to ``get_room_mapping``: which room each map segment is, and its type."""
+        rooms = _room_table(result)
+        if not rooms or not _SAFE_DUID.match(duid or ""):
+            return
+        with self._lock:
+            entry = self._entry(duid)
+            if entry.get("rooms") != rooms:
+                entry["rooms"] = rooms
+                self._touch(duid)
+
     def _update_status(self, duid: str, update: dict[str, int]) -> None:
         with self._lock:
             entry = self._entry(duid)
@@ -350,7 +374,7 @@ class DeviceSnapshotStore:
                     continue
                 if not from_robot:
                     continue
-                acc = seen.setdefault(duid, {"status": {}, "status_at": None, "map": None})
+                acc = seen.setdefault(duid, {"status": {}, "status_at": None, "map": None, "rooms": []})
                 acc["last_seen_at"] = at
                 if proto == 301:
                     raw = _bytes_from_hex(message.get("payload_hex"))
@@ -360,6 +384,11 @@ class DeviceSnapshotStore:
                             acc["map"] = (at, raw, nonce)
                 elif proto == 102:
                     response_to = message.get("response_to")
+                    if isinstance(response_to, dict) and response_to.get("request_method") == "get_room_mapping":
+                        rooms = _room_table(response_to.get("result")) if response_to.get("error") is None else []
+                        if rooms:
+                            acc["rooms"] = rooms
+                        continue
                     if isinstance(response_to, dict):
                         update = (
                             _status_update(response_to.get("result"))
@@ -387,6 +416,8 @@ class DeviceSnapshotStore:
                 entry["last_seen_at"] = acc.get("last_seen_at")
                 if acc["status"]:
                     entry["status"] = {**acc["status"], "updated_at": acc["status_at"]}
+                if acc["rooms"]:
+                    entry["rooms"] = acc["rooms"]
                 if map_bytes is not None:
                     self._maps[duid] = map_bytes
                     self._dirty_maps.add(duid)
