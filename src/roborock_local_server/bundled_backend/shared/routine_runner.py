@@ -308,6 +308,11 @@ def _single_start_entry(step: RoutineStep) -> dict[str, Any]:
     return entry
 
 
+# Scene definitions use -1 for a setting the user did not configure, e.g.
+# {"fan_power": 104, "water_box_mode": 200, "mop_mode": -1, "mop_template_id": -1}.
+_UNSET_SETTING_VALUE = -1
+
+
 def _settings_commands(entry: dict[str, Any]) -> list[RoutineCommand]:
     commands: list[RoutineCommand] = []
     if "fan_power" in entry:
@@ -338,7 +343,10 @@ def _settings_commands(entry: dict[str, Any]) -> list[RoutineCommand]:
                 [_as_int(entry.get("mop_template_id"), 0)],
             )
         )
-    return commands
+    # Sending an unset value (e.g. set_mop_mode [-1]) makes the firmware reject
+    # the command, which aborts the routine before its start command is sent:
+    # the vacuum acknowledges the scene but never starts cleaning.
+    return [command for command in commands if command.params != [_UNSET_SETTING_VALUE]]
 
 
 def commands_for_step(step: RoutineStep) -> list[RoutineCommand]:
@@ -379,8 +387,21 @@ def commands_for_step(step: RoutineStep) -> list[RoutineCommand]:
     raise RoutineExecutionError(f"Unsupported step method {step.method!r}")
 
 
+# Preset commands a step sends before its start command. If the device does not
+# know one of them ("unknown_method"), the step still starts with the device's
+# current setting instead of not starting at all. Start commands are never
+# optional: a failed start must abort the routine and surface the error.
+_OPTIONAL_SETTING_COMMANDS = {
+    RoborockCommand.SET_CUSTOM_MODE,
+    RoborockCommand.SET_WATER_BOX_CUSTOM_MODE,
+    RoborockCommand.SET_MOP_MODE,
+    RoborockCommand.SET_MOP_TEMPLATE_ID,
+    RoborockCommand.SET_CLEAN_REPEAT_TIMES,
+}
+
+
 def _is_optional_unsupported_command(command: RoborockCommand, exc: Exception) -> bool:
-    return command == RoborockCommand.SET_MOP_TEMPLATE_ID and isinstance(exc, RoborockUnsupportedFeature)
+    return command in _OPTIONAL_SETTING_COMMANDS and isinstance(exc, RoborockUnsupportedFeature)
 
 
 def _exception_error_payload(exc: Exception) -> dict[str, Any] | None:
