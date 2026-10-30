@@ -83,10 +83,10 @@ def test_check_app_agreement_reports_all_agreements_accepted(tmp_path: Path) -> 
     assert {entry["deviceId"] for entry in agreements} == {"device-a", "device-b"}
     for entry in agreements:
         assert set(entry) == {"deviceId", "type", "version", "extra"}
-        assert isinstance(entry["type"], int)
+        assert isinstance(entry["type"], str)
         assert isinstance(entry["version"], int)
         assert entry["extra"] == ""
-    assert sorted(entry["type"] for entry in agreements if entry["deviceId"] == "device-a") == [1, 2, 3]
+    assert sorted(entry["type"] for entry in agreements if entry["deviceId"] == "device-a") == ["PRIVACY_POLICY", "USER_AGREEMENT"]
 
 
 def test_check_app_agreement_without_paired_devices_returns_empty_plugin_list(tmp_path: Path) -> None:

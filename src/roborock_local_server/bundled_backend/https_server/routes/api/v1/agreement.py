@@ -8,11 +8,12 @@ from shared.data_helpers import get_value
 from ...auth.service import ok
 from ...user.homes.service import home_payload
 
-# Agreement types reported per device in userPluginAgreementList. The set of
-# valid type values is not known: the Android app keeps this list as a raw
-# JSON element and hands it to the device plugin. Reporting types 1-3 with
-# version 1 is enough for the plugin to continue past its agreement check.
-PLUGIN_AGREEMENT_TYPES = (1, 2, 3)
+# Agreement types reported per device in userPluginAgreementList. The Android
+# app keeps this list as raw JSON and reads each entry's "type" as a string
+# (JsonPrimitive.content) before handing it to the device plugin; the plugin
+# bundle and the app's AgreementInfo bean use the string constants
+# USER_AGREEMENT and PRIVACY_POLICY for agreement types.
+PLUGIN_AGREEMENT_TYPES = ("USER_AGREEMENT", "PRIVACY_POLICY")
 PLUGIN_AGREEMENT_VERSION = 1
 
 
@@ -37,7 +38,7 @@ def plugin_agreements(ctx: ServerContext) -> list[dict[str, Any]]:
     """One accepted plugin agreement per agreement type and home device.
 
     Entry shape follows the Android app's UserPreferenceRepository:
-    {"deviceId": <duid>, "type": <int>, "version": <int>, "extra": <str>}.
+    {"deviceId": <duid>, "type": <str>, "version": <int>, "extra": <str>}.
     """
     return [
         {
