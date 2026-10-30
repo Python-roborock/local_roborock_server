@@ -1602,3 +1602,190 @@ def test_create_room_returns_bare_id_in_result_and_object_in_data(tmp_path: Path
     assert body["data"]["id"] == body["result"]
     assert body["data"]["name"] == "Study"
     assert body["data"]["created"] is True
+
+
+def _logged_in_client(supervisor: ReleaseSupervisor) -> TestClient:
+    client = TestClient(supervisor.app)
+    response = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert response.status_code == 200
+    return client
+
+
+def test_admin_activity_requires_auth(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    response = client.get("/admin/api/activity")
+
+    assert response.status_code == 401
+
+
+def test_admin_activity_returns_redacted_entries_by_default(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.http_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.http_jsonl_path.write_text(
+        json.dumps(
+            {
+                "time": "2026-01-01T00:00:00Z",
+                "method": "GET",
+                "clean_path": "/api/v1/user/login",
+                "headers": {"authorization": "Bearer super-secret"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = _logged_in_client(supervisor)
+
+    response = client.get("/admin/api/activity")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["raw"] is False
+    assert len(payload["entries"]) == 1
+    assert payload["entries"][0]["method"] == "GET"
+    assert "headers" not in payload["entries"][0]
+    assert "super-secret" not in json.dumps(payload)
+
+
+def test_admin_activity_raw_mode_via_env_var(tmp_path: Path, monkeypatch) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.http_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.http_jsonl_path.write_text(
+        json.dumps({"time": "2026-01-01T00:00:00Z", "method": "GET", "headers": {"x": "y"}}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ROBOROCK_SERVER_ACTIVITY_RAW", "1")
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = _logged_in_client(supervisor)
+
+    response = client.get("/admin/api/activity")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["raw"] is True
+    assert payload["entries"][0]["headers"] == {"x": "y"}
+
+
+def test_admin_activity_rejects_non_integer_limit(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = _logged_in_client(supervisor)
+
+    response = client.get("/admin/api/activity", params={"limit": "not-a-number"})
+
+    assert response.status_code == 400
+
+
+def test_admin_activity_clamps_limit(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.http_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.http_jsonl_path.write_text(
+        "\n".join(
+            json.dumps({"time": f"2026-01-01T00:00:{i:02d}Z", "method": "GET"}) for i in range(10)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = _logged_in_client(supervisor)
+
+    response = client.get("/admin/api/activity", params={"limit": "2"})
+
+    assert response.status_code == 200
+    assert len(response.json()["entries"]) == 2
+
+
+def test_catchall_requests_are_not_logged_as_activity_but_named_routes_are(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    client.get("/favicon.ico")
+    client.get("/region")
+
+    log_entries = [
+        json.loads(line) for line in paths.http_jsonl_path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    routes = [entry.get("route") for entry in log_entries]
+    assert "catchall" not in routes
+    assert "region" in routes
+
+
+def test_admin_assets_are_local_allowlisted_and_do_not_expose_templates(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    supervisor = ReleaseSupervisor(config=config, paths=resolve_paths(config_file, config))
+    client = TestClient(supervisor.app)
+
+    for name, media_type in (("schedules.css", "text/css"), ("schedules.js", "text/javascript")):
+        response = client.get(f"/admin/assets/{name}")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith(media_type)
+        assert response.headers["cache-control"] == "no-cache"
+        assert response.text.strip()
+
+    for name in ("schedule_sections.html", "dashboard.html", "login.html", "config.toml", "missing.js"):
+        assert client.get(f"/admin/assets/{name}").status_code == 404
+    assert client.get("/admin/api/auth").status_code == 401
+
+
+def test_admin_support_payload_cannot_break_out_of_inline_script() -> None:
+    from html.parser import HTMLParser
+    from roborock_local_server.standalone_admin import _admin_dashboard_html
+
+    class Scripts(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.scripts = []
+            self.in_script = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "script":
+                self.scripts.append("")
+                self.in_script = True
+
+        def handle_data(self, data):
+            if self.in_script:
+                self.scripts[-1] += data
+
+        def handle_endtag(self, tag):
+            if tag == "script":
+                self.in_script = False
+
+    support = {"title": '</script><script>alert("example")</script>', "links": []}
+    parser = Scripts()
+    parser.feed(_admin_dashboard_html(support))
+    inline = [script for script in parser.scripts if script.strip()]
+    assert len(inline) == 1
+    serialized = inline[0].split("const support = ", 1)[1].split(";", 1)[0]
+    assert json.loads(serialized) == support
+    assert "</script>" not in inline[0]
+
+
+def test_admin_pages_are_not_cached(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    supervisor = ReleaseSupervisor(config=config, paths=resolve_paths(config_file, config))
+    client = TestClient(supervisor.app)
+    assert client.get("/admin").headers["cache-control"] == "no-store"
+    assert client.post("/admin/api/login", json={"password": "correct horse battery staple"}).status_code == 200
+    page = client.get("/admin")
+    assert page.headers["cache-control"] == "no-store"
+    assert 'id="schedulePanel"' in page.text
+    assert 'id="credentialPanel"' in page.text
+    assert 'id="activityList"' in page.text

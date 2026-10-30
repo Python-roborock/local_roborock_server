@@ -3,80 +3,194 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
+from importlib.resources import files
 from textwrap import dedent
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from .security import verify_password
+from .web_theme import HEAD_ASSETS, NAV_HTML, SCRIPT_ASSETS, register_theme_routes
+
+
+_ADMIN_ASSETS = {"schedules.css": "text/css", "schedules.js": "text/javascript"}
+
+
+@lru_cache(maxsize=3)
+def _admin_asset(name: str) -> str:
+    return files("roborock_local_server").joinpath("admin_ui", name).read_text(encoding="utf-8")
 
 
 def _admin_login_html() -> str:
-    return dedent(
-        """\
-        <!doctype html><html><body style="font-family:Segoe UI,sans-serif;max-width:420px;margin:12vh auto">
-        <h1>Roborock Local Server</h1>
-        <p>Sign in to manage the stack.</p>
-        <input id="password" type="password" placeholder="Admin password" style="width:100%;padding:10px" />
-        <button id="login" style="width:100%;padding:10px;margin-top:8px">Sign In</button>
-        <pre id="result"></pre>
-        <script>
-        document.getElementById("login").addEventListener("click", async () => {
-          const response = await fetch("/admin/api/login", {
-            method: "POST",
-            headers: {"Content-Type":"application/json"},
-            body: JSON.stringify({password: document.getElementById("password").value})
-          });
-          const payload = await response.json().catch(() => ({error: "Invalid response"}));
-          if (!response.ok) {
-            document.getElementById("result").textContent = payload.error || "Sign-in failed";
-            return;
-          }
-          window.location.reload();
-        });
-        </script></body></html>
-        """
+    return (
+        dedent(
+            """\
+            <!doctype html><html><head><meta charset="utf-8">
+            <title>Roborock Local Server</title>
+            """
+        )
+        + HEAD_ASSETS
+        + dedent(
+            """\
+            </head><body>
+            """
+        )
+        + NAV_HTML
+        + dedent(
+            """\
+            <div class="container" style="max-width:420px">
+              <p class="rls-muted">Sign in to manage the stack.</p>
+              <div class="row">
+                <div class="input-field col s12">
+                  <input id="password" type="password">
+                  <label for="password">Admin password</label>
+                </div>
+              </div>
+              <button id="login" class="btn waves-effect waves-light" style="width:100%">
+                Sign In<i class="material-icons right">login</i>
+              </button>
+              <div id="result" class="alert-banner error"></div>
+            </div>
+            """
+        )
+        + SCRIPT_ASSETS
+        + dedent(
+            """\
+            <script>
+            const resultEl = document.getElementById("result");
+            document.getElementById("login").addEventListener("click", async () => {
+              const response = await fetch("/admin/api/login", {
+                method: "POST",
+                headers: {"Content-Type":"application/json"},
+                body: JSON.stringify({password: document.getElementById("password").value})
+              });
+              const payload = await response.json().catch(() => ({error: "Invalid response"}));
+              if (!response.ok) {
+                resultEl.textContent = payload.error || "Sign-in failed";
+                resultEl.classList.add("shown");
+                return;
+              }
+              window.location.reload();
+            });
+            </script></body></html>
+            """
+        )
     )
 
 
 def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
-    support_payload = json.dumps(project_support)
+    support_payload = json.dumps(project_support).replace("<", "\\u003c")
     return dedent(
         f"""\
-        <!doctype html><html><body style="font-family:Segoe UI,sans-serif;max-width:1100px;margin:20px auto;padding:0 12px">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <h1>Roborock Local Server</h1>
-          <div><span id="overall">Loading</span> <button id="logout">Sign Out</button></div>
-        </div>
-        <section><h2>Vacuums</h2><div id="vacuumSummary" style="display:grid;gap:12px">Loading vacuums...</div></section>
-        <section><h2 id="supportTitle"></h2><p id="supportText"></p><div id="supportLinks" style="display:flex;gap:12px;flex-wrap:wrap"></div></section>
-        <section><h2>Cloud Import</h2>
-          <input id="email" placeholder="email@example.com" />
-          <button id="sendCode">Send Code</button>
-          <input id="code" placeholder="Email code" style="margin-top:8px" />
-          <button id="fetchData">Fetch Data</button>
-          <pre id="cloudResult">No cloud request yet.</pre>
-        </section>
-        <section><h2>New Connections</h2>
-          <label><input id="newConnectionsEnabled" type="checkbox" /> Allow new app logins, onboarding, and first-time vacuum connections</label>
-          <button id="saveConnections" style="margin-left:8px">Save</button>
-          <div id="authMeta" style="margin-top:8px;color:#333">Loading connection state...</div>
-          <div style="margin-top:12px">
-            <div style="font-weight:600">Protocol Sync Secret</div>
-            <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-              <input id="adminSessionSecret" readonly style="flex:1;min-width:320px;padding:8px" />
-              <button id="copySessionSecret">Copy</button>
-            </div>
-            <div id="syncSecretMeta" style="margin-top:6px;color:#555">Use this with <code>mitm_redirect.py --sync-secret ...</code>.</div>
+        <!doctype html><html><head><meta charset="utf-8">
+        <title>Roborock Local Server</title>
+        {HEAD_ASSETS}
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="stylesheet" href="/admin/assets/schedules.css">
+        </head><body>
+        <nav>
+          <div class="nav-wrapper container">
+            <a href="#" class="brand-logo"><i class="material-icons">smart_toy</i>Roborock Local Server</a>
+            <span style="flex:1"></span>
+            <span id="overall" style="color:#fff;margin-right:16px">Loading</span>
+            <button id="logout" class="btn-flat" style="color:#fff">Sign Out<i class="material-icons right">logout</i></button>
           </div>
-          <div id="pendingRecovery" style="margin-top:8px"></div>
-          <div style="margin-top:12px;font-weight:600">Protocol Sessions</div>
-          <div id="sessionList" style="display:grid;gap:8px;margin-top:12px">Loading sessions...</div>
-        </section>
+        </nav>
 
-        <section><h2>Health</h2><pre id="health"></pre></section>
-        <section><h2>Vacuums</h2><pre id="vacuums"></pre></section>
+        <div class="container">
+          <div id="deviceTabs" class="rls-chips">Loading vacuums...</div>
+        </div>
+
+        <div id="devicePanel" class="hidden">
+          <div class="container">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <h4 id="deviceTitle" class="header rls-heading" style="margin:0"></h4>
+              <span id="deviceState" class="rls-badge http"></span>
+            </div>
+            <div id="deviceFacts" class="rls-facts" style="margin-top:14px"></div>
+            <div id="deviceNotice" class="alert-banner"></div>
+          </div>
+
+          {_admin_asset("schedule_sections.html")}
+
+          <div class="container">
+            <h4 class="header rls-heading">Activity</h4>
+            <div id="activityMeta" class="rls-muted" style="margin-bottom:10px"></div>
+            <div id="activityList" class="rls-activity-list"></div>
+          </div>
+
+          <div class="container">
+            <details class="rls-details">
+              <summary>Raw details</summary>
+              <pre id="deviceRaw" class="rls-pre" style="margin-top:10px"></pre>
+            </details>
+          </div>
+        </div>
+
+        <div id="serverPanel" class="hidden">
+        <div class="container">
+          <h4 id="supportTitle" class="header rls-heading"></h4>
+          <p id="supportText" class="rls-muted"></p>
+          <div id="supportLinks" style="display:flex;gap:12px;flex-wrap:wrap"></div>
+        </div>
+
+        <div class="container">
+          <h4 class="header rls-heading">Cloud Import</h4>
+          <div class="row" style="margin-bottom:0">
+            <div class="input-field col s12 m6">
+              <input id="email" type="email">
+              <label for="email">Roborock account email</label>
+            </div>
+            <div class="input-field col s12 m6">
+              <button id="sendCode" class="btn waves-effect waves-light">Send Code</button>
+            </div>
+          </div>
+          <div class="row">
+            <div class="input-field col s12 m6">
+              <input id="code" type="text">
+              <label for="code">Email code</label>
+            </div>
+            <div class="input-field col s12 m6">
+              <button id="fetchData" class="btn waves-effect waves-light">Fetch Data</button>
+            </div>
+          </div>
+          <pre id="cloudResult" class="rls-pre">No cloud request yet.</pre>
+        </div>
+
+        <div class="container">
+          <h4 class="header rls-heading">New Connections</h4>
+          <p>
+            <label><input id="newConnectionsEnabled" type="checkbox" /><span>Allow new app logins, onboarding, and first-time vacuum connections</span></label>
+          </p>
+          <button id="saveConnections" class="btn waves-effect waves-light">Save</button>
+          <div id="authMeta" class="rls-muted" style="margin-top:10px">Loading connection state...</div>
+          <div style="margin-top:18px">
+            <div style="font-weight:600">Protocol Sync Secret</div>
+            <div class="row" style="margin-top:6px;margin-bottom:0">
+              <div class="input-field col s12 m9">
+                <input id="adminSessionSecret" readonly>
+              </div>
+              <div class="input-field col s12 m3">
+                <button id="copySessionSecret" class="btn-flat waves-effect">Copy<i class="material-icons right">content_copy</i></button>
+              </div>
+            </div>
+            <div id="syncSecretMeta" class="rls-muted">Use this with <code>mitm_redirect.py --local-api YOUR_SERVER_HOST --sync-secret &lt;secret above&gt; --activity-sync</code>.</div>
+          </div>
+          <div id="pendingRecovery" class="rls-muted" style="margin-top:10px"></div>
+          <div style="margin-top:16px;font-weight:600">Protocol Sessions</div>
+          <div id="sessionList" style="display:grid;gap:8px;margin-top:12px">Loading sessions...</div>
+        </div>
+
+        <div class="container">
+          <h4 class="header rls-heading">Health</h4>
+          <pre id="health" class="rls-pre"></pre>
+        </div>
+        </div>
+        {SCRIPT_ASSETS}
+        <script src="/admin/assets/schedules.js"></script>
         <script>
         const support = {support_payload};
         let cloudSessionId = "";
@@ -91,7 +205,8 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           anchor.textContent = link.label || link.url;
           anchor.style.display = "inline-block";
           anchor.style.padding = "8px 12px";
-          anchor.style.border = "1px solid #999";
+          anchor.style.border = "1px solid var(--rls-border)";
+          anchor.style.borderRadius = "7px";
           anchor.style.textDecoration = "none";
           anchor.style.color = "inherit";
           supportLinks.appendChild(anchor);
@@ -106,53 +221,94 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
         function yesNo(value) {{
           return value ? "Yes" : "No";
         }}
-        function renderVacuumSummary(vacuums) {{
-          const container = document.getElementById("vacuumSummary");
-          container.innerHTML = "";
-          const items = Array.isArray(vacuums) ? vacuums : [];
-          if (!items.length) {{
-            const empty = document.createElement("div");
-            empty.textContent = "No vacuums yet.";
-            empty.style.color = "#555";
-            container.appendChild(empty);
-            return;
-          }}
-          const addField = (parent, label, value) => {{
-            const line = document.createElement("div");
-            line.textContent = `${{label}}: ${{value}}`;
-            line.style.marginTop = "4px";
-            parent.appendChild(line);
+        let vacuumList = [];
+        let vacuumRevision = 0;
+        window.addEventListener("rls:vacuum-mutation", () => {{ vacuumRevision += 1; }});
+        const deviceKey = (vac) => vac.duid || vac.did || "";
+        const vacuumLabel = (vac) => vac.name || vac.did || vac.duid || "Unknown vacuum";
+        function currentSelection() {{
+          const hash = decodeURIComponent(window.location.hash.replace(/^#/, ""));
+          if (hash === "server") return "server";
+          const wanted = hash.startsWith("device=") ? hash.slice(7) : "";
+          if (wanted && vacuumList.some((vac) => deviceKey(vac) === wanted || vac.did === wanted)) return wanted;
+          // Nothing (valid) selected: open the first vacuum, or the Server view if there are none.
+          return vacuumList.length ? deviceKey(vacuumList[0]) : "server";
+        }}
+        function renderDeviceTabs(selected) {{
+          const tabs = document.getElementById("deviceTabs");
+          tabs.innerHTML = "";
+          const addChip = (key, label, state) => {{
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "rls-chip" + (key === selected ? " active" : "");
+            const dot = document.createElement("span");
+            dot.className = "rls-dot " + state;
+            chip.appendChild(dot);
+            chip.appendChild(document.createTextNode(label));
+            chip.addEventListener("click", () => {{
+              window.location.hash = key === "server" ? "server" : `device=${{encodeURIComponent(key)}}`;
+            }});
+            tabs.appendChild(chip);
           }};
-          for (const vacuum of items) {{
-            const card = document.createElement("div");
-            card.style.border = "1px solid #ddd";
-            card.style.borderRadius = "6px";
-            card.style.padding = "12px";
-            card.style.background = "#fafafa";
-
-            const name = document.createElement("div");
-            name.textContent = vacuum.name || vacuum.did || vacuum.duid || "Unknown vacuum";
-            name.style.fontWeight = "600";
-            name.style.marginBottom = "8px";
-            card.appendChild(name);
-
-            const onboarding = vacuum.onboarding || {{}};
-            const keyState = onboarding.key_state || {{}};
-            addField(card, "Num query samples", Number(keyState.query_samples || 0));
-            addField(card, "Public Key determined", yesNo(Boolean(onboarding.has_public_key)));
-            addField(card, "Mqtt connected", yesNo(Boolean(vacuum.connected)));
-            if (onboarding.unsupported) {{
-              const alert = document.createElement("div");
-              alert.textContent = onboarding.guidance || "This vacuum is not supported by the current onboarding flow.";
-              alert.style.marginTop = "10px";
-              alert.style.padding = "8px";
-              alert.style.border = "1px solid #c2410c";
-              alert.style.background = "#fff7ed";
-              alert.style.color = "#7c2d12";
-              card.appendChild(alert);
-            }}
-            container.appendChild(card);
+          for (const vac of vacuumList) {{
+            addChip(deviceKey(vac), vacuumLabel(vac), vac.connected ? "ok" : "wait");
           }}
+          addChip("server", "Server", "");
+          if (!vacuumList.length) {{
+            const hint = document.createElement("span");
+            hint.className = "rls-muted";
+            hint.textContent = "No vacuums yet. Use Cloud Import under Server to fetch yours.";
+            tabs.appendChild(hint);
+          }}
+        }}
+        function renderDevice(vac) {{
+          document.getElementById("deviceTitle").textContent = vacuumLabel(vac);
+          const state = document.getElementById("deviceState");
+          state.textContent = vac.connected ? "Connected" : "Not connected";
+          state.className = "rls-badge " + (vac.connected ? "mqtt" : "http");
+
+          const onboarding = vac.onboarding || {{}};
+          const keyState = onboarding.key_state || {{}};
+          const lastMessage = vac.last_message_at
+            ? `${{vac.last_message_at}} (${{vac.last_message_source || "unknown"}})`
+            : "None yet";
+          const rows = [
+            ["Model", vac.model || "Unknown"],
+            ["DUID", vac.duid || "-"],
+            ["DID", vac.did || "-"],
+            ["Product ID", vac.product_id || "-"],
+            ["Last message", lastMessage],
+            ["Mqtt connected", yesNo(Boolean(vac.connected))],
+            ["Num query samples", Number(keyState.query_samples || 0)],
+            ["Public Key determined", yesNo(Boolean(onboarding.has_public_key))],
+          ];
+          const facts = document.getElementById("deviceFacts");
+          facts.innerHTML = "";
+          for (const [label, value] of rows) {{
+            const cell = document.createElement("div");
+            const labelEl = document.createElement("div");
+            labelEl.className = "rls-fact-label";
+            labelEl.textContent = label;
+            const valueEl = document.createElement("div");
+            valueEl.className = "rls-fact-value";
+            valueEl.textContent = String(value);
+            cell.appendChild(labelEl);
+            cell.appendChild(valueEl);
+            facts.appendChild(cell);
+          }}
+
+          const notice = document.getElementById("deviceNotice");
+          if (onboarding.unsupported) {{
+            notice.textContent =
+              onboarding.guidance || "This vacuum is not supported by the current onboarding flow.";
+            notice.className = "alert-banner shown error";
+          }} else {{
+            notice.textContent = "";
+            notice.className = "alert-banner";
+          }}
+          // The local key is a credential; never render it, even in the raw view.
+          const redacted = Object.assign({{}}, vac, {{local_key: vac.local_key ? "<redacted>" : ""}});
+          document.getElementById("deviceRaw").textContent = JSON.stringify(redacted, null, 2);
         }}
         function renderAuth(auth) {{
           const enabled = Boolean(auth.new_connections_enabled);
@@ -162,7 +318,7 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           const sessionSecret = String(auth.admin_session_secret || "");
           document.getElementById("adminSessionSecret").value = sessionSecret;
           document.getElementById("syncSecretMeta").textContent = sessionSecret
-            ? "Use this with mitm_redirect.py --sync-secret ..."
+            ? `Use this with mitm_redirect.py --local-api YOUR_SERVER_HOST --sync-secret ${{sessionSecret}} --activity-sync`
             : "No protocol sync secret is configured.";
 
           const pendingContainer = document.getElementById("pendingRecovery");
@@ -181,16 +337,16 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           if (!sessions.length) {{
             const empty = document.createElement("div");
             empty.textContent = "No persisted protocol sessions.";
-            empty.style.color = "#555";
+            empty.style.color = "var(--rls-text-muted)";
             sessionList.appendChild(empty);
             return;
           }}
           for (const session of sessions) {{
             const card = document.createElement("div");
-            card.style.border = "1px solid #ddd";
-            card.style.borderRadius = "6px";
+            card.style.border = "1px solid var(--rls-border)";
+            card.style.borderRadius = "8px";
             card.style.padding = "10px";
-            card.style.background = "#fafafa";
+            card.style.background = "var(--rls-bg)";
             const label = document.createElement("div");
             label.textContent = session.rruid || session.hawk_id || "Protocol session";
             label.style.fontWeight = "600";
@@ -204,7 +360,9 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
 
             const remove = document.createElement("button");
             remove.textContent = "Remove";
+            remove.className = "btn-flat waves-effect";
             remove.style.marginTop = "8px";
+            remove.style.padding = "0 8px";
             remove.addEventListener("click", async () => {{
               try {{
                 await fetchJson(
@@ -221,15 +379,96 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
           }}
         }}
 
+        function renderActivity(payload) {{
+          document.getElementById("activityMeta").textContent = payload.raw
+            ? "Showing full raw entries (ROBOROCK_SERVER_ACTIVITY_RAW is enabled) - headers/bodies/payloads are not redacted."
+            : "Showing redacted summaries. Set ROBOROCK_SERVER_ACTIVITY_RAW=1 to see full raw entries.";
+          const list = document.getElementById("activityList");
+          list.innerHTML = "";
+          const entries = Array.isArray(payload.entries) ? payload.entries : [];
+          if (!entries.length) {{
+            const empty = document.createElement("div");
+            empty.textContent = "No recent activity.";
+            empty.style.color = "var(--rls-text-muted)";
+            list.appendChild(empty);
+            return;
+          }}
+          const makeBadge = (source) => {{
+            const span = document.createElement("span");
+            span.className = `rls-badge ${{source}}`;
+            span.textContent = source;
+            return span;
+          }};
+          const appendText = (parent, text) => {{
+            parent.appendChild(document.createTextNode(text));
+          }};
+          for (const entry of entries) {{
+            const row = document.createElement("div");
+            row.className = "rls-activity-entry";
+            const time = document.createElement("span");
+            time.className = "rls-activity-time";
+            time.textContent = entry.time || "";
+            row.appendChild(time);
+            const detail = document.createElement("span");
+            detail.className = "rls-activity-detail";
+            if (payload.raw) {{
+              detail.appendChild(makeBadge(entry.source || "http"));
+              row.appendChild(detail);
+              const pre = document.createElement("pre");
+              pre.className = "rls-activity-raw";
+              pre.textContent = JSON.stringify(entry, null, 2);
+              row.appendChild(pre);
+            }} else if (entry.source === "mqtt") {{
+              const methods = (entry.rpc_methods || []).join(", ");
+              detail.appendChild(makeBadge("mqtt"));
+              appendText(detail, ` ${{entry.direction || ""}} ${{entry.topic || ""}}` + (methods ? ` - ${{methods}}` : ""));
+              row.appendChild(detail);
+            }} else if (entry.source === "mitm") {{
+              detail.appendChild(makeBadge("mitm"));
+              appendText(
+                detail,
+                ` ${{entry.method || ""}} ${{entry.host || ""}}${{entry.path || ""}}` +
+                  (entry.status ? ` -> ${{entry.status}}` : "") +
+                  (entry.rewritten ? " (rewritten to local)" : "")
+              );
+              row.appendChild(detail);
+            }} else {{
+              detail.appendChild(makeBadge("http"));
+              appendText(detail, ` ${{entry.method || ""}} ${{entry.path || ""}}` + (entry.route ? ` (${{entry.route}})` : ""));
+              row.appendChild(detail);
+            }}
+            list.appendChild(row);
+          }}
+        }}
+
         async function refresh() {{
+          const revision = vacuumRevision;
           const status = await fetchJson("/admin/api/status");
           document.getElementById("overall").textContent = status.health.overall_ok ? "Healthy" : "Needs Attention";
           document.getElementById("health").textContent = JSON.stringify(status.health, null, 2);
           renderAuth(await fetchJson("/admin/api/auth"));
           const vacuums = await fetchJson("/admin/api/vacuums");
-          renderVacuumSummary(vacuums.vacuums);
-          document.getElementById("vacuums").textContent = JSON.stringify(vacuums.vacuums, null, 2);
+          if (revision !== vacuumRevision) return;
+          vacuumList = Array.isArray(vacuums.vacuums) ? vacuums.vacuums : [];
+
+          const selected = currentSelection();
+          renderDeviceTabs(selected);
+          const showServer = selected === "server";
+          document.getElementById("serverPanel").classList.toggle("hidden", !showServer);
+          document.getElementById("devicePanel").classList.toggle("hidden", showServer);
+          if (showServer) {{
+            window.dispatchEvent(new CustomEvent("rls:vacuum-selected", {{detail: null}}));
+            return;
+          }}
+          const vac = vacuumList.find((item) => deviceKey(item) === selected || item.did === selected);
+          if (!vac) return;
+          renderDevice(vac);
+          window.dispatchEvent(new CustomEvent("rls:vacuum-selected", {{detail: vac}}));
+          const activity = await fetchJson(`/admin/api/activity?device=${{encodeURIComponent(deviceKey(vac))}}`);
+          if (currentSelection() === selected) renderActivity(activity);
         }}
+        window.addEventListener("rls:refresh", () => refresh().catch(() => {{}}));
+        window.addEventListener("hashchange", () => refresh().catch(() => {{}}));
         document.getElementById("sendCode").addEventListener("click", async () => {{
           try {{
             const payload = await fetchJson("/admin/api/cloud/request-code", {{
@@ -309,11 +548,24 @@ def register_standalone_admin_routes(
     supervisor: Any,
     project_support: dict[str, Any],
 ) -> None:
+    register_theme_routes(app)
+    from .admin_schedules import register_schedule_routes
+
+    register_schedule_routes(app, supervisor)
+
+    @app.get("/admin/assets/{asset_name}")
+    async def admin_asset(asset_name: str) -> Response:
+        media_type = _ADMIN_ASSETS.get(asset_name)
+        if media_type is None:
+            return JSONResponse({"error": "Asset not found"}, status_code=404)
+        return Response(_admin_asset(asset_name), media_type=media_type,
+                        headers={"Cache-Control": "no-cache"})
+
     @app.get("/admin", response_class=HTMLResponse)
     async def admin_page(request: Request) -> HTMLResponse:
         if not supervisor._authenticated(request):
-            return HTMLResponse(_admin_login_html())
-        return HTMLResponse(_admin_dashboard_html(project_support))
+            return HTMLResponse(_admin_login_html(), headers={"Cache-Control": "no-store"})
+        return HTMLResponse(_admin_dashboard_html(project_support), headers={"Cache-Control": "no-store"})
 
     @app.post("/admin/api/login")
     async def admin_login(request: Request) -> JSONResponse:
@@ -356,6 +608,40 @@ def register_standalone_admin_routes(
     async def admin_auth(request: Request) -> JSONResponse:
         supervisor._require_admin(request)
         return JSONResponse(supervisor._auth_payload())
+
+    @app.delete("/admin/api/vacuums/{duid}/mqtt-credentials")
+    async def admin_clear_mqtt_credentials(duid: str, request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        origin = request.headers.get("origin")
+        if origin:
+            try:
+                parsed = urlsplit(origin)
+            except ValueError:
+                return JSONResponse({"error": "Invalid request origin"}, status_code=403)
+            if parsed.scheme not in ("http", "https") or parsed.netloc.casefold() != request.headers.get("host", "").casefold():
+                return JSONResponse({"error": "Cross-origin credential changes are not allowed"}, status_code=403)
+        try:
+            payload = supervisor.clear_device_mqtt_credentials(duid=duid)
+        except KeyError:
+            return JSONResponse({"error": "Vacuum not found"}, status_code=404)
+        except OSError:
+            return JSONResponse({"error": "Could not save the credential reset. Please try again."}, status_code=500)
+        return JSONResponse(payload)
+
+    @app.get("/admin/api/activity")
+    async def admin_activity(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        raw_limit = request.query_params.get("limit")
+        try:
+            limit = int(raw_limit) if raw_limit else 200
+        except ValueError:
+            return JSONResponse({"error": "limit must be an integer"}, status_code=400)
+        limit = max(1, min(limit, 500))
+        device = str(request.query_params.get("device") or "").strip()
+        payload = supervisor._activity_payload(limit=limit, device=device)
+        if device and not payload["device_known"]:
+            return JSONResponse({"error": f"Unknown vacuum {device!r}"}, status_code=404)
+        return JSONResponse(payload)
 
     @app.post("/admin/api/auth")
     async def admin_auth_update(request: Request) -> JSONResponse:

@@ -1,7 +1,73 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from roborock_local_server.bundled_backend.shared.runtime_credentials import RuntimeCredentialsStore
+
+
+def test_clear_mqtt_credentials_preserves_other_data_and_survives_reload(tmp_path):
+    path = tmp_path / "credentials.json"
+    path.write_text(json.dumps({"mqtt_usr": "bootstrap", "mqtt_passwd": "bootstrap-secret", "devices": [
+        {"duid": "downstairs", "did": "123", "name": "Downstairs", "model": "a15", "localkey": "keep-key",
+         "mqtt_usr": "old-user", "mqtt_password": "old-secret"},
+        {"duid": "upstairs", "did": "456", "device_mqtt_usr": "other-user", "device_mqtt_pass": "other-secret"},
+    ]}))
+    store = RuntimeCredentialsStore(path)
+    other = store.resolve_device(duid="upstairs")
+    cleared = store.clear_device_mqtt_credentials(duid="downstairs")
+    assert cleared["device_mqtt_usr"] == cleared["device_mqtt_pass"] == ""
+    assert cleared["localkey"] == "keep-key"
+    assert cleared["did"] == "123" and cleared["model"] == "a15"
+    assert store.resolve_device(duid="upstairs") == other
+    assert store.bootstrap_value("mqtt_passwd") == "bootstrap-secret"
+    assert not store.verify_device_mqtt_credentials(username="old-user", password="old-secret")[0]
+    assert list(tmp_path.iterdir()) == [path]  # No backup or temporary file remains.
+    assert "old-secret" not in path.read_text() and "old-user" not in path.read_text()
+    assert RuntimeCredentialsStore(path).resolve_device(duid="downstairs") == cleared
+    with pytest.raises(KeyError):
+        store.clear_device_mqtt_credentials(duid="123")  # No DID/model fallback.
+
+
+def test_reset_blocks_old_topics_and_pending_pairing_but_allows_fresh_pairing(tmp_path):
+    store = RuntimeCredentialsStore(tmp_path / "credentials.json")
+    store.ensure_device(duid="downstairs", did="123", device_mqtt_usr="old-user", device_mqtt_pass="old-secret")
+    reset = store.clear_device_mqtt_credentials(duid="downstairs")
+    store = RuntimeCredentialsStore(store.path)
+    store.record_mqtt_topic(topic="rr/d/i/123/old-user")
+    assert store.recover_device_mqtt_password(username="old-user", password="old-secret") is None
+    assert store.confirm_device_mqtt_credentials(did="123", username="old-user", password="old-secret") is None
+    learned = store.confirm_device_mqtt_credentials(did="123", username="new-user", password="new-secret",
+                                                   expected_reset_at=reset["device_mqtt_reset_at"])
+    assert learned["device_mqtt_usr"] == "new-user"
+    store.record_mqtt_topic(topic="rr/d/i/123/old-user")
+    assert store.verify_device_mqtt_credentials(username="new-user", password="new-secret")[0]
+    assert not store.verify_device_mqtt_credentials(username="old-user", password="old-secret")[0]
+
+
+def test_reset_is_not_undone_by_merging_a_stale_did_record(tmp_path):
+    store = RuntimeCredentialsStore(tmp_path / "credentials.json")
+    store.ensure_device(duid="downstairs", localkey="keep-key")
+    store.clear_device_mqtt_credentials(duid="downstairs")
+    store.ensure_device(did="123", device_mqtt_usr="old-user", device_mqtt_pass="old-secret")
+    merged = store.ensure_device(duid="downstairs", did="123", device_mqtt_usr="old-user")
+    assert merged["device_mqtt_usr"] == merged["device_mqtt_pass"] == ""
+    assert merged["localkey"] == "keep-key"
+
+
+def test_failed_reset_preserves_disk_and_live_credentials(tmp_path, monkeypatch):
+    import os
+    store = RuntimeCredentialsStore(tmp_path / "credentials.json")
+    before = store.ensure_device(duid="downstairs", device_mqtt_usr="user", device_mqtt_pass="secret")
+    before_file = store.path.read_bytes()
+    def fail_replace(*args):
+        raise OSError("simulated disk failure")
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError):
+        store.clear_device_mqtt_credentials(duid="downstairs")
+    assert store.resolve_device(duid="downstairs") == before
+    assert store.path.read_bytes() == before_file
+    assert list(tmp_path.iterdir()) == [store.path]
 
 
 def test_ensure_device_merges_split_did_and_duid_records(tmp_path: Path) -> None:
