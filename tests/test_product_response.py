@@ -111,3 +111,33 @@ def test_product_picture_fields_use_app_json_names(tmp_path: Path) -> None:
     assert product["picurl"] == "https://images.example.com/vacuum.png"
     assert product["cardpicurl"] == "https://images.example.com/vacuum.png"
     assert "cardPicUrl" not in product
+
+
+def test_string_product_id_uses_cloud_numeric_id_by_model(tmp_path: Path) -> None:
+    # The cloud lists newer models (e.g. a226) under a string product id in home
+    # data. The numeric id the app requests plugins with comes from the cloud's
+    # /api/v5/product, which the import stores in the snapshot.
+    snapshot = {
+        "web_api_cache": {
+            "plugin_catalogs": {
+                "product": {
+                    "data": {
+                        "categoryDetailList": [
+                            {
+                                "category": {"id": 1, "code": "robot.vacuum.cleaner"},
+                                "productList": [{"id": 199, "model": "roborock.vacuum.a226"}],
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    (tmp_path / "web_api_inventory_full_snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
+    device = dict(_DEVICE, model="roborock.vacuum.a226", product_id="30uADinyLKa3Qpga60B1Ke")
+
+    data = _products_v5(tmp_path, [device])
+
+    [product] = data["categoryDetailList"][0]["productList"]
+    assert product["id"] == 199
+    assert product["rriotid"] == "30uADinyLKa3Qpga60B1Ke"

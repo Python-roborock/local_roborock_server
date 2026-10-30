@@ -4,7 +4,9 @@ from typing import Any
 
 from shared.constants import MODEL_PRODUCT_ID_OVERRIDES
 from shared.context import ServerContext
-from shared.data_helpers import as_int, default_product_name, stable_int
+from shared.data_helpers import as_int, default_product_name, model_product_ids, stable_int
+
+from ..plugin.common import snapshot_plugin_catalog_data
 
 from ..user.homes.service import home_payload
 
@@ -13,6 +15,7 @@ def build_product_response(ctx: ServerContext) -> dict[str, Any]:
     home_data = home_payload(ctx)
     products_value = home_data.get("products")
     products = products_value if isinstance(products_value, list) else []
+    cloud_product_ids = model_product_ids(snapshot_plugin_catalog_data(ctx, "product"))
     categories: dict[str, dict[str, Any]] = {}
     for product in products:
         if not isinstance(product, dict):
@@ -34,9 +37,12 @@ def build_product_response(ctx: ServerContext) -> dict[str, Any]:
             }
         model = str(product.get("model") or "roborock.vacuum.a117")
         model_key = model.strip().lower()
+        # String product ids (e.g. a226) take the cloud's numeric id for the model;
+        # plugins are keyed by it, so a hashed id gets the app no device plugin.
         product_id = MODEL_PRODUCT_ID_OVERRIDES.get(
             model_key,
-            as_int(raw_product_id, stable_int(raw_product_id or category_name) % 1_000_000),
+            cloud_product_ids.get(model_key)
+            or as_int(raw_product_id, stable_int(raw_product_id or category_name) % 1_000_000),
         )
         product_entry = {
             "id": product_id,
