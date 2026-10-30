@@ -20,6 +20,8 @@ from roborock.data import HomeData, HomeDataDevice, HomeDataProduct, RRiot, User
 from roborock.exceptions import RoborockRateLimit
 from roborock.web_api import PreparedRequest, RoborockApiClient, _get_hawk_authentication
 
+from shared.data_helpers import model_product_ids
+
 
 def _find_repo_root() -> Path:
     current = Path(__file__).resolve().parent
@@ -376,13 +378,18 @@ async def _request_cloud_api_data(
     return response.get("data")
 
 
-def _plugin_product_ids(home_data: HomeData) -> list[int]:
+def _plugin_product_ids(home_data: HomeData, cloud_products: Any = None) -> list[int]:
+    # Newer models (e.g. roborock.vacuum.a226) carry a string product id in home
+    # data; the numeric id the plugin catalog is keyed by comes from /api/v5/product.
+    ids_by_model = model_product_ids(cloud_products)
     product_ids: set[int] = set()
     for product in home_data.products or []:
         try:
             product_ids.add(int(product.id))
         except (TypeError, ValueError):
-            continue
+            model_id = ids_by_model.get(str(product.model or "").strip().lower())
+            if model_id:
+                product_ids.add(model_id)
     for device in _all_home_devices(home_data):
         try:
             product_ids.add(int(getattr(device, "product_id", 0) or 0))
@@ -442,21 +449,21 @@ async def _fetch_plugin_catalogs(
         "/api/v1/plugins",
         params={"type": 2, "apiLevel": 10043},
     )
-    product_ids = _plugin_product_ids(home_data)
-    if product_ids:
-        await fetch_catalog(
-            "appplugin",
-            "/api/v1/appplugin",
-            method="post",
-            json_body={"type": 2, "apilevel": 10043, "productids": product_ids},
-        )
-    else:
-        catalogs["appplugin"] = {
-            "path": "/api/v1/appplugin",
-            "method": "POST",
-            "json": {"type": 2, "apilevel": 10043, "productids": []},
-            "error": "no product ids available",
-        }
+    await fetch_catalog("product", "/api/v5/product")
+    product_ids = _plugin_product_ids(home_data, catalogs["product"].get("data"))
+    # The cloud serves a separate zip per platform for the same plugin version:
+    # type 2 is Android, type 1 is iOS.
+    for name, app_type in (("appplugin", 2), ("appplugin_ios", 1)):
+        json_body = {"type": app_type, "apilevel": 10043, "productids": product_ids}
+        if product_ids:
+            await fetch_catalog(name, "/api/v1/appplugin", method="post", json_body=json_body)
+        else:
+            catalogs[name] = {
+                "path": "/api/v1/appplugin",
+                "method": "POST",
+                "json": json_body,
+                "error": "no product ids available",
+            }
     return catalogs
 
 
