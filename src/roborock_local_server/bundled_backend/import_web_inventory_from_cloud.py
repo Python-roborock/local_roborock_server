@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import json
@@ -756,6 +757,12 @@ def _merge_existing_inventory_mutations(
         return cloud_inventory
 
     merged = dict(cloud_inventory)
+
+    # Refreshing cloud definitions must not erase the local scheduler's record
+    # of occurrences already attempted (including a clean with a lost reply).
+    occurrences = existing_inventory.get("schedule_occurrences")
+    if isinstance(occurrences, dict):
+        merged["schedule_occurrences"] = copy.deepcopy(occurrences)
 
     rooms = _merge_record_lists_by_identity(
         _inventory_rooms(merged),
