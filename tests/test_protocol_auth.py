@@ -543,3 +543,45 @@ def test_local_issued_and_imported_sessions_coexist(tmp_path: Path) -> None:
         },
     )
     assert imported_hawk_response.status_code == 200
+
+
+def test_long_lived_session_survives_many_later_app_logins(tmp_path: Path) -> None:
+    supervisor, paths = _build_supervisor(tmp_path)
+    base_user_data = load_cloud_user_data(supervisor.context) or {}
+
+    # An integration logs in once and keeps its MQTT session for a long time.
+    integration_session = supervisor.protocol_auth.issue_local_session(base_user_data, source="integration")
+    integration_user = next(
+        user
+        for user in supervisor.protocol_auth.availability().users
+        if user.token == integration_session["token"]
+    )
+
+    # The app logs in again after every reinstall.
+    for index in range(12):
+        supervisor.protocol_auth.issue_local_session(base_user_data, source=f"app_login_{index}")
+
+    auth_store = ProtocolAuthStore(
+        paths.cloud_snapshot_path,
+        session_store_path=paths.protocol_auth_sessions_path,
+    )
+    accepted, reason, _user = auth_store.verify_user_mqtt_credentials(
+        integration_user.mqtt_username,
+        integration_user.mqtt_password,
+    )
+    assert accepted, reason
+
+
+def test_persisted_sessions_are_still_capped(tmp_path: Path) -> None:
+    supervisor, paths = _build_supervisor(tmp_path)
+    base_user_data = load_cloud_user_data(supervisor.context) or {}
+    auth_store = ProtocolAuthStore(
+        paths.cloud_snapshot_path,
+        session_store_path=paths.protocol_auth_sessions_path,
+        max_persisted_sessions=3,
+    )
+
+    for index in range(5):
+        auth_store.issue_local_session(base_user_data, source=f"login_{index}")
+
+    assert len(auth_store.persisted_sessions()) == 3
