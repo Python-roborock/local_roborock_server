@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import secrets
 import signal
@@ -23,6 +24,7 @@ from python_multipart.exceptions import MultipartParseError
 import uvicorn
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from .activity_log import activity_raw_enabled, read_recent_activity
 from .certs import CertificateManager
 from .bundled_backend.shared.constants import DEFAULT_PRODUCT_SCHEMA
 from .bundled_backend.shared.data_helpers import utcnow_iso
@@ -31,6 +33,7 @@ from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIR
 from .cloud import CloudImportManager
 from .config import AppConfig, AppPaths, load_config, resolve_paths
 from .log_retention import configure_jsonl_logging
+from .management_app import bootstrap_port_from_env, create_management_app
 from .turn_relay import EmbeddedTurnRelay
 from .standalone_admin import register_standalone_admin_routes
 from .backend import (
@@ -54,6 +57,10 @@ from .backend import (
 )
 from shared.inventory_io import atomic_write_inventory, inventory_transaction
 from shared.protocol_auth import ProtocolAuthStore
+from shared.schedule_runner import ScheduleRunner
+from shared.native_schedule_sync import NativeScheduleSync
+from shared.timer_rpc import TimerRpcInterceptor
+from https_server.routes.user.devices import jobs as schedule_jobs
 from https_server.routes.user.scene import validity as scene_validity
 from https_server.routes.auth.service import (
     build_login_data_response,
@@ -68,6 +75,7 @@ from .security import AdminSessionManager, verify_password
 ALL_HTTP_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
 PROTOCOL_AUTH_SYNC_PATH = "/internal/protocol/user-data"
 PROTOCOL_AUTH_SYNC_SECRET_HEADER = "x-local-sync-secret"
+MITM_ACTIVITY_SYNC_PATH = "/internal/protocol/mitm-activity"
 _REGION_COUNTRY_CODE = {
     "US": "1",
     "CN": "86",
@@ -362,6 +370,8 @@ class ReleaseSupervisor:
         self._mqtt_proxy: MqttTlsProxy | None = None
         self._http_server: ManagedFastApiServer | None = None
         self._renew_task: asyncio.Task[None] | None = None
+        self._schedule_task: asyncio.Task[None] | None = None
+        self._schedule_sync_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
 
         self.certificate_manager = CertificateManager(config=config, paths=paths)
@@ -485,6 +495,7 @@ class ReleaseSupervisor:
             turn_ttl=self.config.turn.ttl,
         )
         self.endpoint_rules = default_endpoint_rules()
+        self.schedule_sync = NativeScheduleSync(self.context)
         self.app = self._create_app()
 
     def _init_zone_ranges_store(self) -> ZoneRangesStore:
@@ -858,6 +869,10 @@ class ReleaseSupervisor:
     def _is_protocol_sync_path(cls, clean_path: str) -> bool:
         return cls._normalized_path(clean_path) == PROTOCOL_AUTH_SYNC_PATH
 
+    @classmethod
+    def _is_mitm_activity_sync_path(cls, clean_path: str) -> bool:
+        return cls._normalized_path(clean_path) == MITM_ACTIVITY_SYNC_PATH
+
     @staticmethod
     def _protocol_sync_success_payload(*, source: str) -> dict[str, Any]:
         return {
@@ -914,6 +929,56 @@ class ReleaseSupervisor:
             )
 
         return "protocol_auth_sync", 200, self._protocol_sync_success_payload(source=source)
+
+    async def _handle_mitm_activity_sync_route(
+        self,
+        *,
+        method: str,
+        clean_path: str,
+        headers: dict[str, str],
+        body_params: dict[str, list[str]],
+    ) -> tuple[str, int, dict[str, Any]] | None:
+        """Accepts activity entries from mitm_redirect.py's optional --activity-sync.
+
+        Reuses the same admin.session_secret-based auth as the existing
+        protocol auth sync (_sync_secret_matches) - no new trust mechanism.
+        Entries are appended as-is (mitm_redirect.py sends full detail, same
+        as it already does for login-credential sync); activity_log.py is
+        what decides whether to redact them for display.
+        """
+        if not self._is_mitm_activity_sync_path(clean_path):
+            return None
+        if method.upper() != "POST":
+            return "mitm_activity_sync_method_not_allowed", 405, self._protocol_sync_failure_payload(
+                reason="method_not_allowed"
+            )
+        if not self._sync_secret_matches(headers):
+            return "mitm_activity_sync_unauthorized", 401, self._protocol_sync_failure_payload(
+                reason="invalid_sync_secret"
+            )
+
+        payload = _request_json_object(body_params)
+        entries = payload.get("entries")
+        if not isinstance(entries, list) or not entries:
+            return "mitm_activity_sync_invalid_payload", 400, self._protocol_sync_failure_payload(
+                reason="missing_entries"
+            )
+
+        stored = 0
+        for candidate in entries:
+            if not isinstance(candidate, dict):
+                continue
+            record = dict(candidate)
+            record.setdefault("time", utcnow_iso())
+            record["source"] = "mitm"
+            append_jsonl(self.paths.mitm_activity_jsonl_path, record)
+            stored += 1
+        if stored == 0:
+            return "mitm_activity_sync_invalid_payload", 400, self._protocol_sync_failure_payload(
+                reason="missing_entries"
+            )
+
+        return "mitm_activity_sync", 200, {"code": 200, "msg": "success", "data": {"stored": stored}}
 
     async def _handle_protocol_login_route(
         self,
@@ -981,7 +1046,9 @@ class ReleaseSupervisor:
         query_params = _request_query_params(request)
         body_text, body_params = await _request_body_params(request, raw_body)
         body_sha256 = hashlib.sha256(raw_body).hexdigest()
-        is_protocol_sync_request = self._is_protocol_sync_path(clean_path)
+        is_protocol_sync_request = self._is_protocol_sync_path(clean_path) or self._is_mitm_activity_sync_path(
+            clean_path
+        )
 
         if host:
             host_authority = host.strip()
@@ -1124,6 +1191,43 @@ class ReleaseSupervisor:
         )
         if custom_sync is not None:
             route_name, status_code, response_payload = custom_sync
+            entry["route"] = route_name
+            entry["response_json"] = response_payload
+            try:
+                self.runtime_state.record_http_event(
+                    event_time=str(entry["time"]),
+                    route_name=route_name,
+                    clean_path=clean_path,
+                    raw_path=raw_path,
+                    method=request.method,
+                    host=host,
+                    remote=str(entry["remote"]),
+                    did=explicit_did or None,
+                    pid=explicit_pid or None,
+                    model=explicit_model or None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("runtime_state record_http_event failed: %s", exc)
+            append_jsonl(self.context.http_jsonl, entry)
+            logger.info(
+                "%s %s host=%s route=%s status=%d body_sha256=%s",
+                request.method,
+                clean_path,
+                host or "-",
+                route_name,
+                status_code,
+                body_sha256[:16],
+            )
+            return JSONResponse(response_payload, status_code=status_code)
+
+        custom_mitm_activity = await self._handle_mitm_activity_sync_route(
+            method=request.method,
+            clean_path=clean_path,
+            headers=dict(request.headers),
+            body_params=body_params,
+        )
+        if custom_mitm_activity is not None:
+            route_name, status_code, response_payload = custom_mitm_activity
             entry["route"] = route_name
             entry["response_json"] = response_payload
             try:
@@ -1351,14 +1455,20 @@ class ReleaseSupervisor:
             )
             return response
 
-        route_name, response_payload = resolve_route(
-            rules=self.endpoint_rules,
-            context=self.context,
-            clean_path=clean_path,
-            query_params=query_params,
-            body_params=body_params,
-            method=request.method,
-        )
+        if schedule_jobs.match_update(clean_path, request.method):
+            route_name = "update_schedule"
+            response_payload = await schedule_jobs.build_update_synced(
+                self.context, query_params, body_params, clean_path, self.schedule_sync,
+            )
+        else:
+            route_name, response_payload = resolve_route(
+                rules=self.endpoint_rules,
+                context=self.context,
+                clean_path=clean_path,
+                query_params=query_params,
+                body_params=body_params,
+                method=request.method,
+            )
         entry["route"] = route_name
         if route_name == "fw_createca":
             # Persist metadata, but retain the exact credential response sent to firmware.
@@ -1389,7 +1499,10 @@ class ReleaseSupervisor:
             # /nc just handed the vacuum its localKey; persist now instead of relying on an
             # onboarding client still polling the session (it may have timed out or exited).
             self.persist_active_onboarding_device()
-        append_jsonl(self.context.http_jsonl, entry)
+        if route_name != "catchall":
+            # Truly unmatched requests (favicon probes, health checks, random scans) aren't
+            # meaningful onboarding/protocol activity - keep them out of the Activity feed.
+            append_jsonl(self.context.http_jsonl, entry)
         if key_cache is not None and key_capture_did:
             try:
                 key_cache.maybe_recover_async(key_capture_did)
@@ -1438,6 +1551,17 @@ class ReleaseSupervisor:
         inventory = _load_inventory(self.paths.inventory_path)
         inventory_vacuums = _extract_inventory_vacuums(self.context, inventory)
         vacuums = _merge_vacuum_state(context=self.context, inventory_vacuums=inventory_vacuums)
+        for vacuum in vacuums:
+            device = self.runtime_credentials.resolve_device(duid=str(vacuum.get("duid") or ""))
+            if device is None:
+                continue
+            saved = bool(device.get("device_mqtt_usr") or device.get("device_mqtt_pass"))
+            vacuum["mqtt_credentials"] = {
+                "saved": saved,
+                "cleared_at": device.get("device_mqtt_reset_at", ""),
+            }
+            if device.get("device_mqtt_reset_at") and not saved:
+                vacuum["connected"] = False
         return {
             "inventory_path": str(self.paths.inventory_path),
             "vacuums": vacuums,
@@ -1502,6 +1626,44 @@ class ReleaseSupervisor:
                 }
             )
         return devices
+
+    def _vacuum_identifiers(self, device_ref: str) -> set[str] | None:
+        """Every id traffic for this vacuum can carry (duid, did, MQTT user), or None if unknown."""
+        reference = device_ref.strip()
+        if not reference:
+            return None
+        for vacuum in self._vacuums_payload()["vacuums"]:
+            candidates = {
+                str(vacuum.get(key) or "").strip()
+                for key in ("duid", "did", "runtime_did", "linked_inventory_duid")
+            }
+            candidates.discard("")
+            if reference not in candidates:
+                continue
+            record = self.runtime_credentials.resolve_device(
+                did=str(vacuum.get("did") or ""),
+                duid=str(vacuum.get("duid") or ""),
+            )
+            if record:
+                candidates.update(
+                    str(record.get(key) or "").strip() for key in ("did", "duid", "device_mqtt_usr")
+                )
+                candidates.discard("")
+            return candidates
+        return None
+
+    def _activity_payload(self, *, limit: int, device: str = "") -> dict[str, Any]:
+        raw = activity_raw_enabled(os.environ)
+        device_ids = self._vacuum_identifiers(device) if device.strip() else None
+        entries = read_recent_activity(
+            http_jsonl_path=self.paths.http_jsonl_path,
+            mqtt_jsonl_path=self.paths.mqtt_jsonl_path,
+            mitm_jsonl_path=self.paths.mitm_activity_jsonl_path,
+            limit=limit,
+            raw=raw,
+            device_ids=device_ids if device.strip() else None,
+        )
+        return {"raw": raw, "entries": entries, "device": device.strip(), "device_known": device_ids is not None or not device.strip()}
 
     def _auth_payload(self) -> dict[str, Any]:
         sessions = [
@@ -1577,6 +1739,19 @@ class ReleaseSupervisor:
 
     def remove_protocol_session(self, *, hawk_id: str, hawk_session: str) -> bool:
         return self.protocol_auth.remove_session(hawk_id=hawk_id, hawk_session=hawk_session)
+
+    def clear_device_mqtt_credentials(self, *, duid: str) -> dict[str, Any]:
+        if self._mqtt_proxy is not None:
+            device = self._mqtt_proxy.clear_device_mqtt_credentials(duid=duid)
+        else:
+            device = self.runtime_credentials.clear_device_mqtt_credentials(duid=duid)
+            self.runtime_state.clear_device_mqtt_state(did=device.get("did", ""), duid=duid)
+        return {
+            "ok": True,
+            "duid": device["duid"],
+            "name": device.get("name") or device["duid"],
+            "mqtt_credentials": {"saved": False, "cleared_at": device["device_mqtt_reset_at"]},
+        }
 
     def start_onboarding_session(
         self,
@@ -1968,6 +2143,11 @@ class ReleaseSupervisor:
                 logger=self.loggers["mqtt"],
                 runtime_state=self.runtime_state,
                 inventory_path=self.paths.inventory_path,
+                request_observer=self.schedule_sync.observe_request,
+                request_interceptor=TimerRpcInterceptor(
+                    self.context,
+                    default_timezone=self.config.network.timezone,
+                ),
             )
             await self._topic_bridge.start()
             self.runtime_state.set_service("mqtt_topic_bridge", running=True, required=False, enabled=True)
@@ -1997,10 +2177,32 @@ class ReleaseSupervisor:
         if self._uses_local_tls() and self.config.tls.mode == "cloudflare_acme":
             self._renew_task = asyncio.create_task(self._renew_loop(), name="tls-renew-loop")
 
+        schedule_runner = ScheduleRunner(self.context, default_timezone=self.config.network.timezone)
+        self._schedule_sync_task = asyncio.create_task(
+            self.schedule_sync.run(self._stop_event), name="native-schedule-sync",
+        )
+        self._schedule_task = asyncio.create_task(
+            schedule_runner.run(self._stop_event),
+            name="schedule-runner",
+        )
+
     async def stop(self) -> None:
         self._stop_event.set()
         self._turn_relay.stop()
         self._refresh_turn_health()
+        if self._schedule_sync_task is not None:
+            self._schedule_sync_task.cancel()
+            try:
+                await self._schedule_sync_task
+            except asyncio.CancelledError:
+                pass
+            self._schedule_sync_task = None
+        if self._schedule_task is not None:
+            self._schedule_task.cancel()
+            try:
+                await self._schedule_task
+            except asyncio.CancelledError:
+                pass
         if self._renew_task is not None:
             self._renew_task.cancel()
             try:
@@ -2049,8 +2251,59 @@ class ReleaseSupervisor:
         return 0
 
 
+async def _run_setup_wizard_only(*, config_file: Path) -> int:
+    """Serve only /admin's setup wizard, in plain HTTP, until config.toml exists.
+
+    Listens on the same https_port the real stack will use once configured
+    (ROBOROCK_SERVER_HTTPS_PORT, same env var as the compose port mapping).
+    Exits (0) once the wizard writes a config, or on SIGINT/SIGTERM. Either
+    way, Docker's restart policy is what brings the full stack - and its own
+    TLS'd /admin - up on the next boot, once load_config() succeeds.
+    """
+    logger = logging.getLogger(__name__)
+    port = bootstrap_port_from_env(os.environ)
+    stop_event = asyncio.Event()
+    configured_event = asyncio.Event()
+
+    app = create_management_app(config_file=config_file, on_configured=configured_event.set)
+    bootstrap_server = ManagedFastApiServer(
+        app=app,
+        bind_host="0.0.0.0",
+        port=port,
+        tls_enabled=False,
+    )
+    await bootstrap_server.start()
+    logger.warning(
+        "%s not found. Open http://<this host>:%d/admin to finish setup.",
+        config_file,
+        port,
+    )
+
+    def request_shutdown() -> None:
+        stop_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, request_shutdown)
+        except NotImplementedError:
+            pass
+
+    await asyncio.wait(
+        {asyncio.create_task(stop_event.wait()), asyncio.create_task(configured_event.wait())},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    await bootstrap_server.stop()
+    return 0
+
+
 async def run_server(*, config_file: Path, enable_standalone_admin: bool = True) -> int:
-    config = load_config(config_file)
+    try:
+        config = load_config(config_file)
+    except (OSError, ValueError) as exc:
+        logging.getLogger(__name__).warning("Could not load %s: %s", config_file, exc)
+        return await _run_setup_wizard_only(config_file=config_file)
+
     paths = resolve_paths(config_file, config)
     supervisor = ReleaseSupervisor(
         config=config,

@@ -6,12 +6,18 @@ After auth bootstrap, app API traffic is routed to LOCAL_API so app home/device
 state comes from your local stack.
 
 Usage:
-  uv run mitm_redirect.py --local-api YOUR_SERVER_HOST [--local-mqtt HOST] [--local-wood HOST] [--sync-secret SECRET] [--mode wireguard]
+  uv run mitm_redirect.py --local-api YOUR_SERVER_HOST [--local-mqtt HOST] [--local-wood HOST] \
+      [--sync-secret SECRET] [--activity-sync] [--mode wireguard]
+
+--activity-sync (off by default) additionally sends a copy of each redirected
+request/response to the server's admin dashboard Activity panel, so you can
+watch what the native Roborock app is doing without leaving the browser.
+Requires --sync-secret (or a config.toml beside this script).
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -38,8 +44,10 @@ LOCAL_WOOD: str = ""
 LOCAL_WOOD_HOST: str = ""
 LOCAL_WOOD_PORT: int | None = None
 LOCAL_SYNC_SECRET: str = ""
+ACTIVITY_SYNC_ENABLED: bool = False
 DEFAULT_LOCAL_API_PORT = 555
 DEFAULT_LOCAL_MQTT_PORT = 8881
+MITM_ACTIVITY_SYNC_PATH = "/internal/protocol/mitm-activity"
 
 
 # Domains whose responses are candidates for host rewrite.
@@ -239,9 +247,9 @@ def _format_authority(host: str, port: int | None, *, default_port: int | None =
     return f"{normalized_host}:{port}"
 
 
-def _sync_callback_url(local_api: str) -> str:
+def _sync_callback_url(local_api: str, *, path: str = PROTOCOL_AUTH_SYNC_PATH) -> str:
     authority = str(local_api or "").strip().strip("/")
-    return f"https://{authority}{PROTOCOL_AUTH_SYNC_PATH}"
+    return f"https://{authority}{path}"
 
 
 def _parse_json_object(content: bytes) -> dict[str, object]:
@@ -277,9 +285,10 @@ def _post_sync_payload(
     local_api: str,
     sync_secret: str,
     payload: dict[str, object],
+    path: str = PROTOCOL_AUTH_SYNC_PATH,
     timeout: float = 5.0,
 ) -> tuple[str, int, bytes]:
-    sync_url = _sync_callback_url(local_api)
+    sync_url = _sync_callback_url(local_api, path=path)
     request = Request(
         sync_url,
         data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
@@ -348,7 +357,7 @@ def load(loader) -> None:
     global LOCAL_API, LOCAL_API_HOST, LOCAL_API_PORT
     global LOCAL_MQTT, LOCAL_MQTT_HOST, LOCAL_MQTT_PORT
     global LOCAL_WOOD, LOCAL_WOOD_HOST, LOCAL_WOOD_PORT
-    global LOCAL_SYNC_SECRET
+    global LOCAL_SYNC_SECRET, ACTIVITY_SYNC_ENABLED
     LOCAL_API_HOST, LOCAL_API_PORT = _parse_endpoint(
         os.environ["MITM_LOCAL_API"],
         fallback_port=DEFAULT_LOCAL_API_PORT,
@@ -367,12 +376,25 @@ def load(loader) -> None:
     )
     LOCAL_WOOD = _format_authority(LOCAL_WOOD_HOST, LOCAL_WOOD_PORT, default_port=443)
     LOCAL_SYNC_SECRET = str(os.environ.get("MITM_LOCAL_SYNC_SECRET") or "").strip()
+    ACTIVITY_SYNC_ENABLED = str(os.environ.get("MITM_ACTIVITY_SYNC") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     _init_log_dir()
     ctx.log.info(f"[CONFIG] LOCAL_API={LOCAL_API} LOCAL_MQTT={LOCAL_MQTT} LOCAL_WOOD={LOCAL_WOOD}")
     if LOCAL_SYNC_SECRET:
         ctx.log.info(f"[SYNC] protocol auth session sync enabled via {_sync_callback_url(LOCAL_API)}")
     else:
         ctx.log.warn("[SYNC] protocol auth session sync disabled: no sync secret configured")
+    if ACTIVITY_SYNC_ENABLED and LOCAL_SYNC_SECRET:
+        ctx.log.info(
+            f"[ACTIVITY] sending redirected-traffic summaries to the admin Activity panel via "
+            f"{_sync_callback_url(LOCAL_API, path=MITM_ACTIVITY_SYNC_PATH)}"
+        )
+    elif ACTIVITY_SYNC_ENABLED:
+        ctx.log.warn("[ACTIVITY] --activity-sync was set but no sync secret is configured; activity sync disabled")
 
 
 def _safe_body(content: bytes, content_type: str) -> str:
@@ -540,6 +562,49 @@ def _sync_protocol_user_data(user_data: dict[str, object]) -> None:
     )
 
 
+def _activity_entry(flow: http.HTTPFlow, *, rewritten: bool, rewrites: list[str] | None) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "time": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "host": flow.request.pretty_host,
+        "method": flow.request.method,
+        "path": flow.request.path,
+        "rewritten": bool(rewritten),
+    }
+    if rewrites:
+        entry["rewrites"] = list(rewrites)
+    entry["request_headers"] = dict(flow.request.headers)
+    entry["request_body"] = _safe_body(flow.request.content, flow.request.headers.get("content-type", ""))
+    if flow.response:
+        entry["status"] = flow.response.status_code
+        entry["response_headers"] = dict(flow.response.headers)
+        entry["response_body"] = _safe_body(flow.response.content, flow.response.headers.get("content-type", ""))
+    return entry
+
+
+def _sync_activity_entry(flow: http.HTTPFlow, *, rewritten: bool, rewrites: list[str] | None = None) -> None:
+    """Best-effort: send a copy of this flow to the admin Activity panel.
+
+    Only called for REWRITE_HOSTS (Roborock's own domains), never for
+    unrelated traffic that happens to pass through the same proxy. Never
+    lets a sync failure interrupt the actual MITM redirect/rewrite - this is
+    telemetry, not part of the redirect's own correctness.
+    """
+    if not ACTIVITY_SYNC_ENABLED or not LOCAL_SYNC_SECRET:
+        return
+    try:
+        entry = _activity_entry(flow, rewritten=rewritten, rewrites=rewrites)
+        sync_url, status, body = _post_sync_payload(
+            local_api=LOCAL_API,
+            sync_secret=LOCAL_SYNC_SECRET,
+            payload={"entries": [entry]},
+            path=MITM_ACTIVITY_SYNC_PATH,
+        )
+        if not 200 <= status < 300:
+            ctx.log.warn(f"[ACTIVITY] sync failed: {sync_url} - {_describe_sync_http_result(status, body)}")
+    except Exception as exc:  # noqa: BLE001
+        ctx.log.warn(f"[ACTIVITY] sync error: {exc}")
+
+
 def response(flow: http.HTTPFlow) -> None:
     """Rewrite cloud endpoint references in JSON payloads."""
     host = flow.request.pretty_host
@@ -551,6 +616,7 @@ def response(flow: http.HTTPFlow) -> None:
 
     if not flow.response or not flow.response.content:
         _log_flow(flow, rewritten=False)
+        _sync_activity_entry(flow, rewritten=False)
         return
 
     content_type = flow.response.headers.get("content-type", "")
@@ -567,9 +633,11 @@ def response(flow: http.HTTPFlow) -> None:
                         ctx.log.error(f"[SYNC] blocking login response: {exc}")
                         _write_sync_failure_response(flow, exc)
                         _log_flow(flow, rewritten=False)
+                        _sync_activity_entry(flow, rewritten=False)
                         return
             if _rewrite_json(body, rewrites):
                 _log_flow(flow, rewritten=True, rewrites=rewrites)
+                _sync_activity_entry(flow, rewritten=True, rewrites=rewrites)
                 flow.response.content = json.dumps(body).encode("utf-8")
                 ctx.log.info(f"[REWRITE] {host}{flow.request.path} - {len(rewrites)} substitutions")
                 return
@@ -577,6 +645,7 @@ def response(flow: http.HTTPFlow) -> None:
             pass
 
     _log_flow(flow, rewritten=False)
+    _sync_activity_entry(flow, rewritten=False)
 
 
 def _looks_like_json(content: bytes) -> bool:
@@ -687,6 +756,16 @@ if __name__ == "__main__":
         default=None,
         help="Optional admin.session_secret for protocol auth sync. Defaults to ./config.toml beside this script when available; pass explicitly when the server uses a different active config.",
     )
+    parser.add_argument(
+        "--activity-sync",
+        action="store_true",
+        help=(
+            "Send a copy of each redirected Roborock request/response to the admin dashboard's "
+            "Activity panel (off by default). Requires --sync-secret / config.toml admin.session_secret. "
+            "The Activity panel redacts these by default; set ROBOROCK_SERVER_ACTIVITY_RAW=1 on the "
+            "server for full detail."
+        ),
+    )
     parser.add_argument("--mode", default="wireguard", help="mitmweb proxy mode (default: wireguard)")
     parser.add_argument("--listen-port", default=None, help="mitmweb listen port")
 
@@ -733,6 +812,7 @@ if __name__ == "__main__":
     env["MITM_LOCAL_MQTT"] = local_mqtt
     env["MITM_LOCAL_WOOD"] = local_wood
     env["MITM_LOCAL_SYNC_SECRET"] = local_sync_secret
+    env["MITM_ACTIVITY_SYNC"] = "1" if args.activity_sync else ""
 
     if local_sync_secret:
         try:
@@ -743,6 +823,16 @@ if __name__ == "__main__":
         print(f"[SYNC] verified protocol auth sync endpoint via {_sync_callback_url(local_api_http)}")
     else:
         print("[SYNC] protocol auth session sync disabled: no sync secret configured")
+
+    if args.activity_sync and not local_sync_secret:
+        print(
+            "[ACTIVITY] --activity-sync was set but no sync secret is configured "
+            "(pass --sync-secret or run beside a config.toml with admin.session_secret); "
+            "activity sync will stay disabled.",
+            file=sys.stderr,
+        )
+    elif args.activity_sync:
+        print(f"[ACTIVITY] sending redirected-traffic summaries via {_sync_callback_url(local_api_http, path=MITM_ACTIVITY_SYNC_PATH)}")
 
     cmd = [
         "uvx",

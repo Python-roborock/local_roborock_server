@@ -1,0 +1,78 @@
+<section id="schedulePanel" class="container" aria-labelledby="schedulesTitle">
+  <div class="section-heading">
+    <h4 id="schedulesTitle" class="header rls-heading">Schedules</h4>
+    <button id="refreshSchedules" class="button secondary btn-flat waves-effect" type="button">Refresh schedules</button>
+  </div>
+  <p id="scheduleSummary" class="helper" role="status">Reading schedules…</p>
+  <p id="scheduleError" class="message error" role="status" hidden></p>
+  <p class="helper schedule-intro">Select a schedule to edit. Enable schedule saves immediately.</p>
+  <div id="scheduleList" class="schedule-list" aria-busy="true"><div class="empty-state"><h3>Loading schedules</h3><p class="muted">Reading saved jobs from the local server…</p></div></div>
+</section>
+<section id="credentialPanel" class="container" aria-labelledby="credentialsTitle">
+  <h4 id="credentialsTitle" class="header rls-heading">MQTT recovery</h4>
+  <p class="helper">Clear this vacuum’s saved server login before re-pairing it. This disconnects the vacuum and keeps its inventory entry, keys, schedules, and app logins.</p>
+  <div id="credentialList" class="session-list" aria-busy="true">Loading credentials…</div>
+</section>
+<template id="scheduleTemplate">
+    <article class="schedule-card">
+      <div class="schedule-heading">
+        <button class="schedule-open" data-field="openEditor" type="button">
+          <span class="schedule-time-row"><span class="schedule-time" data-field="title"></span><span class="schedule-repeat" data-field="recurrence"></span></span>
+          <span class="schedule-task-row"><span data-field="taskSummary"></span><span data-field="modeSummary"></span></span>
+        </button>
+        <label class="schedule-enabled"><input name="enabled" type="checkbox" role="switch"><span>Enable schedule</span></label>
+      </div>
+      <p class="message" data-field="toggleResult" role="status" hidden></p>
+      <p class="message" data-field="savedResult" role="status" hidden></p>
+      <dialog class="schedule-dialog" aria-label="Edit schedule">
+        <div class="schedule-dialog-heading"><h3>Scheduling</h3><button class="button secondary btn-flat waves-effect" data-field="closeEditor" type="button">Close</button></div>
+        <form class="schedule-form">
+          <fieldset class="schedule-fields">
+            <legend class="sr-only">Schedule settings</legend>
+            <div class="schedule-time-settings">
+              <label class="schedule-setting-row" data-field="timeField"><span>Start time</span><input name="time" type="time" step="60" aria-label="Start time"></label>
+              <label class="schedule-setting-row"><span>Repeat</span><select class="browser-default" name="mode" aria-label="Repeat"><option value="once">Once</option><option value="everyday">Every day</option><option value="weekdays">Weekdays</option><option value="weekends">Weekends</option><option value="custom">Custom days</option><option value="cron">Advanced schedule</option></select></label>
+            </div>
+            <p class="helper" data-field="onceHelp" hidden>Runs at the next selected start time, then turns off.</p>
+            <fieldset class="schedule-days" data-field="daysField"><legend>Repeat on</legend><div>
+              <label><input name="day" type="checkbox" value="1"><span>Mon</span></label><label><input name="day" type="checkbox" value="2"><span>Tue</span></label><label><input name="day" type="checkbox" value="3"><span>Wed</span></label><label><input name="day" type="checkbox" value="4"><span>Thu</span></label><label><input name="day" type="checkbox" value="5"><span>Fri</span></label><label><input name="day" type="checkbox" value="6"><span>Sat</span></label><label><input name="day" type="checkbox" value="0"><span>Sun</span></label>
+            </div></fieldset>
+            <label class="field" data-field="cronField" hidden>Schedule expression<input name="cron" type="text" autocomplete="off" spellcheck="false" placeholder="30 9 * * 1-5"><span class="helper">Advanced five-field cron expression. Your saved expression is preserved until you change it.</span></label>
+            <section class="schedule-cleaning" aria-label="Cleaning task">
+              <h4>Task</h4>
+              <fieldset class="cleaning-fields">
+                <legend class="sr-only">Cleaning choices</legend>
+                <label class="schedule-setting-row"><span>Map</span><select class="browser-default" name="map" aria-label="Map"></select></label>
+                <fieldset class="schedule-area"><legend class="sr-only">Clean area</legend><div class="schedule-segments">
+                  <label><input name="area" type="radio" value="whole"><span>Full</span></label><label><input name="area" type="radio" value="rooms"><span>Rooms</span></label><label data-field="keepArea" hidden><input name="area" type="radio" value="keep"><span>Saved selection</span></label>
+                </div></fieldset>
+                <label class="schedule-setting-row"><span>Cleaning mode</span><select class="browser-default" name="cleaning_mode" aria-label="Cleaning mode"><option value="vacuum">Vacuum</option><option value="vac_mop">Vac &amp; mop</option><option value="mop">Mop</option><option value="custom">Custom</option><option value="keep" hidden>Saved mode</option></select></label>
+                <p class="helper" data-field="customHelp" hidden>Uses the cleaning preferences saved for each room on the vacuum.</p>
+                <fieldset class="schedule-rooms"><legend>Choose rooms</legend><div data-field="roomList" class="room-list"></div></fieldset>
+                <p class="helper" data-field="selectionCount"></p>
+                <div class="schedule-room-tools"><p class="helper" data-field="roomStatus" role="status"></p><button class="button secondary btn-flat waves-effect" data-field="refreshRooms" type="button">Refresh rooms</button></div>
+                <p class="helper" data-field="mapHelp"></p>
+                <button class="button secondary btn-flat waves-effect" data-field="loadMap" type="button" hidden>Load map and rooms</button>
+                <p class="helper" data-field="roomReview" hidden>The room list changed. Review your selection before saving.</p>
+                <button class="button secondary btn-flat waves-effect" data-field="confirmRooms" type="button" hidden>Use this room selection</button>
+                <div class="schedule-cleaning-grid cleaning-options">
+                  <label class="field" data-field="suctionField">Suction<select class="browser-default" name="fan_power" aria-label="Suction"></select></label>
+                  <label class="field" data-field="waterField">Water level<select class="browser-default" name="water_box_mode" aria-label="Water level"></select></label>
+                  <label class="field" data-field="mopField">Mopping route<select class="browser-default" name="mop_mode" aria-label="Mopping route"></select></label>
+                  <label class="field">Cleaning passes<select class="browser-default" name="repeat" aria-label="Cleaning passes"></select></label>
+                </div>
+              </fieldset>
+              <p class="helper" data-field="cleaningHelp"></p>
+            </section>
+            <details class="schedule-details"><summary>More settings</summary>
+              <label class="field">Timezone<input name="zone" type="text" autocomplete="off" spellcheck="false" required placeholder="America/Los_Angeles"></label>
+              <div data-field="extraOptions"><dl class="detail-list" data-field="extraList"></dl><p class="helper">These saved model-specific options are preserved. Change them in LocalRock if your vacuum supports them.</p></div>
+              <p class="schedule-next" data-field="next"></p><p class="helper" data-field="enabledHelp"></p><p class="helper" data-field="timerState"></p>
+            </details>
+          </fieldset>
+          <p class="message" data-field="result" role="status" hidden></p>
+          <div class="save-row"><span data-field="editStatus" class="subtle">Saved</span><div class="schedule-actions"><button data-field="discard" class="button secondary btn-flat waves-effect" type="button" disabled>Discard edits and reload</button><button data-field="save" class="button primary btn waves-effect" type="submit" disabled>Save schedule</button></div></div>
+        </form>
+      </dialog>
+    </article>
+  </template><template id="credentialTemplate"><article class="session-card"><div class="session-copy"><h4 data-field="name"></h4><p data-field="detail" class="helper"></p><p data-field="result" class="message" role="status" hidden></p></div><button class="button danger btn-flat waves-effect" type="button">Clear MQTT credentials</button></article></template>

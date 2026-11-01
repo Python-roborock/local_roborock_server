@@ -888,6 +888,7 @@ def test_handle_client_traces_packets_already_buffered_before_relay(tmp_path, mo
     assert traced == [
         ("1", "c2b", connect_packet),
         ("1", "c2b", b"\xc0\x00"),
+        ("1", "cleanup", b""),
     ]
 
 

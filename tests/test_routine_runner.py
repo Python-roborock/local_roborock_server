@@ -9,7 +9,14 @@ from roborock.data import StatusV2
 from roborock.exceptions import RoborockException
 from roborock_local_server.bundled_backend.shared.context import ServerContext
 import roborock_local_server.bundled_backend.shared.routine_runner as routine_runner_module
-from roborock_local_server.bundled_backend.shared.routine_runner import RoutineRunner, parse_scene_steps
+from roborock_local_server.bundled_backend.shared.routine_runner import (
+    SCHEDULE_APP_START,
+    SCHEDULE_SERVER_START,
+    RoutineRunner,
+    RoutineStep,
+    RoutineExecutionError,
+    parse_scene_steps,
+)
 from roborock.roborock_typing import RoborockCommand
 
 
@@ -711,3 +718,225 @@ def test_wait_for_dock_settle_timeout_raises(monkeypatch) -> None:
             await client.wait_for_dock_settle(initial_delay_seconds=0.0)
 
     asyncio.run(exercise())
+
+
+def _schedule_step(**entry) -> RoutineStep:
+    return RoutineStep(step_id=1, name="Schedule 1", method=SCHEDULE_APP_START, params=[entry], finish_dp_ids=())
+
+
+def _run_schedule_step(tmp_path: Path, monkeypatch, step: RoutineStep, *, refuse_single_start_with: dict | None):
+    """Run [step] against a fake robot; returns every command it was sent, refused ones included."""
+    sent_commands: list[tuple[RoborockCommand, object]] = []
+
+    class FakeRoutineClient:
+        def __init__(self, context, device, logger) -> None:
+            _ = context, device, logger
+
+        async def connect(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+        async def send_command(self, command, params=None):
+            sent_commands.append((command, params))
+            if command == routine_runner_module.SchedulerCommand.GET_SERVER_TIMER:
+                return [[step.params[0]["name"], "on", 1]]
+            if refuse_single_start_with is not None and command == RoborockCommand.APP_START and params is not None:
+                raise RoborockException(refuse_single_start_with)
+            return ["ok"]
+
+        async def wait_for_step_complete(self) -> None:
+            return None
+
+    monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+    scene = _scene(scene_id=1, device_id="6HL2zfniaoYYV01CkVuhkO", name="Schedule 1")
+    runner = RoutineRunner(_test_context(tmp_path))
+    return sent_commands, asyncio.run(runner._run_steps(scene=scene, steps=[step], sync_scene_tids=False))
+
+
+def test_a_schedule_start_is_one_app_start_carrying_the_whole_entry(tmp_path: Path, monkeypatch) -> None:
+    # A robot accepted app_start with all of these together and applied the modes (confirmed live).
+    step = _schedule_step(fan_power=104, water_box_mode=203, mop_mode=300)
+
+    sent, _ = _run_schedule_step(tmp_path, monkeypatch, step, refuse_single_start_with=None)
+
+    assert sent == [
+        (
+            RoborockCommand.APP_START,
+            [{"fan_power": 104, "water_box_mode": 203, "mop_mode": 300,
+              "repeat": 1, "segments": "0", "clean_mop": 1, "map_index": -1,
+              # "source" 3 is what makes the robot's history say "Schedule" instead of "App".
+              "source": 3}],
+        )
+    ]
+
+
+def test_a_schedule_start_falls_back_to_separate_commands_on_a_param_error(tmp_path: Path, monkeypatch) -> None:
+    # A route the robot's model lacks makes it answer -10005 "Param error", and a refused command
+    # changes nothing, so the same settings go out the longer way.
+    step = _schedule_step(fan_power=104, water_box_mode=203, mop_mode=300)
+
+    sent, _ = _run_schedule_step(
+        tmp_path, monkeypatch, step, refuse_single_start_with={"code": -10005, "message": "Param error"}
+    )
+
+    assert [command for command, _ in sent] == [
+        RoborockCommand.APP_START,
+        RoborockCommand.SET_CUSTOM_MODE,
+        RoborockCommand.SET_WATER_BOX_CUSTOM_MODE,
+        RoborockCommand.SET_MOP_MODE,
+        RoborockCommand.SET_CLEAN_REPEAT_TIMES,
+        RoborockCommand.APP_START,
+    ]
+    assert sent[-1] == (RoborockCommand.APP_START, None)
+
+
+def test_a_schedule_start_does_not_fall_back_on_any_other_refusal(tmp_path: Path, monkeypatch) -> None:
+    step = _schedule_step(fan_power=104)
+
+    with pytest.raises(RoborockException):
+        _run_schedule_step(
+            tmp_path, monkeypatch, step, refuse_single_start_with={"code": -10001, "message": "Busy"}
+        )
+
+
+def _run_schedule_step_refusing(tmp_path: Path, monkeypatch, step: RoutineStep, error: dict):
+    """Like _run_schedule_step, but the robot refuses server_scheduled_start and accepts the rest."""
+    sent_commands: list[tuple[object, object]] = []
+
+    class FakeRoutineClient:
+        def __init__(self, context, device, logger) -> None:
+            _ = context, device, logger
+
+        async def connect(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+        async def send_command(self, command, params=None):
+            sent_commands.append((command, params))
+            if command == routine_runner_module.SchedulerCommand.GET_SERVER_TIMER:
+                return [[step.params[0]["name"], "on", 1]]
+            if command == routine_runner_module.SchedulerCommand.SERVER_SCHEDULED_START:
+                raise RoborockException(error)
+            return ["ok"]
+
+        async def wait_for_step_complete(self) -> None:
+            return None
+
+    monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+    scene = _scene(scene_id=1, device_id="6HL2zfniaoYYV01CkVuhkO", name="Schedule 1")
+    runner = RoutineRunner(_test_context(tmp_path))
+    with pytest.raises(RoborockException):
+        asyncio.run(runner._run_steps(scene=scene, steps=[step], sync_scene_tids=False))
+    return sent_commands
+
+
+def _server_start_step(**entry) -> RoutineStep:
+    return RoutineStep(step_id=1, name="Schedule 1", method=SCHEDULE_SERVER_START, params=[entry], finish_dp_ids=())
+
+
+def test_a_server_start_asks_the_robot_to_run_the_schedule_with_its_whole_entry(tmp_path: Path, monkeypatch) -> None:
+    # Sent exactly as the cloud job's settings entry, "name" (the robot-side timer id) included;
+    # confirmed live to start a clean the robot records as "Schedules | Rooms".
+    step = _server_start_step(
+        repeat=1, water_box_mode=202, segments="16,17", fan_power=102, mop_mode=300,
+        clean_mop=1, map_index=0, name="1792336598179", clean_order_mode=0,
+        mop_template_id=42, future_model_option={"mode": 7},
+    )
+
+    sent, _ = _run_schedule_step(tmp_path, monkeypatch, step, refuse_single_start_with=None)
+
+    assert [command for command, _ in sent] == [
+        routine_runner_module.SchedulerCommand.GET_SERVER_TIMER,
+        routine_runner_module.SchedulerCommand.SERVER_SCHEDULED_START,
+    ]
+    assert sent[1][1] == [
+        {"repeat": 1, "water_box_mode": 202, "segments": "16,17", "fan_power": 102, "mop_mode": 300,
+         "clean_mop": 1, "map_index": 0, "name": "1792336598179", "clean_order_mode": 0,
+         "mop_template_id": 42, "future_model_option": {"mode": 7}}
+    ]
+
+
+@pytest.mark.parametrize("segments", ["16,17", "0"])
+@pytest.mark.parametrize("code", [-10005, -10003, -10007])
+def test_a_refused_server_start_never_falls_back_or_retries(tmp_path: Path, monkeypatch, segments, code) -> None:
+    # "Invalid timer" (the robot no longer holds that timer) is a -10005 like any bad parameter.
+    step = _server_start_step(fan_power=102, water_box_mode=202, segments=segments, name="gone")
+    sent = _run_schedule_step_refusing(tmp_path, monkeypatch, step, {"code": code, "message": "Refused"})
+
+    commands = [command for command, _ in sent]
+    assert commands == [routine_runner_module.SchedulerCommand.GET_SERVER_TIMER,
+                        routine_runner_module.SchedulerCommand.SERVER_SCHEDULED_START]
+
+
+@pytest.mark.parametrize("timers", [[], [["timer", "off", 0]], [["different", "on", 1]],
+                                   [["timer", "on", 1], ["timer", "off", 0]]])
+def test_a_native_schedule_requires_one_enabled_robot_timer(
+    tmp_path: Path, monkeypatch, timers
+) -> None:
+    sent = []
+    class Client:
+        def __init__(self, *args): pass
+        async def connect(self): pass
+        async def close(self): pass
+        async def send_command(self, command, params=None):
+            sent.append(command)
+            return timers
+    monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", Client)
+    runner = RoutineRunner(_test_context(tmp_path))
+    scene = _scene(scene_id=1, device_id="6HL2zfniaoYYV01CkVuhkO", name="Schedule 1")
+    asyncio.run(runner._run_steps(scene=scene, steps=[_server_start_step(name="timer")], sync_scene_tids=False))
+    assert sent == [routine_runner_module.SchedulerCommand.GET_SERVER_TIMER]
+
+
+def test_offline_timer_read_never_publishes_a_start(tmp_path, monkeypatch):
+    sent = []
+    closed = []
+    class Client:
+        def __init__(self, *args): pass
+        async def connect(self): pass
+        async def close(self): closed.append(True)
+        async def send_command(self, command, params=None):
+            sent.append(command)
+            raise RoutineExecutionError("timed out")
+    monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", Client)
+    runner = RoutineRunner(_test_context(tmp_path))
+    scene = _scene(scene_id=1, device_id="6HL2zfniaoYYV01CkVuhkO", name="Schedule 1")
+    with pytest.raises(RoutineExecutionError, match="timed out"):
+        asyncio.run(runner._run_steps(scene=scene, steps=[_server_start_step(name="timer")], sync_scene_tids=False))
+    assert sent == [routine_runner_module.SchedulerCommand.GET_SERVER_TIMER]
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("change", ["edit", "disable", "delete", "expire"])
+def test_dispatch_rechecks_job_and_deadline_after_waiting_for_the_robot(tmp_path, monkeypatch, change):
+    from datetime import datetime, timedelta, timezone
+    from shared import schedule_store
+    ctx = _test_context(tmp_path)
+    duid = "6HL2zfniaoYYV01CkVuhkO"
+    job = schedule_store.upsert_job(ctx, duid, job_id=1, cron="0 9 * * *", enabled=True,
+                                    param={"method": "server_scheduled_start", "params": [{"name": "timer"}]})
+    sent = []
+    class Client:
+        def __init__(self, *args): pass
+        async def connect(self): pass
+        async def close(self): pass
+        async def send_command(self, command, params=None):
+            sent.append(command)
+            if change == "edit":
+                schedule_store.upsert_job(ctx, duid, job_id=1, cron="0 10 * * *", enabled=True)
+            elif change == "disable":
+                schedule_store.set_enabled(ctx, duid, 1, False)
+            elif change == "delete":
+                schedule_store.delete_job(ctx, duid, 1)
+            return [["timer", "on", 1]]
+    monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", Client)
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=-1 if change == "expire" else 60)
+    runner = RoutineRunner(ctx)
+    asyncio.run(runner._run_steps(scene=_scene(scene_id=1, device_id=duid, name="Schedule 1"),
+                                  steps=[_server_start_step(name="timer")], sync_scene_tids=False,
+                                  schedule_job=job, schedule_deadline=deadline))
+    assert sent == [routine_runner_module.SchedulerCommand.GET_SERVER_TIMER]

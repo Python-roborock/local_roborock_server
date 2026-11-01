@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import secrets
+import tempfile
 import threading
 from typing import Any
 from urllib.parse import parse_qs
@@ -250,6 +252,7 @@ class RuntimeCredentialsStore:
             "local_key_source": _clean_str(raw.get("local_key_source") or raw.get("source")),
             "device_mqtt_usr": _clean_str(raw.get("device_mqtt_usr") or raw.get("mqtt_usr")),
             "device_mqtt_pass": _clean_str(raw.get("device_mqtt_pass") or raw.get("mqtt_pass") or raw.get("mqtt_password")),
+            "device_mqtt_reset_at": _clean_str(raw.get("device_mqtt_reset_at")),
             "updated_at": _clean_str(raw.get("updated_at")),
             "last_nc_at": _clean_str(raw.get("last_nc_at")),
             "last_mqtt_seen_at": _clean_str(raw.get("last_mqtt_seen_at")),
@@ -262,7 +265,38 @@ class RuntimeCredentialsStore:
         payload["updated_at"] = utcnow_iso()
         payload["devices"] = self.devices()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent,
+                                             prefix=f".{self.path.name}-", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(json.dumps(payload, indent=2) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+    def clear_device_mqtt_credentials(self, *, duid: str) -> dict[str, str]:
+        """Clear exactly one vacuum's MQTT login, retaining its identity and keys."""
+        with self._lock:
+            index = self._find_index_by_duid_locked(duid)
+            if index is None:
+                raise KeyError(duid)
+            original = self._devices[index]
+            device = dict(original)
+            device["device_mqtt_usr"] = ""
+            device["device_mqtt_pass"] = ""
+            device["device_mqtt_reset_at"] = utcnow_iso()
+            device["updated_at"] = device["device_mqtt_reset_at"]
+            self._devices[index] = device
+            try:
+                self._save_locked()
+            except OSError:
+                self._devices[index] = original
+                raise
+            return dict(device)
 
     def bootstrap_value(self, key: str, default: Any = "") -> Any:
         with self._lock:
@@ -357,6 +391,14 @@ class RuntimeCredentialsStore:
         secondary = self._devices[secondary_index]
         changed = False
 
+        # A merged DID-only record must not restore credentials cleared on the DUID.
+        reset_at = _pick_newer_iso(primary.get("device_mqtt_reset_at", ""), secondary.get("device_mqtt_reset_at", ""))
+        if reset_at:
+            source = primary if primary.get("device_mqtt_reset_at") == reset_at else secondary
+            for key in ("device_mqtt_usr", "device_mqtt_pass", "device_mqtt_reset_at"):
+                primary[key] = source.get(key, "")
+            changed = True
+
         for key in (
             "did",
             "duid",
@@ -368,6 +410,8 @@ class RuntimeCredentialsStore:
             "device_mqtt_usr",
             "device_mqtt_pass",
         ):
+            if reset_at and key in ("device_mqtt_usr", "device_mqtt_pass"):
+                continue
             if primary.get(key) or not secondary.get(key):
                 continue
             primary[key] = secondary[key]
@@ -464,6 +508,8 @@ class RuntimeCredentialsStore:
                 ("last_nc_at", normalized_last_nc_at),
                 ("last_mqtt_seen_at", normalized_last_mqtt_seen_at),
             ):
+                if device.get("device_mqtt_reset_at") and key in ("device_mqtt_usr", "device_mqtt_pass"):
+                    continue
                 if not value or device.get(key) == value:
                     continue
                 device[key] = value
@@ -662,6 +708,7 @@ class RuntimeCredentialsStore:
         duid: str = "",
         username: str,
         password: str,
+        expected_reset_at: str = "",
     ) -> dict[str, str] | None:
         normalized_did = _clean_str(did)
         normalized_duid = _clean_str(duid)
@@ -674,6 +721,8 @@ class RuntimeCredentialsStore:
             if index is None:
                 return None
             device = self._devices[index]
+            if device.get("device_mqtt_reset_at", "") != expected_reset_at:
+                return None
             existing_username = _clean_str(device.get("device_mqtt_usr"))
             existing_password = _clean_str(device.get("device_mqtt_pass"))
             if existing_username and existing_username != normalized_username:
