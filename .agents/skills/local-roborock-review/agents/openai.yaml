@@ -1,0 +1,4 @@
+interface:
+  display_name: "Local Roborock Review"
+  short_description: "Review local server contracts, state, and protocols"
+  default_prompt: "Use $local-roborock-review to review the current local_roborock_server changes for actionable regressions."
