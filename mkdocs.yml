@@ -61,6 +61,7 @@ nav:
     - Log Retention: logging.md
     - Known Limitations: known_limitations.md
     - Scene Validity Reports: scene_validity.md
+    - Voice Packs (Language): voice_packs.md
     - Tested Vacuums: tested_vacuums.md
     - Reverse Proxy: reverse_proxy.md
     - Custom MQTT: custom_mqtt.md
