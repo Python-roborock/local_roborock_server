@@ -102,11 +102,12 @@ def build(
     body_params: dict[str, list[str]],
     clean_path: str,
 ) -> dict[str, Any]:
-    did = ctx.extract_did(query_params, body_params)
+    did = ctx.extract_explicit_did(query_params, body_params)
     if not did and clean_path.startswith("/devices/"):
         parts = clean_path.strip("/").split("/")
         if len(parts) >= 2:
             did = parts[1]
+    did = did or ctx.duid
     pubkey = ctx.device_public_key(did) if did else None
     if pubkey is None:
         # No recovered key -> we cannot forge a valid grant; keep prior behaviour.
