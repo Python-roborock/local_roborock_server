@@ -7,9 +7,10 @@ readme = "README.md"
 authors = [{ name = "Luke Lashley" }]
 dependencies = [
   "aiohttp>=3.9,<4",
-  "cryptography>=42,<47",
+  "cryptography>=48.0.1,<49",
   "fastapi>=0.115,<1",
   "gmpy2>=2.3,<3",
+  "Pillow>=13,<14",
   "pycryptodome>=3.20,<4",
   "python-roborock==4.20.0",
   "python-multipart>=0.0.32,<0.1",
