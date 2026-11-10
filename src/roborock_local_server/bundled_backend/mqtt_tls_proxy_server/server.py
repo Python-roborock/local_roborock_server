@@ -25,6 +25,7 @@ from .command_handlers import RpcCommandRegistry
 
 class MqttTlsProxy:
     _MAX_FIRST_PACKET_BYTES = 1024 * 1024
+    _TLS_HANDSHAKE_TIMEOUT_SECONDS = 10.0
 
     def __init__(
         self,
@@ -863,6 +864,21 @@ class MqttTlsProxy:
             raw_conn.close()
             return None
 
+    def _accept_and_handle_client(
+        self,
+        raw_conn: socket.socket,
+        addr: tuple[str, int],
+        tls_ctx: ssl.SSLContext | None,
+    ) -> None:
+        # Runs on its own thread with a bounded handshake,
+        # so a client that stalls mid-handshake cannot block accept() for everyone else.
+        raw_conn.settimeout(self._TLS_HANDSHAKE_TIMEOUT_SECONDS)
+        client_conn = self._accept_client_connection(raw_conn=raw_conn, addr=addr, tls_ctx=tls_ctx)
+        if client_conn is None:
+            return
+        client_conn.settimeout(None)
+        self._handle_client(client_conn, addr)
+
     def _run(self) -> None:
         tls_ctx = self._build_tls_context() if self.tls_enabled else None
 
@@ -883,10 +899,11 @@ class MqttTlsProxy:
         while self._running:
             try:
                 raw_conn, addr = self._server_socket.accept()
-                client_conn = self._accept_client_connection(raw_conn=raw_conn, addr=addr, tls_ctx=tls_ctx)
-                if client_conn is None:
-                    continue
-                threading.Thread(target=self._handle_client, args=(client_conn, addr), daemon=True).start()
+                threading.Thread(
+                    target=self._accept_and_handle_client,
+                    args=(raw_conn, addr, tls_ctx),
+                    daemon=True,
+                ).start()
             except OSError as exc:
                 if not self._running:
                     break
