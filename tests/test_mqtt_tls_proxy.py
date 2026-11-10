@@ -1,11 +1,16 @@
 import json
 import logging
 import socket
+import ssl
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 import pytest
 
 from roborock_local_server.backend import MqttTlsProxy
@@ -1103,3 +1108,79 @@ def test_onboarding_candidate_from_trusted_proxy_still_requires_region_and_nc(tm
     assert authorized is False
     assert reason == "invalid_mqtt_credentials"
     assert candidate is None
+
+
+def _write_self_signed_cert(cert_file: Path, key_file: Path) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "mqtt.example.com")])
+    now = datetime.now(timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=1))
+        .sign(private_key=private_key, algorithm=hashes.SHA256())
+    )
+    cert_file.write_bytes(certificate.public_bytes(encoding=serialization.Encoding.PEM))
+    key_file.write_bytes(
+        private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+@pytest.fixture
+def running_tls_proxy(tmp_path):
+    cert_file = tmp_path / "fullchain.pem"
+    key_file = tmp_path / "privkey.pem"
+    _write_self_signed_cert(cert_file, key_file)
+    proxy = MqttTlsProxy(
+        cert_file=cert_file,
+        key_file=key_file,
+        listen_host="127.0.0.1",
+        listen_port=_free_port(),
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+    )
+    proxy._TLS_HANDSHAKE_TIMEOUT_SECONDS = 0.5
+    proxy.start()
+    deadline = time.monotonic() + 5
+    while not proxy._running and time.monotonic() < deadline:
+        time.sleep(0.01)
+    yield proxy
+    proxy.stop()
+
+
+def _tls_handshake(port: int) -> None:
+    client_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client_ctx.check_hostname = False
+    client_ctx.verify_mode = ssl.CERT_NONE
+    with socket.create_connection(("127.0.0.1", port), timeout=2) as raw:
+        with client_ctx.wrap_socket(raw, server_hostname="mqtt.example.com"):
+            pass
+
+
+def test_stalled_tls_handshake_does_not_block_new_connections(running_tls_proxy) -> None:
+    with socket.create_connection(("127.0.0.1", running_tls_proxy.listen_port), timeout=2):
+        time.sleep(0.1)
+
+        _tls_handshake(running_tls_proxy.listen_port)
+
+
+def test_stalled_tls_handshake_is_closed_after_timeout(running_tls_proxy) -> None:
+    with socket.create_connection(("127.0.0.1", running_tls_proxy.listen_port), timeout=5) as stalled:
+        assert stalled.recv(1) == b""
