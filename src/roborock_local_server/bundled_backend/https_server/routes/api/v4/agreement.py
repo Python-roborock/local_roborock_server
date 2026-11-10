@@ -6,7 +6,7 @@ from shared.context import ServerContext
 
 from ...auth.service import ok
 
-_AGREEMENT_LATEST_DATA = {
+AGREEMENT_LATEST_DATA = {
     "userAgreement": {
         "version": "16.0",
         "langUrl": {
@@ -60,4 +60,4 @@ def build(
     _body_params: dict[str, list[str]],
     _clean_path: str,
 ) -> dict[str, Any]:
-    return ok(_AGREEMENT_LATEST_DATA)
+    return ok(AGREEMENT_LATEST_DATA)
