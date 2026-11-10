@@ -15,6 +15,8 @@ from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory, write_in
 
 from .routes.api.v1.agreement import build_check_app_agreement as _build_check_app_agreement_v1
 from .routes.api.v1.agreement import match_check_app_agreement as _match_check_app_agreement_v1
+from .routes.api.v1.agreement import build_product_agreement_and_policy as _build_product_agreement_and_policy_v1
+from .routes.api.v1.agreement import match_product_agreement_and_policy as _match_product_agreement_and_policy_v1
 from .routes.api.v1.appfeatureplugin import build as _build_app_feature_plugin
 from .routes.api.v1.appfeatureplugin import match as _match_app_feature_plugin
 from .routes.api.v1.appconfig import build as _build_app_config_v1
@@ -574,6 +576,11 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("country_list", _match_country_list_v1, _build_country_list_v1),
         EndpointRule("agreement_latest_v4", _match_agreement_latest_v4, _build_agreement_latest_v4),
         EndpointRule("check_app_agreement_v1", _match_check_app_agreement_v1, _build_check_app_agreement_v1),
+        EndpointRule(
+            "product_agreement_and_policy_v1",
+            _match_product_agreement_and_policy_v1,
+            _build_product_agreement_and_policy_v1,
+        ),
         EndpointRule("get_home_detail", _match_get_home_detail_v1, _build_get_home_detail_v1),
         EndpointRule("user_info", _match_user_info_v1, _build_user_info_v1),
         EndpointRule("app_config", _match_app_config_v1, _build_app_config_v1),
