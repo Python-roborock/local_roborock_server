@@ -82,8 +82,9 @@ def build_product_agreement_and_policy(
     _body_params: dict[str, list[str]],
     _clean_path: str,
 ) -> dict[str, Any]:
-    # AgreementAndPrivacyInfo. The device plugin passes userAgreement.langUrl
-    # and privacyProtocol.langUrl to the native openPrivacyLicense method,
-    # which throws on null arguments. React Native swallows the exception and
-    # the callback never fires, so the map page stays on "Loading map".
+    # AgreementAndPrivacyInfo.
+    # The device plugin passes userAgreement.langUrl and privacyProtocol.langUrl to the native openPrivacyLicense method,
+    # which throws on null arguments.
+    # React Native swallows the exception and the callback never fires,
+    # so the map page stays on "Loading map".
     return ok({name: AGREEMENT_LATEST_DATA[name] for name in ("userAgreement", "privacyProtocol")})
