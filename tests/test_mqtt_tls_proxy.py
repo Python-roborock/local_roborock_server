@@ -1141,28 +1141,35 @@ def _free_port() -> int:
 
 
 @pytest.fixture
-def running_tls_proxy(tmp_path):
+def start_tls_proxy(tmp_path):
     cert_file = tmp_path / "fullchain.pem"
     key_file = tmp_path / "privkey.pem"
     _write_self_signed_cert(cert_file, key_file)
-    proxy = MqttTlsProxy(
-        cert_file=cert_file,
-        key_file=key_file,
-        listen_host="127.0.0.1",
-        listen_port=_free_port(),
-        backend_host="127.0.0.1",
-        backend_port=1883,
-        localkey="test-local-key",
-        logger=logging.getLogger("test.mqtt_tls_proxy"),
-        decoded_jsonl=tmp_path / "decoded.jsonl",
-    )
-    proxy._TLS_HANDSHAKE_TIMEOUT_SECONDS = 0.5
-    proxy.start()
-    deadline = time.monotonic() + 5
-    while not proxy._running and time.monotonic() < deadline:
-        time.sleep(0.01)
-    yield proxy
-    proxy.stop()
+    started: list[MqttTlsProxy] = []
+
+    def start(handshake_timeout_seconds: float) -> MqttTlsProxy:
+        proxy = MqttTlsProxy(
+            cert_file=cert_file,
+            key_file=key_file,
+            listen_host="127.0.0.1",
+            listen_port=_free_port(),
+            backend_host="127.0.0.1",
+            backend_port=1883,
+            localkey="test-local-key",
+            logger=logging.getLogger("test.mqtt_tls_proxy"),
+            decoded_jsonl=tmp_path / "decoded.jsonl",
+        )
+        proxy._TLS_HANDSHAKE_TIMEOUT_SECONDS = handshake_timeout_seconds
+        proxy.start()
+        started.append(proxy)
+        deadline = time.monotonic() + 5
+        while not proxy._running and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return proxy
+
+    yield start
+    for proxy in started:
+        proxy.stop()
 
 
 def _tls_handshake(port: int) -> None:
@@ -1174,13 +1181,17 @@ def _tls_handshake(port: int) -> None:
             pass
 
 
-def test_stalled_tls_handshake_does_not_block_new_connections(running_tls_proxy) -> None:
-    with socket.create_connection(("127.0.0.1", running_tls_proxy.listen_port), timeout=2):
+def test_stalled_tls_handshake_does_not_block_new_connections(start_tls_proxy) -> None:
+    # The stalled client must outlast the healthy client's 2 s deadline,
+    # otherwise serialized handshakes would pass once the stall times out.
+    proxy = start_tls_proxy(handshake_timeout_seconds=10)
+    with socket.create_connection(("127.0.0.1", proxy.listen_port), timeout=2):
         time.sleep(0.1)
 
-        _tls_handshake(running_tls_proxy.listen_port)
+        _tls_handshake(proxy.listen_port)
 
 
-def test_stalled_tls_handshake_is_closed_after_timeout(running_tls_proxy) -> None:
-    with socket.create_connection(("127.0.0.1", running_tls_proxy.listen_port), timeout=5) as stalled:
+def test_stalled_tls_handshake_is_closed_after_timeout(start_tls_proxy) -> None:
+    proxy = start_tls_proxy(handshake_timeout_seconds=0.5)
+    with socket.create_connection(("127.0.0.1", proxy.listen_port), timeout=5) as stalled:
         assert stalled.recv(1) == b""
