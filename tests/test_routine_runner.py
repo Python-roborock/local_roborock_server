@@ -9,7 +9,12 @@ from roborock.data import StatusV2
 from roborock.exceptions import RoborockException
 from roborock_local_server.bundled_backend.shared.context import ServerContext
 import roborock_local_server.bundled_backend.shared.routine_runner as routine_runner_module
-from roborock_local_server.bundled_backend.shared.routine_runner import RoutineRunner, parse_scene_steps
+from roborock_local_server.bundled_backend.shared.routine_runner import (
+    RoutineRunner,
+    RoutineStep,
+    commands_for_step,
+    parse_scene_steps,
+)
 from roborock.roborock_typing import RoborockCommand
 
 
@@ -711,3 +716,81 @@ def test_wait_for_dock_settle_timeout_raises(monkeypatch) -> None:
             await client.wait_for_dock_settle(initial_delay_seconds=0.0)
 
     asyncio.run(exercise())
+
+
+# ---------------------------------------------------------------------------
+# settings command tests
+# ---------------------------------------------------------------------------
+
+
+def test_segment_step_with_full_motor_settings_uses_set_clean_motor_mode() -> None:
+    # Newer firmware rejects set_custom_mode / set_mop_mode with -10005 while in
+    # SmartPlan mode, so all three settings must be sent in one command.
+    step = RoutineStep(
+        step_id=1,
+        name="",
+        method="do_scenes_segments",
+        params={
+            "data": [
+                {
+                    "tid": "1767537481007",
+                    "segs": [{"sid": 21}],
+                    "fan_power": 102,
+                    "water_box_mode": 200,
+                    "mop_mode": 300,
+                    "mop_template_id": 300,
+                    "repeat": 1,
+                }
+            ]
+        },
+        finish_dp_ids=(),
+    )
+
+    commands = [(command.command, command.params) for command in commands_for_step(step)]
+
+    assert commands == [
+        (
+            RoborockCommand.SET_CLEAN_MOTOR_MODE,
+            [{"fan_power": 102, "mop_mode": 300, "water_box_mode": 200}],
+        ),
+        (RoborockCommand.SET_MOP_TEMPLATE_ID, [300]),
+        (RoborockCommand.APP_SEGMENT_CLEAN, [{"segments": [21], "repeat": 1}]),
+    ]
+
+
+def test_app_start_step_with_full_motor_settings_uses_set_clean_motor_mode() -> None:
+    step = RoutineStep(
+        step_id=1,
+        name="",
+        method="do_scenes_app_start",
+        params=[{"fan_power": 105, "water_box_mode": 202, "mop_mode": 300, "repeat": 1}],
+        finish_dp_ids=(),
+    )
+
+    commands = [(command.command, command.params) for command in commands_for_step(step)]
+
+    assert commands == [
+        (
+            RoborockCommand.SET_CLEAN_MOTOR_MODE,
+            [{"fan_power": 105, "mop_mode": 300, "water_box_mode": 202}],
+        ),
+        (RoborockCommand.SET_CLEAN_REPEAT_TIMES, {"repeat": 1}),
+        (RoborockCommand.APP_START, None),
+    ]
+
+
+def test_step_with_only_fan_power_keeps_set_custom_mode() -> None:
+    step = RoutineStep(
+        step_id=1,
+        name="",
+        method="do_scenes_segments",
+        params={"data": [{"segs": [{"sid": 18}], "fan_power": 108, "repeat": 1}]},
+        finish_dp_ids=(),
+    )
+
+    commands = [(command.command, command.params) for command in commands_for_step(step)]
+
+    assert commands == [
+        (RoborockCommand.SET_CUSTOM_MODE, [108]),
+        (RoborockCommand.APP_SEGMENT_CLEAN, [{"segments": [18], "repeat": 1}]),
+    ]
