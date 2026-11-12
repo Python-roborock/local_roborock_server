@@ -182,11 +182,11 @@ curl -b jar https://your-server/admin/api/cloud/plugins
 
 The refresh reuses the login stored by the email-code sign-in and only replaces the plugin catalogs, with the product ids of every device on the account. The reply lists each plugin's version, API level and download URL. `GET /admin/api/cloud/plugins` shows what is stored now without asking the cloud.
 
+If the cloud rejects the stored login, or the snapshot predates this feature and has none, sign in again with the email code; that stores a login the refresh can use.
+
 ## Firmware Status for Every Robot
 
 `GET /admin/api/cloud/firmware` (signed in as admin, for example in a browser tab) asks the cloud about each robot on the account, including ones that are not paired to this server, and lists its model, the firmware the cloud last saw, and the available update. It uses the same stored login.
-
-If the cloud rejects the stored login, or the snapshot predates this feature and has none, sign in again with the email code; that stores a login the refresh can use.
 
 ---
 
