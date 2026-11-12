@@ -381,3 +381,47 @@ protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
 
     assert manager.ensure_certificate() is True
     assert called["value"] is True
+
+
+def test_provided_certificate_reports_change_only_after_files_are_replaced(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[network]
+stack_fqdn = "api-roborock.example.com"
+
+[broker]
+mode = "embedded"
+
+[storage]
+data_dir = "data"
+
+[tls]
+mode = "provided"
+cert_file = "certs/fullchain.pem"
+key_file = "certs/privkey.pem"
+
+[admin]
+password_hash = "pbkdf2_sha256$600000$abc$def"
+session_secret = "abcdefghijklmnopqrstuvwxyz123456"
+protocol_login_email = "user@example.com"
+protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.cert_file.parent.mkdir(parents=True, exist_ok=True)
+    _write_certificate(paths.cert_file, common_name="api-roborock.example.com", san_names=["api-roborock.example.com"])
+    paths.key_file.write_text("key-1", encoding="utf-8")
+    manager = CertificateManager(config=config, paths=paths)
+
+    assert manager.ensure_certificate() is False  # baseline at startup
+    assert manager.ensure_certificate() is False  # unchanged
+
+    _write_certificate(paths.cert_file, common_name="api-roborock.example.com", san_names=["api-roborock.example.com"])
+    paths.key_file.write_text("key-2-longer", encoding="utf-8")
+
+    assert manager.ensure_certificate() is True  # renewed externally
+    assert manager.ensure_certificate() is False  # change consumed
