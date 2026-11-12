@@ -176,11 +176,11 @@ The official app downloads each device's screens as plugins, and the server hand
 
 ```sh
 curl -c jar -X POST https://your-server/admin/api/login -H 'Content-Type: application/json' -d '{"password": "..."}'
-curl -b jar -X POST https://your-server/admin/api/cloud/refresh-plugins -H 'Content-Type: application/json' -d '{"type": 2}'
+curl -b jar -X POST https://your-server/admin/api/cloud/refresh-plugins
 curl -b jar https://your-server/admin/api/cloud/plugins
 ```
 
-The refresh reuses the login stored by the email-code sign-in and only replaces the plugin catalogs, with the product ids of every device on the account. `type` is the platform the cloud is asked for (2 by default). The reply lists each plugin's version, API level and download URL. `GET /admin/api/cloud/plugins` shows what is stored now without asking the cloud.
+The refresh reuses the login stored by the email-code sign-in and only replaces the plugin catalogs, with the product ids of every device on the account. The reply lists each plugin's version, API level and download URL. `GET /admin/api/cloud/plugins` shows what is stored now without asking the cloud.
 
 If the cloud rejects the stored login, or the snapshot predates this feature and has none, sign in again with the email code; that stores a login the refresh can use.
 

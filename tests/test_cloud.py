@@ -298,9 +298,9 @@ def _write_snapshot(manager: CloudImportManager, **overrides) -> None:
 
 
 def _patch_plugin_fetch(monkeypatch: pytest.MonkeyPatch, catalogs: dict, seen: dict | None = None) -> None:
-    async def fake_catalogs(api, user_data, home_data, *, plugin_type=2):
+    async def fake_catalogs(api, user_data, home_data):
         if seen is not None:
-            seen.update(token=user_data.token, plugin_type=plugin_type, device_identifier=api._device_identifier)
+            seen.update(token=user_data.token, device_identifier=api._device_identifier)
         return catalogs
 
     monkeypatch.setattr(cloud_module, "RoborockApiClient", _FakeRoborockApiClientV4)
@@ -314,9 +314,9 @@ def test_refresh_plugin_catalogs_replaces_only_the_catalogs(tmp_path, monkeypatc
     seen: dict = {}
     _patch_plugin_fetch(monkeypatch, _NEW_CATALOGS, seen)
 
-    result = asyncio.run(manager.refresh_plugin_catalogs(plugin_type=1))
+    result = asyncio.run(manager.refresh_plugin_catalogs())
 
-    assert seen == {"token": "stored-token", "plugin_type": 1, "device_identifier": "dev-9"}
+    assert seen == {"token": "stored-token", "device_identifier": "dev-9"}
     assert result["success"] is True
     assert result["plugins"]["plugins"] == [
         {"version": 7006, "url": "https://files.roborock.com/p.zip", "categoryId": 1, "category": "robot.vacuum.cleaner"}

@@ -488,13 +488,7 @@ def register_standalone_admin_routes(
     async def admin_cloud_refresh_plugins(request: Request) -> JSONResponse:
         supervisor._require_admin(request)
         try:
-            body = await request.json()
-        except json.JSONDecodeError:
-            body = {}
-        try:
-            result = await supervisor.cloud_manager.refresh_plugin_catalogs(
-                plugin_type=int((body or {}).get("type") or 2),
-            )
+            result = await supervisor.cloud_manager.refresh_plugin_catalogs()
         except Exception as exc:  # noqa: BLE001
             result = {"success": False, "step": "plugin_refresh_failed", "error": str(exc)}
         supervisor.runtime_state.record_cloud_request(result)

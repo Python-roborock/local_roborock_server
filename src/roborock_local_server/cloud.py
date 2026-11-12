@@ -34,7 +34,7 @@ from shared.inventory_io import atomic_write_inventory, inventory_transaction
 
 def summarize_plugin_catalogs(catalogs: dict[str, Any]) -> dict[str, Any]:
     """The plugin catalogs reduced to what picks a plugin: versions, levels and download URLs."""
-    keep = ("version", "apiLevel", "apilevel", "pluginLevel", "productid", "categoryId", "category", "moduleType", "url")
+    keep = ("version", "apiLevel", "apilevel", "pluginLevel", "productid", "categoryId", "category", "moduleType", "url", "id", "model")
     summary: dict[str, Any] = {"fetched_at_utc": catalogs.get("fetched_at_utc")}
     for name, catalog in catalogs.items():
         if not isinstance(catalog, dict):
@@ -163,7 +163,7 @@ class CloudImportManager:
         catalogs = web_cache.get("plugin_catalogs") if isinstance(web_cache, dict) else None
         return summarize_plugin_catalogs(catalogs) if isinstance(catalogs, dict) else {}
 
-    async def refresh_plugin_catalogs(self, *, plugin_type: int = 2) -> dict[str, Any]:
+    async def refresh_plugin_catalogs(self) -> dict[str, Any]:
         """Re-reads the plugin catalogs from the cloud with the login the snapshot already holds.
 
         Only the plugin catalogs in the snapshot change; the inventory is left alone. A rejected
@@ -186,7 +186,7 @@ class CloudImportManager:
                 setattr(api, "_device_identifier", str(meta["device_identifier"]))
             try:
                 home_data = await _fetch_cloud_home_data_with_api(api, user_data)
-                catalogs = await _fetch_plugin_catalogs(api, user_data, home_data, plugin_type=plugin_type)
+                catalogs = await _fetch_plugin_catalogs(api, user_data, home_data)
             except Exception as exc:  # noqa: BLE001
                 raise ValueError(
                     f"The cloud rejected the stored login ({exc}). Request a code and sign in again."
@@ -203,7 +203,7 @@ class CloudImportManager:
             snapshot["web_api_cache"] = web_cache
         web_cache["plugin_catalogs"] = _to_jsonable(catalogs)
         self.snapshot_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
-        return {"success": True, "step": "plugins_refreshed", "plugin_type": plugin_type, **summarize_plugin_catalogs(catalogs)}
+        return {"success": True, "step": "plugins_refreshed", **summarize_plugin_catalogs(catalogs)}
 
     async def submit_code(self, *, session_id: str, code: str) -> dict[str, Any]:
         normalized_session_id = session_id.strip()
