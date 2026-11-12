@@ -1602,3 +1602,37 @@ def test_create_room_returns_bare_id_in_result_and_object_in_data(tmp_path: Path
     assert body["data"]["id"] == body["result"]
     assert body["data"]["name"] == "Study"
     assert body["data"]["created"] is True
+
+
+def test_admin_plugin_catalog_endpoints_require_auth_and_report_the_snapshot(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    assert client.get("/admin/api/cloud/plugins").status_code == 401
+    assert client.post("/admin/api/cloud/refresh-plugins", json={}).status_code == 401
+
+    assert client.post("/admin/api/login", json={"password": "correct horse battery staple"}).status_code == 200
+    assert client.get("/admin/api/cloud/plugins").json() == {"success": True}
+
+    paths.cloud_snapshot_path.write_text(
+        json.dumps(
+            {
+                "web_api_cache": {
+                    "plugin_catalogs": {
+                        "appplugin": {"json": {"type": 2}, "data": [{"productid": 110, "version": 7006, "url": "https://files.roborock.com/a.zip"}]},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    stored = client.get("/admin/api/cloud/plugins").json()
+    assert stored["appplugin"]["plugins"] == [{"productid": 110, "version": 7006, "url": "https://files.roborock.com/a.zip"}]
+
+    refused = client.post("/admin/api/cloud/refresh-plugins", json={})
+    assert refused.status_code == 400
+    assert refused.json()["step"] == "plugin_refresh_failed"
+    assert "No cloud login" in refused.json()["error"]
