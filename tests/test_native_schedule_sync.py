@@ -163,6 +163,22 @@ class NativeCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(store.list_jobs(self.context, "robot")[0]["enabled"])
         self.assertEqual(self.robot.calls, ["connect", "get_server_timer", "close"])
 
+    async def test_a_read_that_times_out_is_quiet(self):
+        async def never_answers():
+            raise TimeoutError
+
+        self.robot.after_read = never_answers
+        with self.assertNoLogs(sync.__name__, level="WARNING"):
+            self.assertEqual(await self.coordinator.refresh("robot"), [])
+        self.assertEqual(self.robot.calls[-1], "close")
+        self.assertTrue(store.list_jobs(self.context, "robot")[0]["enabled"])
+
+    async def test_a_failure_saving_the_reconciliation_still_warns(self):
+        with patch.object(sync, "reconcile_native_enabled", side_effect=OSError("disk full")):
+            with self.assertLogs(sync.__name__, level="WARNING") as logs:
+                self.assertEqual(await self.coordinator.refresh("robot"), [])
+        self.assertIn("Could not save native schedule reconciliation", logs.output[0])
+
     async def test_later_native_write_invalidates_an_in_flight_read(self):
         async def later():
             self.coordinator.changed("robot")

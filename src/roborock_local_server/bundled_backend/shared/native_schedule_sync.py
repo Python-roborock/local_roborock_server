@@ -207,10 +207,16 @@ class NativeScheduleSync:
             explicit_enable = {name: intent[1] for name, intent in intents.items()}
             client = None
             try:
-                async with asyncio.timeout(15):
-                    client = _RoutineMqttClient(self.context, device, _LOGGER)
-                    await client.connect()
-                    states = timer_states(await client.send_command(TimerCommand.GET, []))
+                try:
+                    async with asyncio.timeout(15):
+                        client = _RoutineMqttClient(self.context, device, _LOGGER)
+                        await client.connect()
+                        states = timer_states(await client.send_command(TimerCommand.GET, []))
+                except Exception:
+                    # A robot that is offline or has not reconnected yet keeps its last saved state.
+                    # TimeoutError is an OSError, so it must not reach the save-failure warning below.
+                    _LOGGER.debug("Native schedule read unavailable for %s", duid, exc_info=True)
+                    return []
                 if self._generation.get(duid, 0) != generation:
                     # A newer native write overlapped the read. A later pass
                     # will confirm it; do not apply this older snapshot.
