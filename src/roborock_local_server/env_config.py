@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import sys
 import tomllib
 from typing import Mapping
 from urllib.parse import urlsplit
@@ -156,6 +157,11 @@ def _load_existing_admin_session_secret(config_path: Path) -> str:
     return secret if len(secret) >= 24 else ""
 
 
+# First line of a config.toml this module generated. While it is there the file follows the env vars: it is
+# re-rendered on every boot. Delete the line to take the file over by hand.
+MANAGED_MARKER = "# generated-from-env: rewritten from ROBOROCK_SERVER_* on every boot; delete this line to edit by hand"
+
+
 @dataclass(frozen=True)
 class SecretPaths:
     """Where env-supplied plaintext secrets get written, and the Docker-secret
@@ -285,6 +291,8 @@ def render_config_toml_from_env(
     include_admin = all(admin_fields_present)
 
     lines = [
+        MANAGED_MARKER,
+        "",
         "[network]",
         f"stack_fqdn = {_toml_string(stack_fqdn)}",
         f"listener_mode = {_toml_string(listener_mode)}",
@@ -371,6 +379,61 @@ def render_config_toml_from_env(
             ]
         )
     return "\n".join(lines), secrets_to_write
+
+
+def _admin_block(admin: Mapping[str, object]) -> str:
+    """An [admin] table written earlier (by the Setup Wizard), carried over unchanged."""
+    lines = ["", "[admin]"]
+    for key, value in admin.items():
+        if isinstance(value, bool):
+            lines.append(f"{key} = {_toml_bool(value)}")
+        elif isinstance(value, int):
+            lines.append(f"{key} = {value}")
+        else:
+            lines.append(f"{key} = {_toml_string(str(value))}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def refresh_config_from_env(
+    env: Mapping[str, str],
+    *,
+    config_path: Path,
+    secret_paths: SecretPaths = SecretPaths(),
+) -> bool:
+    """Re-renders a config.toml this module generated, so changed env vars take effect.
+
+    Only a file that still starts with MANAGED_MARKER is touched; a mounted, wizard-written or hand-edited
+    config never is. Credentials the Setup Wizard added are kept when the admin env vars are not set, and a
+    render that fails leaves the existing file alone. Returns True when the file was rewritten.
+    """
+    try:
+        current = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if not current.startswith("# generated-from-env") or not has_env_config(env):
+        return False
+    try:
+        rendered, secrets_to_write = render_config_toml_from_env(env, config_path=config_path, secret_paths=secret_paths)
+    except ValueError as exc:
+        print(f"Keeping the existing config.toml: the ROBOROCK_SERVER_* env vars no longer render ({exc}).", file=sys.stderr)
+        return False
+    if "\n[admin]\n" not in rendered:
+        try:
+            admin = tomllib.loads(current).get("admin")
+        except tomllib.TOMLDecodeError:
+            admin = None
+        if isinstance(admin, dict) and admin:
+            rendered += _admin_block(admin)
+    if rendered == current:
+        return False
+    config_path.write_text(rendered, encoding="utf-8")
+    for path, contents in secrets_to_write.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents, encoding="utf-8")
+        if os.name != "nt":
+            path.chmod(0o600)
+    return True
 
 
 def write_config_from_env(

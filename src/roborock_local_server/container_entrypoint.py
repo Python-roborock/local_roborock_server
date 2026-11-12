@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import sys
 
-from .env_config import has_env_config, write_config_from_env
+from .env_config import has_env_config, refresh_config_from_env, write_config_from_env
 from .ha_addon import write_config_from_home_assistant_options
 
 
@@ -31,6 +31,8 @@ def _run_entrypoint(*, compose_config: Path, data_config: Path, addon_options: P
         return
 
     if data_config.exists():
+        # A config this container generated from env vars follows them; any other config is left alone.
+        refresh_config_from_env(os.environ, config_path=data_config)
         _exec_server(data_config)
         return
 

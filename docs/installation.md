@@ -157,7 +157,7 @@ If your model already has certificate notes on the tested-vacuums page, follow t
 
 ### Alternative: Environment Variables Only (No `uv` Toolchain)
 
-If you don't want to install `uv`/Python on the host just to run `configure`, you can set `ROBOROCK_SERVER_*` environment variables instead. On first boot, if `/data/config.toml` doesn't already exist, the container generates one from these variables and starts normally. If `config.toml` already exists (mounted or previously generated), it always wins and the env vars are ignored — this never overwrites a config you've already set up.
+If you don't want to install `uv`/Python on the host just to run `configure`, you can set `ROBOROCK_SERVER_*` environment variables instead. On first boot, if `/data/config.toml` doesn't already exist, the container generates one from these variables and starts normally. A `config.toml` the container generated starts with a `# generated-from-env` line and follows the env vars from then on: change a variable, restart, and the file is rewritten (admin credentials set in the Setup Wizard are kept). Any other `config.toml` (mounted, written by `configure`, or with that first line deleted) always wins and the env vars are ignored, so a config you edited by hand is never overwritten.
 
 Required variables:
 

@@ -274,3 +274,54 @@ def test_write_config_from_env_rejects_invalid_trusted_proxy(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="not a valid IP address"):
         write_config_from_env(env, config_path=config_path)
+
+
+_PARTIAL_ENV = {k: v for k, v in _BASE_ENV.items() if "ADMIN" not in k and "PROTOCOL" not in k}
+
+
+def _refresh(env, path, tmp_path):
+    from roborock_local_server.env_config import refresh_config_from_env
+
+    return refresh_config_from_env(env, config_path=path, secret_paths=SecretPaths(
+        cloudflare_token_file=tmp_path / "t", acme_eab_kid_file=tmp_path / "k", acme_eab_hmac_key_file=tmp_path / "h",
+    ))
+
+
+def test_a_generated_config_follows_changed_env_vars(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    write_config_from_env(_PARTIAL_ENV, config_path=path)
+
+    assert _refresh({**_PARTIAL_ENV, "ROBOROCK_SERVER_HTTPS_PORT": "7777"}, path, tmp_path)
+    parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert parsed["network"]["https_port"] == 7777
+    assert _refresh({**_PARTIAL_ENV, "ROBOROCK_SERVER_HTTPS_PORT": "7777"}, path, tmp_path) is False
+
+
+def test_credentials_from_the_wizard_survive_a_refresh(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    write_config_from_env(_PARTIAL_ENV, config_path=path)
+    path.write_text(path.read_text(encoding="utf-8") + '\n[admin]\npassword_hash = "h"\nsession_secret = "' + "s" * 30 + '"\nsession_ttl_seconds = 86400\nprotocol_auth_enabled = true\nnew_connections_enabled = false\nprotocol_login_email = "a@b.co"\nprotocol_login_pin_hash = "p"\n', encoding="utf-8")
+
+    assert _refresh({**_PARTIAL_ENV, "ROBOROCK_SERVER_HTTPS_PORT": "7777"}, path, tmp_path)
+    parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert parsed["network"]["https_port"] == 7777
+    assert parsed["admin"]["password_hash"] == "h" and parsed["admin"]["new_connections_enabled"] is False
+
+
+def test_a_config_without_the_marker_is_never_touched(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    write_config_from_env(_PARTIAL_ENV, config_path=path)
+    text = path.read_text(encoding="utf-8").split("\n", 1)[1]
+    path.write_text(text, encoding="utf-8")
+
+    assert _refresh({**_PARTIAL_ENV, "ROBOROCK_SERVER_HTTPS_PORT": "7777"}, path, tmp_path) is False
+    assert path.read_text(encoding="utf-8") == text
+
+
+def test_a_refresh_that_cannot_render_keeps_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    write_config_from_env(_PARTIAL_ENV, config_path=path)
+    before = path.read_text(encoding="utf-8")
+
+    assert _refresh({**_PARTIAL_ENV, "ROBOROCK_SERVER_HTTPS_PORT": "nope"}, path, tmp_path) is False
+    assert path.read_text(encoding="utf-8") == before
