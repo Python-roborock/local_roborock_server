@@ -190,6 +190,37 @@ class CloudImportManager:
         """What the cloud says about a robot's firmware update, read with the stored login."""
         return await self.iot_get(f"/ota/firmware/{duid}/updatev2", {"lang": lang})
 
+    def firmware_devices(self) -> list[dict[str, Any]]:
+        """Every robot on the signed-in account, from the home data the sign-in stored."""
+        home = self._read_snapshot().get("home_data")
+        home = home if isinstance(home, dict) else {}
+        models = {
+            str(product.get("id")): product.get("model")
+            for product in home.get("products") or [] if isinstance(product, dict)
+        }
+        rows: list[dict[str, Any]] = []
+        for device in [*(home.get("devices") or []), *(home.get("received_devices") or [])]:
+            if isinstance(device, dict) and device.get("duid"):
+                rows.append({
+                    "duid": device["duid"], "name": device.get("name"),
+                    "model": models.get(str(device.get("product_id"))),
+                    "cloud_firmware": device.get("fv"), "online": device.get("online"),
+                })
+        return rows
+
+    async def firmware_status(self, *, lang: str = "en") -> list[dict[str, Any]]:
+        """Each account robot with the cloud's firmware update answer; one failure does not hide the rest."""
+        self._stored_cloud_login()
+        rows = self.firmware_devices()
+        if not rows:
+            raise ValueError("No devices are stored. Sign in with an email code to import them.")
+        for row in rows:
+            try:
+                row["update"] = await self.iot_get("/ota/firmware/updatev2", {"duids": row["duid"], "lang": lang})
+            except Exception as exc:  # noqa: BLE001
+                row["error"] = str(exc)
+        return rows
+
     def plugin_catalogs(self) -> dict[str, Any]:
         """The stored plugin catalogs, summarized, without any cloud request."""
         web_cache = self._read_snapshot().get("web_api_cache")

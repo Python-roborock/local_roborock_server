@@ -400,3 +400,47 @@ def test_firmware_update_info_is_read_with_the_stored_login(tmp_path, monkeypatc
 def test_firmware_update_info_needs_a_stored_login(tmp_path) -> None:
     with pytest.raises(ValueError, match="No cloud login"):
         asyncio.run(_make_manager(tmp_path).firmware_update_info("duid-1"))
+
+
+_HOME = {
+    "products": [{"id": "p116", "model": "roborock.vacuum.a101"}, {"id": "p223", "model": "roborock.vacuum.a245"}],
+    "devices": [
+        {"duid": "pro", "name": "Quevo", "product_id": "p116", "fv": "02.15.26", "online": True},
+        {"duid": "flow", "name": "Curv", "product_id": "p223", "fv": "02.40.00", "online": False},
+    ],
+    "received_devices": [],
+}
+
+
+def test_firmware_status_lists_every_account_robot_and_isolates_failures(tmp_path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    _write_snapshot(manager, home_data=_HOME)
+    asked: list = []
+
+    async def fake_iot_get(path, params=None):
+        asked.append((path, params))
+        if params["duids"] == "pro":
+            raise RuntimeError("boom")
+        return [{"version": "02.45.78", "updatable": True}]
+
+    monkeypatch.setattr(manager, "iot_get", fake_iot_get)
+    rows = asyncio.run(manager.firmware_status(lang="de"))
+
+    assert asked == [
+        ("/ota/firmware/updatev2", {"duids": "pro", "lang": "de"}),
+        ("/ota/firmware/updatev2", {"duids": "flow", "lang": "de"}),
+    ]
+    assert [(r["name"], r["model"], r["cloud_firmware"]) for r in rows] == [
+        ("Quevo", "roborock.vacuum.a101", "02.15.26"), ("Curv", "roborock.vacuum.a245", "02.40.00"),
+    ]
+    assert rows[0]["error"] == "boom" and "update" not in rows[0]
+    assert rows[1]["update"] == [{"version": "02.45.78", "updatable": True}]
+
+
+def test_firmware_status_needs_a_login_and_devices(tmp_path) -> None:
+    manager = _make_manager(tmp_path)
+    with pytest.raises(ValueError, match="No cloud login"):
+        asyncio.run(manager.firmware_status())
+    _write_snapshot(manager)
+    with pytest.raises(ValueError, match="No devices are stored"):
+        asyncio.run(manager.firmware_status())
