@@ -276,6 +276,15 @@ def test_write_config_from_env_rejects_invalid_trusted_proxy(tmp_path: Path) -> 
         write_config_from_env(env, config_path=config_path)
 
 
+def test_ota_install_is_off_unless_the_env_var_turns_it_on(tmp_path: Path) -> None:
+    off, on = tmp_path / "off.toml", tmp_path / "on.toml"
+    write_config_from_env(_BASE_ENV, config_path=off)
+    write_config_from_env({**_BASE_ENV, "ROBOROCK_SERVER_OTA_ENABLE_INSTALL": "true"}, config_path=on)
+
+    assert tomllib.loads(off.read_text(encoding="utf-8"))["ota"]["enable_install"] is False
+    assert tomllib.loads(on.read_text(encoding="utf-8"))["ota"]["enable_install"] is True
+
+
 from roborock_local_server.env_config import patch_config_from_env, plan_config_patch  # noqa: E402
 
 _CONFIG = """# my notes

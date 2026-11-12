@@ -312,6 +312,9 @@ def render_config_toml_from_env(
         "[storage]",
         f"data_dir = {_toml_string(data_dir)}",
         "",
+        "[ota]",
+        f"enable_install = {_toml_bool(_as_bool(_get(env, 'OTA_ENABLE_INSTALL'), default=False))}",
+        "",
         "[tls]",
         f"mode = {_toml_string(tls_mode)}",
     ]
