@@ -1602,3 +1602,125 @@ def test_create_room_returns_bare_id_in_result_and_object_in_data(tmp_path: Path
     assert body["data"]["id"] == body["result"]
     assert body["data"]["name"] == "Study"
     assert body["data"]["created"] is True
+
+
+def _logged_in_client(supervisor: ReleaseSupervisor) -> TestClient:
+    client = TestClient(supervisor.app)
+    response = client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    assert response.status_code == 200
+    return client
+
+
+def test_admin_activity_requires_auth(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    response = client.get("/admin/api/activity")
+
+    assert response.status_code == 401
+
+
+def test_admin_activity_returns_redacted_entries_by_default(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.http_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.http_jsonl_path.write_text(
+        json.dumps(
+            {
+                "time": "2026-01-01T00:00:00Z",
+                "method": "GET",
+                "clean_path": "/api/v1/user/login",
+                "headers": {"authorization": "Bearer super-secret"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = _logged_in_client(supervisor)
+
+    response = client.get("/admin/api/activity")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["raw"] is False
+    assert len(payload["entries"]) == 1
+    assert payload["entries"][0]["method"] == "GET"
+    assert "headers" not in payload["entries"][0]
+    assert "super-secret" not in json.dumps(payload)
+
+
+def test_admin_activity_raw_mode_via_env_var(tmp_path: Path, monkeypatch) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.http_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.http_jsonl_path.write_text(
+        json.dumps({"time": "2026-01-01T00:00:00Z", "method": "GET", "headers": {"x": "y"}}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ROBOROCK_SERVER_ACTIVITY_RAW", "1")
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = _logged_in_client(supervisor)
+
+    response = client.get("/admin/api/activity")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["raw"] is True
+    assert payload["entries"][0]["headers"] == {"x": "y"}
+
+
+def test_admin_activity_rejects_non_integer_limit(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = _logged_in_client(supervisor)
+
+    response = client.get("/admin/api/activity", params={"limit": "not-a-number"})
+
+    assert response.status_code == 400
+
+
+def test_admin_activity_clamps_limit(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.http_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.http_jsonl_path.write_text(
+        "\n".join(
+            json.dumps({"time": f"2026-01-01T00:00:{i:02d}Z", "method": "GET"}) for i in range(10)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = _logged_in_client(supervisor)
+
+    response = client.get("/admin/api/activity", params={"limit": "2"})
+
+    assert response.status_code == 200
+    assert len(response.json()["entries"]) == 2
+
+
+def test_catchall_requests_are_not_logged_as_activity_but_named_routes_are(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    client.get("/favicon.ico")
+    client.get("/region")
+
+    log_entries = [
+        json.loads(line) for line in paths.http_jsonl_path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    routes = [entry.get("route") for entry in log_entries]
+    assert "catchall" not in routes
+    assert "region" in routes
