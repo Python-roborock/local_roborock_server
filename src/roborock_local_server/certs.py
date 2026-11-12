@@ -32,6 +32,7 @@ class CertificateManager:
     def __init__(self, *, config: AppConfig, paths: AppPaths) -> None:
         self.config = config
         self.paths = paths
+        self._provided_signature: tuple[tuple[int, int], tuple[int, int]] | None = None
 
     @property
     def certificate_paths(self) -> CertificatePaths:
@@ -43,11 +44,26 @@ class CertificateManager:
                 raise FileNotFoundError(f"Provided TLS cert not found: {self.paths.cert_file}")
             if not self.paths.key_file.exists():
                 raise FileNotFoundError(f"Provided TLS key not found: {self.paths.key_file}")
-            return False
+            return self._provided_files_changed()
         if not self._needs_refresh():
             return False
         self._provision_or_renew()
         return True
+
+    def _provided_files_changed(self) -> bool:
+        """Return True when externally managed cert/key files changed since the last check.
+
+        The first call only records a baseline, so startup never reports a change.
+        """
+        cert_stat = self.paths.cert_file.stat()
+        key_stat = self.paths.key_file.stat()
+        signature = (
+            (cert_stat.st_mtime_ns, cert_stat.st_size),
+            (key_stat.st_mtime_ns, key_stat.st_size),
+        )
+        previous = self._provided_signature
+        self._provided_signature = signature
+        return previous is not None and previous != signature
 
     def _needs_refresh(self) -> bool:
         if not self.paths.cert_file.exists() or not self.paths.key_file.exists():

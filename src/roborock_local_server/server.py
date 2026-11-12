@@ -2078,7 +2078,7 @@ class ReleaseSupervisor:
             self.config.broker.port,
         )
 
-        if self._uses_local_tls() and self.config.tls.mode == "cloudflare_acme":
+        if self._uses_local_tls() and self.config.tls.mode in ("cloudflare_acme", "provided"):
             self._renew_task = asyncio.create_task(self._renew_loop(), name="tls-renew-loop")
 
         schedule_runner = ScheduleRunner(self.context, default_timezone=self.config.network.timezone)
