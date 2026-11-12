@@ -402,6 +402,8 @@ async def _fetch_plugin_catalogs(
     api: RoborockApiClient,
     user_data: UserData,
     home_data: HomeData,
+    *,
+    plugin_type: int = 2,
 ) -> dict[str, Any]:
     """Fetch app/plugin catalog metadata from cloud without making import depend on it."""
     fetched_at = datetime.now(timezone.utc).isoformat()
@@ -442,12 +444,12 @@ async def _fetch_plugin_catalogs(
     await fetch_catalog(
         "appfeatureplugin",
         "/api/v1/appfeatureplugin",
-        params={"type": 2, "apiLevel": 10043},
+        params={"type": plugin_type, "apiLevel": 10043},
     )
     await fetch_catalog(
         "plugins",
         "/api/v1/plugins",
-        params={"type": 2, "apiLevel": 10043},
+        params={"type": plugin_type, "apiLevel": 10043},
     )
     await fetch_catalog("product", "/api/v5/product")
     product_ids = _plugin_product_ids(home_data, catalogs["product"].get("data"))
