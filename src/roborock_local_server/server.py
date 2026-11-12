@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import os
+import re
 from pathlib import Path
 import secrets
 import signal
@@ -623,6 +625,33 @@ class ReleaseSupervisor:
                     patched_user_data["email"] = configured_email
                 return patched_user_data
         return self._local_protocol_identity()
+
+    _OTA_CHECK = re.compile(r"^/ota/firmware/([^/]+)/updatev2/?$")
+    _OTA_UPGRADE = re.compile(r"^/ota/device/([^/]+)/upgrade/?$")
+
+    async def _firmware_ota_response(
+        self, clean_path: str, method: str, query_params: dict[str, list[str]],
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Answers the app's firmware calls: the check is read from the cloud, the upgrade is refused."""
+        check = self._OTA_CHECK.match(clean_path)
+        if check and method == "GET":
+            lang = ((query_params.get("lang") or ["en"])[0] or "en").strip()
+            try:
+                result = await self.cloud_manager.firmware_update_info(check.group(1), lang=lang)
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("real_stack").warning("Firmware check for %s failed: %s", check.group(1), exc)
+                return "ota_firmware_check", {
+                    "success": False, "code": 502, "msg": "firmware_check_unavailable", "data": {"error": str(exc)},
+                }
+            return "ota_firmware_check", {"success": True, "code": 200, "msg": "success", "data": result, "result": result}
+        if self._OTA_UPGRADE.match(clean_path) and method == "POST":
+            return "ota_upgrade_unsupported", {
+                "success": False,
+                "code": 501,
+                "msg": "firmware_upgrade_not_supported",
+                "data": {"error": "Installing firmware is not supported by the local server yet."},
+            }
+        return None
 
     @staticmethod
     def _normalized_path(path: str) -> str:
@@ -1351,14 +1380,18 @@ class ReleaseSupervisor:
             )
             return response
 
-        route_name, response_payload = resolve_route(
-            rules=self.endpoint_rules,
-            context=self.context,
-            clean_path=clean_path,
-            query_params=query_params,
-            body_params=body_params,
-            method=request.method,
-        )
+        ota_response = await self._firmware_ota_response(clean_path, request.method, query_params)
+        if ota_response is not None:
+            route_name, response_payload = ota_response
+        else:
+            route_name, response_payload = resolve_route(
+                rules=self.endpoint_rules,
+                context=self.context,
+                clean_path=clean_path,
+                query_params=query_params,
+                body_params=body_params,
+                method=request.method,
+            )
         entry["route"] = route_name
         if route_name == "fw_createca":
             # Persist metadata, but retain the exact credential response sent to firmware.
