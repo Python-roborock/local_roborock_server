@@ -265,3 +265,112 @@ def test_submit_code_expired_session_raises_value_error(tmp_path, monkeypatch) -
 
     with pytest.raises(ValueError):
         asyncio.run(manager.submit_code(session_id=request_result["session_id"], code="123456"))
+
+
+_STORED_USER_DATA = {
+    "rriot": {"u": "u", "s": "s", "h": "h", "k": "k", "r": {"r": "EU", "a": "https://api", "m": "ssl://mqtt", "l": "https://l"}},
+    "uid": 1,
+    "token": "stored-token",
+}
+_NEW_CATALOGS = {
+    "fetched_at_utc": "2026-11-11T00:00:00+00:00",
+    "plugins": {
+        "path": "/api/v1/plugins",
+        "params": {"type": 2, "apiLevel": 10043},
+        "data": {"categoryPluginList": [{"categoryId": 1, "category": "robot.vacuum.cleaner", "version": 7006, "url": "https://files.roborock.com/p.zip", "md5": None}]},
+    },
+    "appplugin": {
+        "path": "/api/v1/appplugin",
+        "json": {"type": 2, "apilevel": 10043, "productids": [110]},
+        "data": [{"productid": 110, "version": 7006, "apilevel": 10043, "url": "https://files.roborock.com/a.zip"}],
+    },
+}
+
+
+def _write_snapshot(manager: CloudImportManager, **overrides) -> None:
+    snapshot = {
+        "meta": {"username": "user@example.com", "base_url": "https://euiot.roborock.com", "device_identifier": "dev-9"},
+        "user_data": _STORED_USER_DATA,
+        "web_api_cache": {"rooms": [1, 2], "plugin_catalogs": {"fetched_at_utc": "old"}},
+    }
+    snapshot.update(overrides)
+    manager.snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+
+def _patch_plugin_fetch(monkeypatch: pytest.MonkeyPatch, catalogs: dict, seen: dict | None = None) -> None:
+    async def fake_catalogs(api, user_data, home_data):
+        if seen is not None:
+            seen.update(token=user_data.token, device_identifier=api._device_identifier)
+        return catalogs
+
+    monkeypatch.setattr(cloud_module, "RoborockApiClient", _FakeRoborockApiClientV4)
+    monkeypatch.setattr(cloud_module, "_fetch_cloud_home_data_with_api", _fake_fetch_cloud_home_data_with_api)
+    monkeypatch.setattr(cloud_module, "_fetch_plugin_catalogs", fake_catalogs)
+
+
+def test_refresh_plugin_catalogs_replaces_only_the_catalogs(tmp_path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    _write_snapshot(manager)
+    seen: dict = {}
+    _patch_plugin_fetch(monkeypatch, _NEW_CATALOGS, seen)
+
+    result = asyncio.run(manager.refresh_plugin_catalogs())
+
+    assert seen == {"token": "stored-token", "device_identifier": "dev-9"}
+    assert result["success"] is True
+    assert result["plugins"]["plugins"] == [
+        {"version": 7006, "url": "https://files.roborock.com/p.zip", "categoryId": 1, "category": "robot.vacuum.cleaner"}
+    ]
+    assert result["appplugin"]["plugins"][0]["url"] == "https://files.roborock.com/a.zip"
+    stored = json.loads(manager.snapshot_path.read_text(encoding="utf-8"))
+    assert stored["web_api_cache"]["rooms"] == [1, 2]
+    assert stored["web_api_cache"]["plugin_catalogs"]["plugins"]["data"]["categoryPluginList"][0]["version"] == 7006
+    assert manager.plugin_catalogs()["appplugin"]["plugins"][0]["version"] == 7006
+
+
+def test_refresh_plugin_catalogs_needs_a_stored_login(tmp_path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    _patch_plugin_fetch(monkeypatch, _NEW_CATALOGS)
+
+    with pytest.raises(ValueError, match="No cloud login"):
+        asyncio.run(manager.refresh_plugin_catalogs())
+    _write_snapshot(manager, user_data={})
+    with pytest.raises(ValueError, match="No cloud login"):
+        asyncio.run(manager.refresh_plugin_catalogs())
+
+
+def test_refresh_plugin_catalogs_keeps_the_snapshot_when_the_cloud_gives_nothing(tmp_path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    _write_snapshot(manager)
+    before = manager.snapshot_path.read_text(encoding="utf-8")
+    failing = {"fetched_at_utc": "now", "plugins": {"path": "/p", "error": "code 2010"}, "appplugin": {"path": "/a", "error": "code 2010"}}
+    _patch_plugin_fetch(monkeypatch, failing)
+
+    with pytest.raises(ValueError, match="no plugin catalogs"):
+        asyncio.run(manager.refresh_plugin_catalogs())
+    assert manager.snapshot_path.read_text(encoding="utf-8") == before
+
+
+def test_refresh_plugin_catalogs_reports_a_rejected_login(tmp_path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    _write_snapshot(manager)
+    _patch_plugin_fetch(monkeypatch, _NEW_CATALOGS)
+
+    async def rejected(api, user_data):
+        raise RuntimeError("invalid token")
+
+    monkeypatch.setattr(cloud_module, "_fetch_cloud_home_data_with_api", rejected)
+    with pytest.raises(ValueError, match="sign in again"):
+        asyncio.run(manager.refresh_plugin_catalogs())
+
+
+def test_submit_code_stores_the_device_identifier(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cloud_module, "RoborockApiClient", _FakeRoborockApiClientV4)
+    _patch_backend_calls(monkeypatch)
+    manager = _make_manager(tmp_path)
+
+    request_result = asyncio.run(manager.request_code(email="user@example.com"))
+    asyncio.run(manager.submit_code(session_id=request_result["session_id"], code="123456"))
+
+    stored = json.loads(manager.snapshot_path.read_text(encoding="utf-8"))
+    assert stored["meta"]["device_identifier"] == _fake_client_instances[0]._device_identifier
