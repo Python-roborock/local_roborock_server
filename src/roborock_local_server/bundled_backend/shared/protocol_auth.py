@@ -553,7 +553,10 @@ class ProtocolAuthStore:
         headers: Mapping[str, str],
         raw_body: bytes | None = None,
         now_ts: float | None = None,
+        allow_replay: bool = False,
     ) -> tuple[bool, str]:
+        """Checks the signature and its age. A repeated nonce is refused unless [allow_replay] is set, which
+        is for read-only requests the app is known to resend with the same signature."""
         availability = self.availability()
         if not availability.users:
             return False, availability.reason
@@ -604,6 +607,8 @@ class ProtocolAuthStore:
         )
         if not hmac.compare_digest(_clean_str(hawk.get("mac")), expected_mac):
             return False, "invalid_hawk_mac"
+        if allow_replay:
+            return True, "ok"
 
         nonce_key = f"{user.hawk_id}:{user.hawk_session}:{timestamp}:{nonce}"
         expires_at = float(current_ts + self.hawk_nonce_ttl_seconds)

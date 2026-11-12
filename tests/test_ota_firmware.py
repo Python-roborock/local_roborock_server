@@ -102,3 +102,31 @@ def test_firmware_routes_need_the_app_signature(tmp_path, monkeypatch) -> None:
     assert client.get(STATUS, params={"duids": "duid-1"}).status_code == 401
     assert client.post(UPGRADE, json={}).status_code == 401
     assert calls == []
+
+
+def test_a_resent_firmware_read_is_not_refused_as_a_replay(tmp_path, monkeypatch) -> None:
+    client, supervisor, snapshot = _client(tmp_path)
+    _record_reads(supervisor, monkeypatch, result={"status": "idle"})
+    headers = _signed(snapshot, STATUS, duids="duid-1")
+
+    first = client.get(STATUS, params={"duids": "duid-1"}, headers=headers)
+    again = client.get(STATUS, params={"duids": "duid-1"}, headers=headers)
+
+    assert first.json()["success"] is True and again.json()["success"] is True
+
+
+def test_a_tampered_firmware_read_is_still_refused(tmp_path, monkeypatch) -> None:
+    client, supervisor, snapshot = _client(tmp_path)
+    calls = _record_reads(supervisor, monkeypatch)
+    headers = _signed(snapshot, STATUS, duids="duid-1")
+
+    assert client.get(STATUS, params={"duids": "duid-2"}, headers=headers).status_code == 401
+    assert calls == []
+
+
+def test_an_upgrade_post_is_still_refused_as_a_replay(tmp_path) -> None:
+    client, _, snapshot = _client(tmp_path)
+    headers = _hawk_headers(snapshot, UPGRADE, json_values={})
+
+    assert client.post(UPGRADE, json={}, headers=headers).json()["code"] == 501
+    assert client.post(UPGRADE, json={}, headers=headers).status_code == 401

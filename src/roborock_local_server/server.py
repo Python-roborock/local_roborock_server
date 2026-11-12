@@ -632,6 +632,13 @@ class ReleaseSupervisor:
     _OTA_STATUS = re.compile(r"^/ota/firmware/upgrade/status/?$")
     _OTA_UPGRADE = re.compile(r"^/ota/device/([^/]+)/upgrade(/latest-stable)?/?$")
 
+    def _is_firmware_read(self, clean_path: str) -> bool:
+        return bool(
+            self._OTA_CHECK.match(clean_path)
+            or self._OTA_CHECK_QUERY.match(clean_path)
+            or self._OTA_STATUS.match(clean_path)
+        )
+
     async def _firmware_ota_response(
         self, clean_path: str, method: str, query_params: dict[str, list[str]],
     ) -> tuple[str, dict[str, Any]] | None:
@@ -1279,6 +1286,7 @@ class ReleaseSupervisor:
                     body_params=body_params,
                     headers=request.headers,
                     raw_body=raw_body,
+                    allow_replay=request.method == "GET" and self._is_firmware_read(clean_path),
                 )
             if not authenticated:
                 route_name = f"{required_auth}_auth_failed"
