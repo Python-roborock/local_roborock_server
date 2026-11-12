@@ -374,3 +374,29 @@ def test_submit_code_stores_the_device_identifier(tmp_path, monkeypatch) -> None
 
     stored = json.loads(manager.snapshot_path.read_text(encoding="utf-8"))
     assert stored["meta"]["device_identifier"] == _fake_client_instances[0]._device_identifier
+
+
+def test_firmware_update_info_is_read_with_the_stored_login(tmp_path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    _write_snapshot(manager)
+    seen: dict = {}
+
+    async def fake_hawk(api, user_data, path, *, params=None):
+        seen.update(path=path, params=params, token=user_data.token, device_identifier=api._device_identifier)
+        return {"version": "02.45.78", "updatable": True}
+
+    monkeypatch.setattr(cloud_module, "RoborockApiClient", _FakeRoborockApiClientV4)
+    monkeypatch.setattr(cloud_module, "_hawk_get_result", fake_hawk)
+
+    result = asyncio.run(manager.firmware_update_info("duid-1", lang="de"))
+
+    assert result == {"version": "02.45.78", "updatable": True}
+    assert seen == {
+        "path": "/ota/firmware/duid-1/updatev2", "params": {"lang": "de"},
+        "token": "stored-token", "device_identifier": "dev-9",
+    }
+
+
+def test_firmware_update_info_needs_a_stored_login(tmp_path) -> None:
+    with pytest.raises(ValueError, match="No cloud login"):
+        asyncio.run(_make_manager(tmp_path).firmware_update_info("duid-1"))
