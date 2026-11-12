@@ -626,24 +626,38 @@ class ReleaseSupervisor:
                 return patched_user_data
         return self._local_protocol_identity()
 
+    # The app asks with the duid as a query value; older clients put it in the path.
     _OTA_CHECK = re.compile(r"^/ota/firmware/([^/]+)/updatev2/?$")
-    _OTA_UPGRADE = re.compile(r"^/ota/device/([^/]+)/upgrade/?$")
+    _OTA_CHECK_QUERY = re.compile(r"^/ota/firmware/updatev2/?$")
+    _OTA_STATUS = re.compile(r"^/ota/firmware/upgrade/status/?$")
+    _OTA_UPGRADE = re.compile(r"^/ota/device/([^/]+)/upgrade(/latest-stable)?/?$")
 
     async def _firmware_ota_response(
         self, clean_path: str, method: str, query_params: dict[str, list[str]],
     ) -> tuple[str, dict[str, Any]] | None:
-        """Answers the app's firmware calls: the check is read from the cloud, the upgrade is refused."""
-        check = self._OTA_CHECK.match(clean_path)
-        if check and method == "GET":
-            lang = ((query_params.get("lang") or ["en"])[0] or "en").strip()
+        """Answers the app's firmware calls: the check and its progress are read from the cloud, the upgrade is refused."""
+        def first(name: str, default: str = "") -> str:
+            return ((query_params.get(name) or [default])[0] or default).strip()
+
+        route_name = "ota_firmware_check"
+        read: tuple[str, dict[str, str]] | None = None
+        if method == "GET":
+            if (check := self._OTA_CHECK.match(clean_path)) is not None:
+                read = (f"/ota/firmware/{check.group(1)}/updatev2", {"lang": first("lang", "en")})
+            elif self._OTA_CHECK_QUERY.match(clean_path):
+                read = ("/ota/firmware/updatev2", {"duids": first("duids"), "lang": first("lang", "en")})
+            elif self._OTA_STATUS.match(clean_path):
+                route_name = "ota_firmware_status"
+                read = ("/ota/firmware/upgrade/status", {"duids": first("duids")})
+        if read is not None:
             try:
-                result = await self.cloud_manager.firmware_update_info(check.group(1), lang=lang)
+                result = await self.cloud_manager.iot_get(read[0], read[1])
             except Exception as exc:  # noqa: BLE001
-                logging.getLogger("real_stack").warning("Firmware check for %s failed: %s", check.group(1), exc)
-                return "ota_firmware_check", {
+                logging.getLogger("real_stack").warning("Firmware request %s failed: %s", clean_path, exc)
+                return route_name, {
                     "success": False, "code": 502, "msg": "firmware_check_unavailable", "data": {"error": str(exc)},
                 }
-            return "ota_firmware_check", {"success": True, "code": 200, "msg": "success", "data": result, "result": result}
+            return route_name, {"success": True, "code": 200, "msg": "success", "data": result, "result": result}
         if self._OTA_UPGRADE.match(clean_path) and method == "POST":
             return "ota_upgrade_unsupported", {
                 "success": False,
@@ -817,6 +831,9 @@ class ReleaseSupervisor:
         if cls._is_public_protocol_path(normalized):
             return None
         if normalized.startswith(("/user/", "/v2/user/", "/v3/user/", "/v4/user/")):
+            return "hawk"
+        # The firmware routes answer from the stored cloud login, so they are app-only like /user/.
+        if normalized.startswith(("/ota/firmware/", "/ota/device/")):
             return "hawk"
         if normalized.startswith("/api/"):
             return "token"

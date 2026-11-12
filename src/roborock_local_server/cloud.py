@@ -178,13 +178,17 @@ class CloudImportManager:
             setattr(api, "_device_identifier", str(meta["device_identifier"]))
         return api
 
-    async def firmware_update_info(self, duid: str, *, lang: str = "en") -> Any:
-        """What the cloud says about a robot's firmware update, read with the stored login."""
+    async def iot_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        """A signed read of Roborock's IoT API with the stored login; returns the reply's `result`."""
         _, meta, user_data, email = self._stored_cloud_login()
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             api = self._cloud_client(session, meta, email)
-            return await _hawk_get_result(api, user_data, f"/ota/firmware/{duid}/updatev2", params={"lang": lang})
+            return await _hawk_get_result(api, user_data, path, params=params)
+
+    async def firmware_update_info(self, duid: str, *, lang: str = "en") -> Any:
+        """What the cloud says about a robot's firmware update, read with the stored login."""
+        return await self.iot_get(f"/ota/firmware/{duid}/updatev2", {"lang": lang})
 
     def plugin_catalogs(self) -> dict[str, Any]:
         """The stored plugin catalogs, summarized, without any cloud request."""
