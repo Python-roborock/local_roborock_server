@@ -130,3 +130,26 @@ def test_an_upgrade_post_is_still_refused_as_a_replay(tmp_path) -> None:
 
     assert client.post(UPGRADE, json={}, headers=headers).json()["code"] == 501
     assert client.post(UPGRADE, json={}, headers=headers).status_code == 401
+
+
+def test_admin_firmware_listing_needs_the_admin_login(tmp_path, monkeypatch) -> None:
+    client, supervisor, _ = _client(tmp_path)
+
+    async def fake():
+        return [{"duid": "flow", "name": "Curv", "update": [INFO]}]
+
+    monkeypatch.setattr(supervisor.cloud_manager, "firmware_status", fake)
+
+    assert client.get("/admin/api/cloud/firmware").status_code == 401
+    assert client.post("/admin/api/login", json={"password": "correct horse battery staple"}).status_code == 200
+    assert client.get("/admin/api/cloud/firmware").json() == {"success": True, "devices": [{"duid": "flow", "name": "Curv", "update": [INFO]}]}
+
+
+def test_admin_firmware_listing_reports_why_it_failed(tmp_path) -> None:
+    client, _, _ = _client(tmp_path)
+    client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+
+    response = client.get("/admin/api/cloud/firmware")
+
+    assert response.status_code == 400
+    assert response.json()["success"] is False and "No cloud login" in response.json()["error"]

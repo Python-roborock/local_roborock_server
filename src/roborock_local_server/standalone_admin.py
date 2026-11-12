@@ -484,6 +484,15 @@ def register_standalone_admin_routes(
         supervisor._require_admin(request)
         return JSONResponse({"success": True, **supervisor.cloud_manager.plugin_catalogs()})
 
+    @app.get("/admin/api/cloud/firmware")
+    async def admin_cloud_firmware(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            devices = await supervisor.cloud_manager.firmware_status()
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"success": False, "step": "firmware_status_failed", "error": str(exc)}, status_code=400)
+        return JSONResponse({"success": True, "devices": devices})
+
     @app.post("/admin/api/cloud/refresh-plugins")
     async def admin_cloud_refresh_plugins(request: Request) -> JSONResponse:
         supervisor._require_admin(request)
