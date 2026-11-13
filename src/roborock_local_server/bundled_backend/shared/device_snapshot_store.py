@@ -254,6 +254,17 @@ class DeviceSnapshotStore:
         if update and _SAFE_DUID.match(duid or ""):
             self._update_status(duid, update)
 
+    def record_firmware_version(self, duid: str, payload_utf8: str | None) -> None:
+        """The robot's firmware report (protocol 203), sent each time it connects: ``{"mqttOtaData": {"mqttOtaFirmwareVersion": {"version": ...}}}``."""
+        try:
+            version = json.loads(payload_utf8 or "")["mqttOtaData"]["mqttOtaFirmwareVersion"]["version"]
+        except (ValueError, KeyError, TypeError):
+            return
+        if isinstance(version, str) and version and _SAFE_DUID.match(duid or ""):
+            with self._lock:
+                self._entry(duid)["firmware_version"] = version
+                self._touch(duid, force_flush=True)
+
     def record_status_result(self, duid: str, result: Any) -> None:
         """The answer to ``get_status``."""
         update = _status_update(result)
