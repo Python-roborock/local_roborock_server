@@ -99,6 +99,14 @@ def _dps_update(payload_utf8: str | None) -> dict[str, int]:
     return update
 
 
+def is_status_answer(response_to: dict[str, Any]) -> bool:
+    """True for the answer to ``get_status`` or ``get_prop ["get_status"]`` (both carry the same status)."""
+    method = response_to.get("request_method")
+    if method == "get_status":
+        return True
+    return method == "get_prop" and response_to.get("request_params") == ["get_status"]
+
+
 def _status_update(result: Any) -> dict[str, int]:
     """The status a ``get_status`` answer carries: a one-item list holding the status object."""
     status = result[0] if isinstance(result, list) and result else result
@@ -392,7 +400,7 @@ class DeviceSnapshotStore:
                     if isinstance(response_to, dict):
                         update = (
                             _status_update(response_to.get("result"))
-                            if response_to.get("request_method") == "get_status" and response_to.get("error") is None
+                            if is_status_answer(response_to) and response_to.get("error") is None
                             else {}
                         )
                     else:
