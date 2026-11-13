@@ -170,6 +170,22 @@ During `JNI_OnLoad`, `librrcodec.so` calls a verification function that retrieve
 
 ---
 
+## Refreshing the Plugin List
+
+The official app downloads each device's screens as plugins, and the server hands it the list it saved from the cloud when you signed in. Newer robots can need newer plugins than that saved list holds. Refresh it without signing in again:
+
+```sh
+curl -c jar -X POST https://your-server/admin/api/login -H 'Content-Type: application/json' -d '{"password": "..."}'
+curl -b jar -X POST https://your-server/admin/api/cloud/refresh-plugins
+curl -b jar https://your-server/admin/api/cloud/plugins
+```
+
+The refresh reuses the login stored by the email-code sign-in and only replaces the plugin catalogs, with the product ids of every device on the account. The reply lists each plugin's version, API level and download URL. `GET /admin/api/cloud/plugins` shows what is stored now without asking the cloud.
+
+If the cloud rejects the stored login, or the snapshot predates this feature and has none, sign in again with the email code; that stores a login the refresh can use.
+
+---
+
 ## LocalRock (Third-Party App)
 
 [LocalRock](https://github.com/DonSidro/LocalRock) is an open-source app created by **Sidon Kodraliu** ([@DonSidro](https://github.com/DonSidro)) that connects directly to the local Roborock server.
