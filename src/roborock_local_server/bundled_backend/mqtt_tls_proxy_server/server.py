@@ -19,7 +19,7 @@ from shared.io_utils import append_jsonl, payload_preview
 from shared.protocol_auth import ProtocolAuthStore
 from shared.runtime_credentials import RuntimeCredentialsStore, parse_mqtt_connect_packet
 from shared.runtime_state import RuntimeState
-from shared.device_snapshot_store import DeviceSnapshotStore
+from shared.device_snapshot_store import DeviceSnapshotStore, is_status_answer
 from shared.zone_ranges_store import ZoneRangesStore
 
 from .command_handlers import RpcCommandRegistry
@@ -565,7 +565,7 @@ class MqttTlsProxy:
             elif proto_value == 102:
                 response_to = decoded_entry.get("response_to")
                 if isinstance(response_to, dict):
-                    if response_to.get("request_method") == "get_status" and response_to.get("error") is None:
+                    if is_status_answer(response_to) and response_to.get("error") is None:
                         self.snapshot_store.record_status_result(duid, response_to.get("result"))
                     elif response_to.get("request_method") == "get_room_mapping" and response_to.get("error") is None:
                         self.snapshot_store.record_room_mapping(duid, response_to.get("result"))
