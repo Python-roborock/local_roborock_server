@@ -307,3 +307,10 @@ def test_flush_writes_pending_changes_and_a_new_store_reads_them(tmp_path: Path)
     store.flush()
 
     assert DeviceSnapshotStore(tmp_path).get(DUID)["status"]["battery"] == 8
+
+
+def test_the_firmware_report_is_remembered(tmp_path: Path) -> None:
+    store = DeviceSnapshotStore(tmp_path)
+    store.record_firmware_version("robot1", '{"mqttOtaData":{"mqttOtaFirmwareVersion":{"version":"02.35.52"}}}')
+    store.record_firmware_version("robot1", "not json")
+    assert store.get("robot1")["firmware_version"] == "02.35.52"
