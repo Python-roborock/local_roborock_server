@@ -57,6 +57,7 @@ nav:
   - Integrations:
     - Mobile App Options: roborock_app.md
     - Camera (Live Video): camera.md
+    - Firmware Updates: firmware_updates.md
   - Reference:
     - Log Retention: logging.md
     - Last-Known State: last_known_state.md
