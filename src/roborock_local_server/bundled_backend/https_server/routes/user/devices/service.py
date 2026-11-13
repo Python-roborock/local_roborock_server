@@ -285,6 +285,35 @@ def _runtime_device_for_record(
     return {}
 
 
+def _apply_reported_firmware(ctx: ServerContext, home_data: dict[str, Any]) -> dict[str, Any]:
+    """Shows the firmware version a robot reported itself (it can differ from the cloud's record after an update)."""
+    store = getattr(ctx, "snapshot_store", None)
+    if store is None:
+        return home_data
+    enriched = dict(home_data)
+    for key in ("devices", "receivedDevices", "received_devices"):
+        devices = home_data.get(key)
+        if not isinstance(devices, list):
+            continue
+        updated = []
+        for device in devices:
+            if isinstance(device, dict):
+                reported = _reported_firmware(store, str(device.get("duid") or ""))
+                device = {**device, "fv": reported} if reported else device
+            updated.append(device)
+        enriched[key] = updated
+    return enriched
+
+
+def _reported_firmware(store: Any, duid: str) -> str:
+    try:
+        entry = store.get(duid) if duid else None
+    except Exception:  # noqa: BLE001
+        return ""
+    value = (entry or {}).get("firmware_version")
+    return value if isinstance(value, str) else ""
+
+
 def _apply_runtime_online_status(ctx: ServerContext, home_data: dict[str, Any]) -> dict[str, Any]:
     runtime_device_map, any_runtime_connected = _runtime_device_identity_map(ctx)
     if not any_runtime_connected:
@@ -314,7 +343,7 @@ def _apply_runtime_online_status(ctx: ServerContext, home_data: dict[str, Any]) 
 def enrich_home_data_with_cloud_snapshot(ctx: ServerContext, home_data: dict[str, Any]) -> dict[str, Any]:
     cloud_home_data = _load_cloud_home_data(ctx) or {}
     if not cloud_home_data:
-        return home_data
+        return _apply_reported_firmware(ctx, home_data)
 
     enriched_home = dict(home_data)
 
@@ -389,7 +418,7 @@ def enrich_home_data_with_cloud_snapshot(ctx: ServerContext, home_data: dict[str
         if enriched_devices:
             enriched_home[collection_key] = enriched_devices
 
-    return enriched_home
+    return _apply_reported_firmware(ctx, enriched_home)
 
 
 def _home_data(ctx: ServerContext) -> dict[str, Any]:
@@ -427,7 +456,7 @@ def _home_data(ctx: ServerContext) -> dict[str, Any]:
 
     home["id"] = resolve_home_id(home, cloud_home_data, default=0)
     home["name"] = str(get_value(home, "name", "home_name", default="Local Home"))
-    return _apply_runtime_online_status(ctx, home)
+    return _apply_reported_firmware(ctx, _apply_runtime_online_status(ctx, home))
 
 
 def device_detail_payload(ctx: ServerContext, device_id: str) -> dict[str, Any]:
@@ -534,7 +563,8 @@ def device_detail_payload(ctx: ServerContext, device_id: str) -> dict[str, Any]:
             )
         ),
         "productId": product_id,
-        "fv": str(get_value(raw_device, "fv", default=get_value(normalized_device, "fv", default=""))),
+        "fv": _reported_firmware(getattr(ctx, "snapshot_store", None), device_id)
+        or str(get_value(raw_device, "fv", default=get_value(normalized_device, "fv", default=""))),
         "pv": str(get_value(raw_device, "pv", default=get_value(normalized_device, "pv", default=""))),
         "activeTime": as_int(
             get_value(

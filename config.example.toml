@@ -74,3 +74,8 @@ username = ""
 password = ""
 realm = "api-roborock.example.com"
 ttl = 86400
+
+# Lets the official app's Update button install firmware (docked, 80%+ battery, idle robots only).
+# The package comes from Roborock's CDN, is checked against its checksum, and is served to the robot from here.
+[ota]
+enable_install = false
