@@ -201,6 +201,14 @@ def build_hawk_authorization(
     )
 
 
+# Every app login (each reinstall or code login issues a new local session)
+# pushes the oldest persisted session out, and MQTT logins are only checked
+# against persisted sessions. With 8 slots a long-running client that logged
+# in once (e.g. a home automation integration) was rejected with
+# invalid_mqtt_credentials after a handful of app logins.
+DEFAULT_MAX_PERSISTED_SESSIONS = 64
+
+
 class ProtocolAuthStore:
     """Loads protocol auth state from the persisted cloud snapshot and session store."""
 
@@ -209,7 +217,7 @@ class ProtocolAuthStore:
         snapshot_path: str | Path,
         *,
         session_store_path: str | Path | None = None,
-        max_persisted_sessions: int = 8,
+        max_persisted_sessions: int = DEFAULT_MAX_PERSISTED_SESSIONS,
         hawk_clock_skew_seconds: int = 300,
         hawk_nonce_ttl_seconds: int = 600,
     ) -> None:

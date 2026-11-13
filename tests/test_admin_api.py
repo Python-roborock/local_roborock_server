@@ -1636,3 +1636,56 @@ def test_admin_plugin_catalog_endpoints_require_auth_and_report_the_snapshot(tmp
     assert refused.status_code == 400
     assert refused.json()["step"] == "plugin_refresh_failed"
     assert "No cloud login" in refused.json()["error"]
+
+
+def test_last_known_route_returns_the_stored_snapshot(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+    device_id = "6HL2zfniaoYYV01CkVuhkO"
+    path = f"/user/devices/{device_id}/last_known"
+
+    from https_server.routes.user.devices.last_known import build as build_last_known
+
+    assert build_last_known(supervisor.context, {}, {}, path)["data"] == {"duid": device_id, "known": False}
+
+    store = supervisor.context.snapshot_store
+    store.record_dps(device_id, json.dumps({"dps": {"122": 5, "121": 12}}))
+    store.mark_offline(device_id)
+
+    known = client.get(path, headers=_hawk_headers(paths.cloud_snapshot_path, path))
+    assert known.status_code == 200
+    data = known.json()["data"]
+    assert data["known"] is True
+    assert data["status"]["battery"] == 5
+    assert data["offline_at"]
+    assert data["has_map"] is False
+    assert "map" not in data
+
+
+def test_last_known_route_names_each_room_of_the_robots_room_table(tmp_path: Path, monkeypatch) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    device_id = "6HL2zfniaoYYV01CkVuhkO"
+    path = f"/user/devices/{device_id}/last_known"
+
+    from https_server.routes.user.devices import last_known as route
+
+    monkeypatch.setattr(route, "home_rooms_payload", lambda ctx: [{"id": 1, "name": "Living Room"}, {"id": 4, "name": "Kitchen"}])
+    store = supervisor.context.snapshot_store
+    store.record_dps(device_id, json.dumps({"dps": {"122": 5}}))
+    store.record_room_mapping(device_id, [[21, "1", 6], [19, "4", 14], [18, "999", 1]])
+
+    rooms = route.build(supervisor.context, {}, {}, path)["data"]["rooms"]
+
+    assert rooms == [
+        {"segment": 21, "iot_id": "1", "tag": 6, "name": "Living Room"},
+        {"segment": 19, "iot_id": "4", "tag": 14, "name": "Kitchen"},
+        {"segment": 18, "iot_id": "999", "tag": 1, "name": None},
+    ]
