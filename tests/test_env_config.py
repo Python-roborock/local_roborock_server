@@ -274,3 +274,103 @@ def test_write_config_from_env_rejects_invalid_trusted_proxy(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="not a valid IP address"):
         write_config_from_env(env, config_path=config_path)
+
+
+from roborock_local_server.env_config import patch_config_from_env, plan_config_patch  # noqa: E402
+
+_CONFIG = """# my notes
+[network]
+stack_fqdn = "api-rr.binarycow.io"   # the server name
+listener_mode = "local_tls"
+https_port = 555
+advertised_https_port = 555
+mqtt_tls_port = 8881
+
+[broker]
+mode = "embedded"
+
+[admin]
+password_hash = "keep-me"
+session_secret = "0123456789012345678901234567890123456789"
+
+[turn]
+mode = "provided"
+host = "10.0.30.15"
+password = "hand-written-secret"
+"""
+
+
+def _patched(tmp_path: Path, env: dict[str, str], text: str = _CONFIG):
+    path = tmp_path / "config.toml"
+    path.write_text(text, encoding="utf-8")
+    changes = patch_config_from_env(env, config_path=path)
+    return path, changes, tomllib.loads(path.read_text(encoding="utf-8"))
+
+
+def test_only_the_keys_whose_variable_is_set_and_different_change(tmp_path: Path) -> None:
+    env = {"ROBOROCK_SERVER_STACK_FQDN": "api-r.binarycow.io", "ROBOROCK_SERVER_HTTPS_PORT": "443", "ROBOROCK_SERVER_ADVERTISED_HTTPS_PORT": "443"}
+    path, changes, parsed = _patched(tmp_path, env)
+
+    assert parsed["network"]["stack_fqdn"] == "api-r.binarycow.io"
+    assert parsed["network"]["https_port"] == 443 and parsed["network"]["advertised_https_port"] == 443
+    assert parsed["network"]["mqtt_tls_port"] == 8881 and parsed["network"]["listener_mode"] == "local_tls"
+    assert len(changes) == 3
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith("# my notes") and 'password = "hand-written-secret"' in text and 'password_hash = "keep-me"' in text
+
+
+def test_a_second_run_with_the_same_environment_changes_nothing(tmp_path: Path) -> None:
+    env = {"ROBOROCK_SERVER_HTTPS_PORT": "443"}
+    path, first, _ = _patched(tmp_path, env)
+    before = path.read_text(encoding="utf-8")
+
+    assert first and patch_config_from_env(env, config_path=path) == []
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_nothing_changes_without_variables(tmp_path: Path) -> None:
+    path, changes, _ = _patched(tmp_path, {})
+    assert changes == [] and path.read_text(encoding="utf-8") == _CONFIG
+
+
+def test_the_turn_block_can_be_set_from_variables_without_touching_other_keys(tmp_path: Path) -> None:
+    env = {"ROBOROCK_SERVER_TURN_PORT": "3479", "ROBOROCK_SERVER_TURN_REALM": "binarycow.io"}
+    _, changes, parsed = _patched(tmp_path, env)
+
+    assert parsed["turn"] == {"mode": "provided", "host": "10.0.30.15", "password": "hand-written-secret", "port": 3479, "realm": "binarycow.io"}
+    assert len(changes) == 2
+
+
+def test_a_missing_section_is_added_and_a_secret_is_not_printed(tmp_path: Path) -> None:
+    text = _CONFIG.split("[turn]")[0]
+    _, changes, parsed = _patched(tmp_path, {"ROBOROCK_SERVER_TURN_MODE": "provided", "ROBOROCK_SERVER_TURN_PASSWORD": "s3cret"}, text)
+
+    assert parsed["turn"] == {"mode": "provided", "password": "s3cret"}
+    assert all("s3cret" not in change for change in changes)
+
+
+def test_an_invalid_variable_is_reported_and_skipped(tmp_path: Path) -> None:
+    env = {"ROBOROCK_SERVER_HTTPS_PORT": "not-a-port", "ROBOROCK_SERVER_STACK_FQDN": "no-prefix.example.com", "ROBOROCK_SERVER_MQTT_TLS_PORT": "9000"}
+    _, changes, parsed = _patched(tmp_path, env)
+
+    assert parsed["network"]["https_port"] == 555 and parsed["network"]["stack_fqdn"] == "api-rr.binarycow.io"
+    assert parsed["network"]["mqtt_tls_port"] == 9000
+    assert sum(1 for change in changes if change.startswith("skipped")) == 2
+
+
+def test_windows_line_endings_and_array_values_survive(tmp_path: Path) -> None:
+    text = '[network]\r\nstack_fqdn = "api-a.example.com"\r\ntrusted_proxies = [\r\n  "127.0.0.1",\r\n  "::1",\r\n]\r\nhttps_port = 555\r\n'
+    path = tmp_path / "config.toml"
+    path.write_bytes(text.encode("utf-8"))
+    patch_config_from_env({"ROBOROCK_SERVER_TRUSTED_PROXIES": "10.0.0.0/8", "ROBOROCK_SERVER_HTTPS_PORT": "443"}, config_path=path)
+
+    raw = path.read_bytes().decode("utf-8")
+    parsed = tomllib.loads(raw)
+    assert parsed["network"]["trusted_proxies"] == ["10.0.0.0/8"] and parsed["network"]["https_port"] == 443
+    assert "\r\n" in raw and "\n" not in raw.replace("\r\n", "")
+
+
+def test_a_broken_file_is_left_alone(tmp_path: Path) -> None:
+    broken = "[network\nhttps_port = 555\n"
+    patched, changes = plan_config_patch({"ROBOROCK_SERVER_HTTPS_PORT": "443"}, broken)
+    assert patched == broken and "not valid TOML" in changes[0]

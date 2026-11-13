@@ -23,7 +23,7 @@ from pathlib import Path
 import re
 import secrets
 import tomllib
-from typing import Mapping
+from typing import Callable, Mapping
 from urllib.parse import urlsplit
 
 from .configure import hash_password
@@ -371,6 +371,207 @@ def render_config_toml_from_env(
             ]
         )
     return "\n".join(lines), secrets_to_write
+
+
+@dataclass(frozen=True)
+class _Setting:
+    """One config.toml key an environment variable can set."""
+
+    env: str
+    section: str
+    key: str
+    parse: Callable[[str], object]
+    secret: bool = False
+
+
+def _text(name: str) -> Callable[[str], object]:
+    def parse(value: str) -> object:
+        text = value.strip()
+        if not text:
+            raise ValueError(f"{ENV_PREFIX}{name} is empty")
+        return text
+
+    return parse
+
+
+def _choice(name: str, allowed: set[str]) -> Callable[[str], object]:
+    def parse(value: str) -> object:
+        text = value.strip().lower()
+        if text not in allowed:
+            raise ValueError(f"{ENV_PREFIX}{name} must be one of {sorted(allowed)}")
+        return text
+
+    return parse
+
+
+def _port_of(name: str) -> Callable[[str], object]:
+    return lambda value: _as_port(value.strip(), field_name=f"{ENV_PREFIX}{name}", default=0)
+
+
+def _bool_of(name: str) -> Callable[[str], object]:
+    return lambda value: _as_bool(value.strip(), default=False)
+
+
+def _int_of(name: str) -> Callable[[str], object]:
+    def parse(value: str) -> object:
+        try:
+            number = int(value.strip())
+        except ValueError as exc:
+            raise ValueError(f"{ENV_PREFIX}{name} must be an integer") from exc
+        if number <= 0:
+            raise ValueError(f"{ENV_PREFIX}{name} must be greater than 0")
+        return number
+
+    return parse
+
+
+def _turn_secret(name: str) -> Callable[[str], object]:
+    def parse(value: str) -> object:
+        text = value.strip()
+        if not text or any(character in text for character in "\r\n:="):
+            raise ValueError(f"{ENV_PREFIX}{name} cannot be empty or contain newlines, colons or equals signs")
+        return text
+
+    return parse
+
+
+def _hostname_of(name: str, *, api_prefix: bool = False) -> Callable[[str], object]:
+    return lambda value: _normalize_hostname(value, field_name=f"{ENV_PREFIX}{name}", require_api_prefix=api_prefix)
+
+
+# Only the simple, single-value settings. Secrets files, EAB credentials and the admin login are not patched.
+SETTINGS: tuple[_Setting, ...] = (
+    _Setting("STACK_FQDN", "network", "stack_fqdn", _hostname_of("STACK_FQDN", api_prefix=True)),
+    _Setting("LISTENER_MODE", "network", "listener_mode", _choice("LISTENER_MODE", {"local_tls", "external_tls"})),
+    _Setting("BIND_HOST", "network", "bind_host", _text("BIND_HOST")),
+    _Setting("HTTPS_PORT", "network", "https_port", _port_of("HTTPS_PORT")),
+    _Setting("MQTT_TLS_PORT", "network", "mqtt_tls_port", _port_of("MQTT_TLS_PORT")),
+    _Setting("ADVERTISED_HTTPS_PORT", "network", "advertised_https_port", _port_of("ADVERTISED_HTTPS_PORT")),
+    _Setting("ADVERTISED_MQTT_TLS_PORT", "network", "advertised_mqtt_tls_port", _port_of("ADVERTISED_MQTT_TLS_PORT")),
+    _Setting("REGION", "network", "region", lambda v: _text("REGION")(v).lower()),
+    _Setting("TRUSTED_PROXIES", "network", "trusted_proxies", lambda v: list(_as_trusted_proxies(v.strip(), default=()))),
+    _Setting("BROKER_MODE", "broker", "mode", _choice("BROKER_MODE", {"embedded", "external"})),
+    _Setting("BROKER_HOST", "broker", "host", _text("BROKER_HOST")),
+    _Setting("BROKER_PORT", "broker", "port", _port_of("BROKER_PORT")),
+    _Setting("DATA_DIR", "storage", "data_dir", _text("DATA_DIR")),
+    _Setting("TLS_MODE", "tls", "mode", _choice("TLS_MODE", {"cloudflare_acme", "provided"})),
+    _Setting("TLS_BASE_DOMAIN", "tls", "base_domain", _hostname_of("TLS_BASE_DOMAIN")),
+    _Setting("TLS_EMAIL", "tls", "email", _text("TLS_EMAIL")),
+    _Setting("ACME_SERVER", "tls", "acme_server", lambda v: _normalize_acme_server(v.strip())),
+    _Setting("CERT_FILE", "tls", "cert_file", _text("CERT_FILE")),
+    _Setting("KEY_FILE", "tls", "key_file", _text("KEY_FILE")),
+    _Setting("OTA_ENABLE_INSTALL", "ota", "enable_install", _bool_of("OTA_ENABLE_INSTALL")),
+    _Setting("MATTER_KEY_PROXY", "matter", "key_proxy", _bool_of("MATTER_KEY_PROXY")),
+    _Setting("TURN_MODE", "turn", "mode", _choice("TURN_MODE", {"disabled", "provided", "external"})),
+    _Setting("TURN_HOST", "turn", "host", _text("TURN_HOST")),
+    _Setting("TURN_PORT", "turn", "port", _port_of("TURN_PORT")),
+    _Setting("TURN_USERNAME", "turn", "username", _turn_secret("TURN_USERNAME")),
+    _Setting("TURN_PASSWORD", "turn", "password", _turn_secret("TURN_PASSWORD"), secret=True),
+    _Setting("TURN_REALM", "turn", "realm", _turn_secret("TURN_REALM")),
+    _Setting("TURN_TTL", "turn", "ttl", _int_of("TURN_TTL")),
+)
+
+_SECTION_RE = re.compile(r"^\s*\[([A-Za-z0-9_.-]+)\]\s*(#.*)?$")
+
+
+def _toml_value(value: object) -> str:
+    if isinstance(value, bool):
+        return _toml_bool(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_string(str(item)) for item in value) + "]"
+    return _toml_string(str(value))
+
+
+def _set_key(lines: list[str], section: str, key: str, value: str) -> None:
+    """Sets one key in the section, changing only that line (or adding it); everything else stays as written."""
+    key_re = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    start = None
+    for index, line in enumerate(lines):
+        match = _SECTION_RE.match(line)
+        if match and match.group(1) == section:
+            start = index
+            break
+    if start is None:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines.extend(["", f"[{section}]", f"{key} = {value}"])
+        return
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if _SECTION_RE.match(lines[index]) or lines[index].lstrip().startswith("[["):
+            end = index
+            break
+    last_content = start
+    for index in range(start + 1, end):
+        if key_re.match(lines[index]):
+            indent = re.match(r"\s*", lines[index]).group(0)
+            stop = index
+            # an array can run over several lines: replace all of them
+            first = lines[index].split("=", 1)[1]
+            if first.count("[") > first.count("]"):
+                depth = first.count("[") - first.count("]")
+                while depth > 0 and stop + 1 < end:
+                    stop += 1
+                    depth += lines[stop].count("[") - lines[stop].count("]")
+            lines[index : stop + 1] = [f"{indent}{key} = {value}"]
+            return
+        if lines[index].strip() and not lines[index].lstrip().startswith("#"):
+            last_content = index
+    lines.insert(last_content + 1, f"{key} = {value}")
+
+
+def plan_config_patch(env: Mapping[str, str], text: str) -> tuple[str, list[str]]:
+    """The config text with the environment's settings applied, and a line for each change made.
+
+    Only variables that are set are looked at, and only a key whose value differs is touched. A variable that is set
+    but invalid is reported and skipped, so a typo never stops the server from starting.
+    """
+    newline = "\r\n" if "\r\n" in text else "\n"
+    try:
+        current = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        return text, [f"config.toml is not valid TOML ({exc}); left unchanged"]
+    lines = text.replace("\r\n", "\n").split("\n")
+    changes: list[str] = []
+    for setting in SETTINGS:
+        raw = _get(env, setting.env)
+        if not raw:
+            continue
+        try:
+            wanted = setting.parse(raw)
+        except ValueError as exc:
+            changes.append(f"skipped {ENV_PREFIX}{setting.env}: {exc}")
+            continue
+        existing = (current.get(setting.section) or {}).get(setting.key)
+        if existing == wanted:
+            continue
+        _set_key(lines, setting.section, setting.key, _toml_value(wanted))
+        shown_old = "unset" if existing is None else ("***" if setting.secret else repr(existing))
+        shown_new = "***" if setting.secret else repr(wanted)
+        changes.append(f"{setting.section}.{setting.key}: {shown_old} -> {shown_new} (from {ENV_PREFIX}{setting.env})")
+    return newline.join(lines), changes
+
+
+def patch_config_from_env(env: Mapping[str, str], *, config_path: Path) -> list[str]:
+    """Applies the environment to an existing config.toml in place. Returns what changed (empty when nothing did)."""
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    patched, changes = plan_config_patch(env, text)
+    applied = [change for change in changes if not change.startswith(("skipped", "config.toml is not valid"))]
+    if applied and patched != text:
+        temp = config_path.with_name(config_path.name + ".tmp")
+        try:
+            temp.write_text(patched, encoding="utf-8")
+            os.replace(temp, config_path)
+        except OSError:
+            # a bind-mounted single file cannot be replaced; write it in place instead
+            temp.unlink(missing_ok=True)
+            config_path.write_text(patched, encoding="utf-8")
+    return changes
 
 
 def write_config_from_env(

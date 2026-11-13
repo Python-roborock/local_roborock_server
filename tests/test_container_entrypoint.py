@@ -187,3 +187,42 @@ def test_run_entrypoint_execs_server_even_without_any_config_present(
     )
 
     assert calls == [data_config]
+
+
+def test_an_existing_data_config_follows_the_environment_and_nothing_else(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    data_config = tmp_path / "data-config.toml"
+    data_config.write_text('[network]\nstack_fqdn = "api-rr.example.com"\nhttps_port = 555\n\n[turn]\nmode = "provided"\n', encoding="utf-8")
+    monkeypatch.setenv("ROBOROCK_SERVER_HTTPS_PORT", "443")
+    calls: list[Path] = []
+    monkeypatch.setattr(container_entrypoint, "_exec_server", lambda config_path: calls.append(config_path))
+
+    container_entrypoint._run_entrypoint(
+        compose_config=tmp_path / "missing.toml", data_config=data_config, addon_options=tmp_path / "missing.json",
+    )
+
+    text = data_config.read_text(encoding="utf-8")
+    assert "https_port = 443" in text and 'stack_fqdn = "api-rr.example.com"' in text and '[turn]\nmode = "provided"' in text
+    assert calls == [data_config]
+    assert "network.https_port: 555 -> 443" in capsys.readouterr().err
+
+
+def test_a_mounted_config_is_never_written_but_the_ignored_variable_is_reported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    compose_config = tmp_path / "app-config.toml"
+    compose_config.write_text("[network]\nhttps_port = 555\n", encoding="utf-8")
+    monkeypatch.setenv("ROBOROCK_SERVER_HTTPS_PORT", "443")
+    monkeypatch.setattr(container_entrypoint, "_exec_server", lambda config_path: None)
+
+    container_entrypoint._run_entrypoint(
+        compose_config=compose_config, data_config=tmp_path / "data.toml", addon_options=tmp_path / "missing.json",
+    )
+
+    assert compose_config.read_text(encoding="utf-8") == "[network]\nhttps_port = 555\n"
+    assert "mounted, not changed" in capsys.readouterr().err
