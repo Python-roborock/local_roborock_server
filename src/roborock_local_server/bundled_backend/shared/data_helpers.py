@@ -44,6 +44,19 @@ def stable_int(seed: str) -> int:
     return int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12], 16)
 
 
+def model_product_ids(cloud_products: Any) -> dict[str, int]:
+    """Map model -> numeric product id from a cloud /api/v5/product payload."""
+    ids: dict[str, int] = {}
+    category_details = cloud_products.get("categoryDetailList") if isinstance(cloud_products, dict) else None
+    for category_detail in category_details or []:
+        for product in (category_detail or {}).get("productList") or []:
+            model = str(product.get("model") or "").strip().lower()
+            product_id = as_int(product.get("id"), 0)
+            if model and product_id > 0:
+                ids[model] = product_id
+    return ids
+
+
 def default_home_id(ctx: ServerContext) -> int:
     return stable_int(f"{ctx.duid}:home")
 

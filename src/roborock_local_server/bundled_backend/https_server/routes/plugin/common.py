@@ -156,6 +156,10 @@ def _dict_records(value: Any) -> list[dict[str, Any]]:
     return [dict(item) for item in value if isinstance(item, dict)]
 
 
+def snapshot_plugin_catalog_data(ctx: ServerContext, catalog_name: str) -> Any:
+    return _catalog_data(_snapshot_plugin_catalogs(ctx), catalog_name)
+
+
 def snapshot_plugin_records(
     ctx: ServerContext,
     catalog_name: str,
