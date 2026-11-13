@@ -61,6 +61,7 @@ from https_server.routes.auth.service import (
     load_cloud_full_snapshot,
     with_current_server_urls,
 )
+from .bundled_backend.shared.device_snapshot_store import DeviceSnapshotStore
 from .bundled_backend.shared.zone_ranges_store import ZoneRangesStore
 from .security import AdminSessionManager, verify_password
 
@@ -454,6 +455,7 @@ class ReleaseSupervisor:
                 backup_count=self.config.logging.backup_count,
             )
 
+        snapshot_store = DeviceSnapshotStore(self.paths.http_jsonl_path.parent)
         self.context = ServerContext(
             api_host=self.config.network.stack_fqdn,
             mqtt_host=self.config.network.stack_fqdn,
@@ -475,6 +477,7 @@ class ReleaseSupervisor:
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=zone_ranges_store,
+            snapshot_store=snapshot_store,
             timezone=self.config.network.timezone or None,
             turn_enabled=self.config.turn.mode != "disabled",
             turn_host=self.config.turn.host or self.config.network.stack_fqdn,
@@ -484,8 +487,25 @@ class ReleaseSupervisor:
             turn_realm=self.config.turn.realm or self.config.turn.host or self.config.network.stack_fqdn,
             turn_ttl=self.config.turn.ttl,
         )
+        # A robot that went quiet before this store existed still has its last words in the MQTT log.
+        threading.Thread(
+            target=self._seed_snapshots, args=(snapshot_store,), daemon=True, name="snapshot-seed",
+        ).start()
         self.endpoint_rules = default_endpoint_rules()
         self.app = self._create_app()
+
+    def _seed_snapshots(self, store: DeviceSnapshotStore) -> None:
+        def resolve_duid(did: str) -> str:
+            device = self.runtime_credentials.resolve_device(did=did)
+            return str(device.get("duid") or "") if device else ""
+
+        try:
+            added = store.seed_from_mqtt_jsonl(self.paths.mqtt_jsonl_path, resolve_duid)
+        except Exception:
+            self.root_logger.exception("Could not seed last-known device state from the MQTT log")
+            return
+        if added:
+            self.root_logger.info("Seeded last-known state for %d device(s) from the MQTT log", added)
 
     def _init_zone_ranges_store(self) -> ZoneRangesStore:
         store = ZoneRangesStore(self.paths.http_jsonl_path.parent)
@@ -1903,6 +1923,7 @@ class ReleaseSupervisor:
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self.context.zone_ranges_store,
+            snapshot_store=self.context.snapshot_store,
             tls_enabled=self._uses_local_tls(),
             on_onboarding_credentials_learned=self.persist_active_onboarding_device,
         )
