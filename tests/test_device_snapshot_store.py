@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from roborock_local_server.bundled_backend.shared.device_snapshot_store import DeviceSnapshotStore
+from roborock_local_server.bundled_backend.shared.device_snapshot_store import DeviceSnapshotStore, is_status_answer
 
 DUID = "2e2txkqKqxVifcIdyOT1lY"
 
@@ -242,3 +242,11 @@ def test_room_mapping_ignores_empty_and_malformed_answers(tmp_path: Path) -> Non
     store.record_room_mapping(DUID, [["x", "1"], [3], [4, None]])
 
     assert store.get(DUID) is None
+
+
+def test_get_prop_get_status_counts_as_a_status_answer() -> None:
+    assert is_status_answer({"request_method": "get_status"})
+    assert is_status_answer({"request_method": "get_prop", "request_params": ["get_status"]})
+    assert not is_status_answer({"request_method": "get_prop", "request_params": ["get_consumable"]})
+    assert not is_status_answer({"request_method": "get_prop"})
+    assert not is_status_answer({"request_method": "get_room_mapping"})
