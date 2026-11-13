@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import ipaddress
+import os
 from pathlib import Path
 import re
 import tomllib
@@ -105,6 +106,13 @@ class TurnConfig:
 
 
 @dataclass(frozen=True)
+class OtaConfig:
+    """Firmware installs from the official app's Update button; off until the owner opts in."""
+
+    enable_install: bool = False
+
+
+@dataclass(frozen=True)
 class AppConfig:
     network: NetworkConfig
     broker: BrokerConfig
@@ -113,6 +121,7 @@ class AppConfig:
     admin: AdminConfig
     turn: TurnConfig = TurnConfig()
     logging: LoggingConfig = LoggingConfig()
+    ota: OtaConfig = OtaConfig()
 
 
 @dataclass(frozen=True)
@@ -249,6 +258,16 @@ def _as_bool(value: object, default: bool) -> bool:
     return bool(value)
 
 
+def _ota_install_enabled(from_file: bool) -> bool:
+    """The env var wins when set, so installs can also be switched on for a config.toml that already exists."""
+    override = os.environ.get("ROBOROCK_SERVER_OTA_ENABLE_INSTALL", "").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    if override in {"0", "false", "no", "off"}:
+        return False
+    return from_file
+
+
 def load_config(path: str | Path) -> AppConfig:
     config_path = Path(path).resolve()
     parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
@@ -260,6 +279,7 @@ def load_config(path: str | Path) -> AppConfig:
     tls = _get_section(parsed, "tls")
     admin = _get_section(parsed, "admin")
     turn = _get_section(parsed, "turn")
+    ota = _get_section(parsed, "ota")
     turn_mode = str(turn.get("mode", "external" if _as_bool(turn.get("enabled"), False) else "disabled")).strip().lower()
     broker_mode = str(broker.get("mode", "embedded")).strip().lower()
     if broker_mode not in {"embedded", "external"}:
@@ -347,6 +367,7 @@ def load_config(path: str | Path) -> AppConfig:
             cert_file=str(tls.get("cert_file", "")).strip(),
             key_file=str(tls.get("key_file", "")).strip(),
         ),
+        ota=OtaConfig(enable_install=_ota_install_enabled(_as_bool(ota.get("enable_install"), False))),
         admin=AdminConfig(
             password_hash=_require_non_empty(admin.get("password_hash"), "admin.password_hash"),
             session_secret=_require_non_empty(admin.get("session_secret"), "admin.session_secret"),
