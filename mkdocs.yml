@@ -59,6 +59,7 @@ nav:
     - Camera (Live Video): camera.md
   - Reference:
     - Log Retention: logging.md
+    - Last-Known State: last_known_state.md
     - Known Limitations: known_limitations.md
     - Scene Validity Reports: scene_validity.md
     - Tested Vacuums: tested_vacuums.md
