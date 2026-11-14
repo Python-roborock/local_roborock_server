@@ -49,7 +49,7 @@ Cloudflare can provide DNS validation for several certificate issuers. Its use a
 
 | Vacuum | Firmware | ZeroSSL | Actalis | Let's Encrypt | SSL.com | Reports |
 |---|---:|---:|---:|---:|---:|---|
-| Roborock S4 (s4) | `02.06.26` | ❓ | ✅ | ❓ | ❓ | — |
+| Roborock S4 (s4) | `02.06.26` | ❓ | ✅ | ❓ | ❓ | [#257](https://github.com/Python-roborock/local_roborock_server/pull/257) |
 | Roborock S5 Max | Not reported | ❌ | ❓ | ❌ | ❓ | [#3](https://github.com/Python-roborock/local_roborock_server/issues/3) |
 | Roborock S5 Max | `02.16.62` | ❓ | ✅ | ❓ | ❓ | [#3](https://github.com/Python-roborock/local_roborock_server/issues/3#issuecomment-5450368775) |
 | Roborock S5 Max (s5e) | `02.16.68` | ❓ | ✅ | ❓ | ❓ | [#146](https://github.com/Python-roborock/local_roborock_server/issues/146) |
@@ -58,7 +58,7 @@ Cloudflare can provide DNS validation for several certificate issuers. Its use a
 | Roborock S6 MaxV (a10) | `01.58.02` | ✅ | ❓ | ❌ | ❓ | [#122](https://github.com/Python-roborock/local_roborock_server/issues/122) |
 | Roborock S6 MaxV (a10) | `01.60.52` | ❓ | ❓ | ❌ | ✅ | [#177](https://github.com/Python-roborock/local_roborock_server/issues/177) |
 | Roborock S7 | Not reported | ❓ | ✅ | ❌ | ✅ | [#3](https://github.com/Python-roborock/local_roborock_server/issues/3) |
-| Roborock S7 (a15) | `02.16.12` | ❓ | ✅ | ❓ | ❓ | — |
+| Roborock S7 (a15) | `02.16.12` | ❓ | ✅ | ❓ | ❓ | [#257](https://github.com/Python-roborock/local_roborock_server/pull/257) |
 | Roborock S7 MaxV | Not reported | ❓ | ❓ | ✅ | ❓ | — |
 | Roborock S7 MaxV (a27) | `02.59.36` | ✅ | ❓ | ✅ | ❓ | [#49](https://github.com/Python-roborock/local_roborock_server/issues/49), [#118](https://github.com/Python-roborock/local_roborock_server/issues/118), [#129](https://github.com/Python-roborock/local_roborock_server/issues/129) |
 | Roborock S7 Max Ultra | `02.26.80` | ❓ | ❓ | ✅ | ❓ | [#79](https://github.com/Python-roborock/local_roborock_server/issues/79#issuecomment-5637657592) |
