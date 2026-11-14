@@ -70,20 +70,22 @@ async def _fetched_once(tmp_path, monkeypatch):
     assert len(calls) == 2
 
 
-def test_a_package_that_does_not_match_its_md5_is_refused(tmp_path, monkeypatch):
-    asyncio.run(_md5_refused(tmp_path, monkeypatch))
+def test_a_package_not_in_the_list_is_not_fetched(tmp_path, monkeypatch):
+    asyncio.run(_not_listed(tmp_path, monkeypatch))
 
 
-async def _md5_refused(tmp_path, monkeypatch):
+async def _not_listed(tmp_path, monkeypatch):
     mirror = vp.VoicePackMirror(tmp_path, "eu")
+    calls = []
 
     async def fake_download(url):
-        return json.dumps(INFO).encode() if url.endswith("/info") else b"tampered"
+        calls.append(url)
+        return json.dumps(INFO).encode()
 
     monkeypatch.setattr(mirror, "_download", fake_download)
     with pytest.raises(vp.VoicePackError):
-        await mirror.get_file("vida", "package", "nl.pkg")
-    assert not (tmp_path / "voice_packs" / "vida" / "package" / "nl.pkg").exists()
+        await mirror.get_file("vida", "package", "xx.pkg")
+    assert calls == ["https://eu-app.roborock.com/app/vida/voice-pkg/info"]
 
 
 def test_the_last_list_is_used_when_roborock_is_unreachable(tmp_path, monkeypatch):

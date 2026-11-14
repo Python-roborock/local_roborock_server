@@ -85,11 +85,16 @@ class VoicePackMirror:
         return self.root / bucket / "info.json"
 
     async def _download(self, url: str) -> bytes:
+        """The body at [url], checked against Roborock's ETag when that is an MD5 (their storage sets it to the file's MD5)."""
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
             async with session.get(url) as response:
                 if response.status != 200:
                     raise VoicePackError(502 if response.status != 404 else 404, f"Roborock answered {response.status} for {url}")
-                return await response.read()
+                data = await response.read()
+                etag = (response.headers.get("ETag") or "").strip('"').lower()
+                if re.fullmatch(r"[0-9a-f]{32}", etag) and hashlib.md5(data).hexdigest() != etag:
+                    raise VoicePackError(502, f"The download of {url} was incomplete")
+                return data
 
     async def get_list(self, bucket: str) -> dict[str, Any]:
         """Roborock's list for [bucket], fetched at most once a day; the last copy is used when Roborock can't be reached."""
@@ -117,7 +122,11 @@ class VoicePackMirror:
             return json.loads(path.read_text(encoding="utf-8"))
 
     async def get_file(self, bucket: str, kind: str, name: str) -> Path:
-        """The local copy of a file, fetched from Roborock the first time; packages are checked against the list's MD5."""
+        """
+        The local copy of a file, fetched from Roborock the first time. A package must be in the list. The
+        list's `voice_pkg_md5` is not the MD5 of the file (an a296 `nl.pkg` hashes to its ETag instead), so
+        it is passed on to the robot untouched and the download is checked against the ETag.
+        """
         if not valid_bucket(bucket) or not valid_file(kind, name):
             raise VoicePackError(404, "Not Found")
         path = self.root / bucket / kind / name
@@ -126,15 +135,12 @@ class VoicePackMirror:
         async with self._lock(f"file:{bucket}/{kind}/{name}"):
             if path.exists():
                 return path
-            md5 = expected_md5(await self.get_list(bucket), name) if kind == "package" else None
-            if kind == "package" and md5 is None:
+            if kind == "package" and expected_md5(await self.get_list(bucket), name) is None:
                 raise VoicePackError(404, "This package is not in the voice pack list")
             try:
                 data = await self._download(self._upstream(bucket, f"{kind}/{name}"))
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 raise VoicePackError(502, f"Could not fetch {name}: {exc}") from exc
-            if md5 is not None and hashlib.md5(data).hexdigest() != md5:
-                raise VoicePackError(502, f"{name} does not match the MD5 in Roborock's list")
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(path.suffix + ".tmp")
             tmp.write_bytes(data)
