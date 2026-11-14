@@ -566,7 +566,8 @@ def plan_config_patch(env: Mapping[str, str], text: str) -> tuple[str, list[str]
 def patch_config_from_env(env: Mapping[str, str], *, config_path: Path) -> list[str]:
     """Applies the environment to an existing config.toml in place. Returns what changed (empty when nothing did)."""
     try:
-        text = config_path.read_text(encoding="utf-8")
+        # Read and write without newline translation so a CRLF file stays CRLF on Linux too.
+        text = config_path.read_bytes().decode("utf-8")
     except OSError:
         return []
     patched, changes = plan_config_patch(env, text)
@@ -574,12 +575,12 @@ def patch_config_from_env(env: Mapping[str, str], *, config_path: Path) -> list[
     if applied and patched != text:
         temp = config_path.with_name(config_path.name + ".tmp")
         try:
-            temp.write_text(patched, encoding="utf-8")
+            temp.write_text(patched, encoding="utf-8", newline="")
             os.replace(temp, config_path)
         except OSError:
             # a bind-mounted single file cannot be replaced; write it in place instead
             temp.unlink(missing_ok=True)
-            config_path.write_text(patched, encoding="utf-8")
+            config_path.write_text(patched, encoding="utf-8", newline="")
     return changes
 
 
