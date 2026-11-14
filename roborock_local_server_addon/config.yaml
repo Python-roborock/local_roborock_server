@@ -91,6 +91,7 @@ options:
   turn_password: ""
   turn_realm: ""
   turn_ttl: 86400
+  voice_packs_mode: "mirror"
 schema:
   stack_fqdn: str
   https_port: port
@@ -119,3 +120,4 @@ schema:
   turn_password: password?
   turn_realm: str?
   turn_ttl: int?
+  voice_packs_mode: list(mirror|offline|disabled)?

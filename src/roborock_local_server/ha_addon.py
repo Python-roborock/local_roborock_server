@@ -43,6 +43,7 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "turn_password": "",
     "turn_realm": "",
     "turn_ttl": 86400,
+    "voice_packs_mode": "mirror",
 }
 
 _HOST_RE = re.compile(r"^[a-z0-9.-]+$")
@@ -258,6 +259,9 @@ def _render_config_toml(
     acme_eab_kid_file = str(acme_eab_kid_path) if acme_server == "actalis" else ""
     acme_eab_hmac_key_file = str(acme_eab_hmac_key_path) if acme_server == "actalis" else ""
 
+    voice_packs_mode = str(merged.get("voice_packs_mode") or "mirror").strip().lower()
+    if voice_packs_mode not in {"mirror", "offline", "disabled"}:
+        raise ValueError("voice_packs_mode must be mirror, offline, or disabled")
     turn_mode = str(merged.get("turn_mode") or "disabled").strip().lower()
     if turn_mode not in {"disabled", "provided", "external"}:
         raise ValueError("turn_mode must be disabled, provided, or external")
@@ -372,6 +376,9 @@ def _render_config_toml(
             f"password = {_toml_string(turn_password)}",
             f"realm = {_toml_string(turn_realm)}",
             f"ttl = {turn_ttl}",
+            "",
+            "[voice_packs]",
+            f"mode = {_toml_string(voice_packs_mode)}",
             "",
         ]
     )

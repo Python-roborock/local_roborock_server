@@ -107,3 +107,70 @@ async def _last_list(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mirror, "_download", down)
     assert (await mirror.get_list("vida"))["voice_list"][0]["voice_id"] == 129
+
+
+def test_offline_serves_stored_copies_and_never_downloads(tmp_path, monkeypatch):
+    asyncio.run(_offline(tmp_path, monkeypatch))
+
+
+async def _offline(tmp_path, monkeypatch):
+    online = vp.VoicePackMirror(tmp_path, "eu")
+
+    async def fake_download(url):
+        return json.dumps(INFO).encode() if url.endswith("/info") else b"dutch"
+
+    monkeypatch.setattr(online, "_download", fake_download)
+    await online.get_file("vida", "package", "nl.pkg")
+
+    offline = vp.VoicePackMirror(tmp_path, "eu", offline=True)
+
+    async def no_download(url):
+        raise AssertionError(f"offline mode fetched {url}")
+
+    monkeypatch.setattr(offline, "_download", no_download)
+    assert (await offline.get_list("vida"))["voice_list"][0]["voice_id"] == 129
+    assert (await offline.get_file("vida", "package", "nl.pkg")).read_bytes() == b"dutch"
+    with pytest.raises(vp.VoicePackError) as missing:
+        await offline.get_file("vida", "wav", "nl.wav")
+    assert missing.value.status == 404
+    with pytest.raises(vp.VoicePackError) as no_list:
+        await offline.get_list("other")
+    assert no_list.value.status == 404
+    assert (await offline.prefetch("vida"))["stored"] == 0
+
+
+def _client(tmp_path, monkeypatch, extra: str = "", https_port: int = 443):
+    from fastapi.testclient import TestClient
+    from conftest import write_release_config
+    from roborock_local_server.config import load_config, resolve_paths
+    from roborock_local_server.server import ReleaseSupervisor
+
+    config_file = write_release_config(tmp_path, https_port=https_port)
+    if extra:
+        config_file.write_text(config_file.read_text() + extra)
+    config = load_config(config_file)
+    supervisor = ReleaseSupervisor(config=config, paths=resolve_paths(config_file, config))
+
+    async def fake_download(url):
+        return json.dumps(INFO).encode() if url.endswith("/info") else b"dutch"
+
+    monkeypatch.setattr(supervisor.voice_packs, "_download", fake_download)
+    monkeypatch.setattr(supervisor.voice_packs, "prefetch", lambda bucket: asyncio.sleep(0))
+    return TestClient(supervisor.app)
+
+
+def test_the_list_route_points_at_the_advertised_https_port(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    voice = client.get("/voice-pkg/vida/info").json()["voice_list"][0]
+    assert voice["voice_pkg_url"] == "https://api-roborock.example.com/voice-pkg/vida/package/nl.pkg"
+    assert client.get("/voice-pkg/vida/package/nl.pkg").content == b"dutch"
+
+    other = _client(tmp_path / "p555", monkeypatch, https_port=555)
+    voice = other.get("/voice-pkg/vida/info").json()["voice_list"][0]
+    assert voice["voice_pkg_url"] == "https://api-roborock.example.com:555/voice-pkg/vida/package/nl.pkg"
+
+
+def test_disabled_mode_turns_the_routes_off(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch, extra='\n[voice_packs]\nmode="disabled"\n')
+    assert client.get("/voice-pkg/vida/info").status_code == 404
+    assert client.get("/voice-pkg/vida/package/nl.pkg").status_code == 404

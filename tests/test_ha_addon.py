@@ -556,6 +556,7 @@ def test_write_config_from_home_assistant_options_renders_turn_settings(tmp_path
     assert parsed["turn"]["password"] == "secretpassword"
     assert parsed["turn"]["realm"] == "turn.example.com"
     assert parsed["turn"]["ttl"] == 86400
+    assert parsed["voice_packs"]["mode"] == "mirror"
 
 
 def test_provided_turn_generates_stable_credentials_and_uses_stack_host(tmp_path: Path) -> None:

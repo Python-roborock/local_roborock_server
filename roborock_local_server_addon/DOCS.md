@@ -21,6 +21,8 @@ It publishes two TLS ports directly:
 
 For camera live view, set `turn_mode` to `provided` to start coturn inside the add-on. It uses `stack_fqdn` as the advertised host and generates a persistent password when `turn_password` is blank. Set `turn_mode` to `external` with `turn_host`, `turn_port`, `turn_username`, `turn_password`, and optionally `turn_realm` to advertise your existing relay. `disabled` leaves TURN off. In provided mode, allow UDP 3478 and 49160-49179 between the robot, viewer, and Home Assistant host.
 
+`voice_packs_mode` controls the voice-pack mirror for robots without internet access: `mirror` (default) fetches Roborock's packs on first use and keeps copies, `offline` serves only stored copies, `disabled` turns it off. See the Voice Packs page of the documentation.
+
 Before choosing the TLS mode, check the tested-vacuum certificate guidance in `docs/tested_vacuums.md`. Different models may need `zerossl`, `actalis`, or your own certificate chain. For most users, prefer `zerossl`. Use `actalis` mainly for older vacuums or when your model is already known to need it.
 
 The add-on always runs the embedded MQTT broker and keeps the topic bridge enabled.

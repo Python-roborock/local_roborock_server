@@ -104,6 +104,20 @@ class TurnConfig:
     ttl: int = 86400
 
 
+VOICE_PACK_MODES = ("mirror", "offline", "disabled")
+
+
+@dataclass(frozen=True)
+class VoicePacksConfig:
+    """Voice packs served to robots that cannot reach Roborock (see docs/voice_packs.md).
+
+    ``mirror`` fetches Roborock's list and packs on first use and keeps copies; ``offline`` serves
+    only the copies already stored and never contacts Roborock; ``disabled`` turns the routes off.
+    """
+
+    mode: str = "mirror"
+
+
 @dataclass(frozen=True)
 class AppConfig:
     network: NetworkConfig
@@ -113,6 +127,7 @@ class AppConfig:
     admin: AdminConfig
     turn: TurnConfig = TurnConfig()
     logging: LoggingConfig = LoggingConfig()
+    voice_packs: VoicePacksConfig = VoicePacksConfig()
 
 
 @dataclass(frozen=True)
@@ -259,6 +274,7 @@ def load_config(path: str | Path) -> AppConfig:
     logging = _get_section(parsed, "logging")
     tls = _get_section(parsed, "tls")
     admin = _get_section(parsed, "admin")
+    voice_packs = _get_section(parsed, "voice_packs")
     turn = _get_section(parsed, "turn")
     turn_mode = str(turn.get("mode", "external" if _as_bool(turn.get("enabled"), False) else "disabled")).strip().lower()
     broker_mode = str(broker.get("mode", "embedded")).strip().lower()
@@ -368,6 +384,7 @@ def load_config(path: str | Path) -> AppConfig:
             realm=str(turn.get("realm", "") or turn.get("host", "")).strip(),
             ttl=_as_int(turn.get("ttl"), "turn.ttl", 86400),
         ),
+        voice_packs=VoicePacksConfig(mode=str(voice_packs.get("mode", "mirror")).strip().lower()),
     )
 
     if len(config.admin.session_secret) < 24:
@@ -378,6 +395,8 @@ def load_config(path: str | Path) -> AppConfig:
     if config.broker.mode == "external":
         _require_non_empty(config.broker.host, "broker.host")
 
+    if config.voice_packs.mode not in VOICE_PACK_MODES:
+        raise ValueError("voice_packs.mode must be 'mirror', 'offline', or 'disabled'")
     if config.turn.mode not in {"disabled", "provided", "external"}:
         raise ValueError("turn.mode must be 'disabled', 'provided', or 'external'")
     if config.turn.mode != "disabled":

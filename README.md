@@ -67,6 +67,7 @@ Additional docs:
 - [Tested vacuums](docs/tested_vacuums.md)
 - [Home Assistant](docs/home_assistant.md) for the add-on install path and integration setup
 - [Mobile App Options](docs/roborock_app.md)
+- [Voice packs](docs/voice_packs.md) for changing the robot's voice without internet access
 - [Custom MQTT](docs/custom_mqtt.md)
 - [Custom certificate management](docs/custom_cert_management.md)
 

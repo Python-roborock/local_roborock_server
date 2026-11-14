@@ -557,3 +557,14 @@ def test_load_config_rejects_invalid_trusted_proxy(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="network.trusted_proxies entry 'traefik'"):
         load_config(config_file)
+
+
+def test_voice_packs_mode_defaults_to_mirror_and_is_validated(tmp_path):
+    path = write_release_config(tmp_path)
+    base = path.read_text()
+    assert load_config(path).voice_packs.mode == "mirror"
+    path.write_text(base + '\n[voice_packs]\nmode="Offline"\n')
+    assert load_config(path).voice_packs.mode == "offline"
+    path.write_text(base + '\n[voice_packs]\nmode="sometimes"\n')
+    with pytest.raises(ValueError, match="voice_packs.mode"):
+        load_config(path)

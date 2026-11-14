@@ -69,8 +69,11 @@ def expected_md5(info: dict[str, Any] | None, name: str) -> str | None:
 
 
 class VoicePackMirror:
-    def __init__(self, data_dir: Path, region: str, timeout_seconds: float = 120.0) -> None:
+    """With ``offline`` set, only copies already under ``<data_dir>/voice_packs`` are served and Roborock is never contacted."""
+
+    def __init__(self, data_dir: Path, region: str, timeout_seconds: float = 120.0, offline: bool = False) -> None:
         self.root = Path(data_dir) / "voice_packs"
+        self.offline = offline
         self.upstream_host = UPSTREAM_HOSTS.get((region or "").lower(), UPSTREAM_HOSTS["eu"])
         self.timeout = aiohttp.ClientTimeout(total=timeout_seconds)
         self._locks: dict[str, asyncio.Lock] = {}
@@ -101,6 +104,10 @@ class VoicePackMirror:
         if not valid_bucket(bucket):
             raise VoicePackError(400, "Unknown voice pack bucket")
         path = self._list_path(bucket)
+        if self.offline:
+            if not path.exists():
+                raise VoicePackError(404, "No stored voice pack list for this bucket")
+            return json.loads(path.read_text(encoding="utf-8"))
         async with self._lock(f"list:{bucket}"):
             fresh = path.exists() and time.time() - path.stat().st_mtime < LIST_MAX_AGE_SECONDS
             if not fresh:
@@ -132,6 +139,8 @@ class VoicePackMirror:
         path = self.root / bucket / kind / name
         if path.exists():
             return path
+        if self.offline:
+            raise VoicePackError(404, "Not Found")
         async with self._lock(f"file:{bucket}/{kind}/{name}"):
             if path.exists():
                 return path
@@ -149,6 +158,8 @@ class VoicePackMirror:
 
     async def prefetch(self, bucket: str) -> dict[str, Any]:
         """Downloads every package, picture and preview in the list, so later installs need no internet."""
+        if self.offline:
+            return {"bucket": bucket, "stored": 0, "failed": {}}
         info = await self.get_list(bucket)
         done: list[str] = []
         failed: dict[str, str] = {}

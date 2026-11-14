@@ -349,7 +349,7 @@ class ReleaseSupervisor:
         self.config = config
         self.paths = paths
         self.enable_standalone_admin = bool(enable_standalone_admin)
-        self.voice_packs = VoicePackMirror(paths.data_dir, config.network.region)
+        self.voice_packs = VoicePackMirror(paths.data_dir, config.network.region, offline=config.voice_packs.mode == "offline")
         self._voice_prefetch_started: set[str] = set()
 
         self.root_logger = logging.getLogger("roborock_local_server")
@@ -1849,19 +1849,24 @@ class ReleaseSupervisor:
         # Public like Roborock's own copies: the robot downloads them without credentials.
         @app.get("/voice-pkg/{bucket}/info")
         async def voice_pack_list(bucket: str) -> Response:
+            if self.config.voice_packs.mode == "disabled":
+                return JSONResponse({"error": "Not Found"}, status_code=404)
             try:
                 info = await self.voice_packs.get_list(bucket)
             except VoicePackError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=exc.status)
-            if bucket not in self._voice_prefetch_started:
+            if not self.voice_packs.offline and bucket not in self._voice_prefetch_started:
                 # Keep a copy of every pack from the first time the list is asked for.
                 self._voice_prefetch_started.add(bucket)
                 asyncio.create_task(self.voice_packs.prefetch(bucket))
-            base_url = f"https://{self.config.network.stack_fqdn}"
+            port = self.config.network.advertised_https_port
+            base_url = f"https://{self.config.network.stack_fqdn}" + ("" if port in (0, 443) else f":{port}")
             return JSONResponse(rewrite_voice_list(info, base_url, bucket))
 
         @app.get("/voice-pkg/{bucket}/{kind}/{name}")
         async def voice_pack_file(bucket: str, kind: str, name: str) -> Response:
+            if self.config.voice_packs.mode == "disabled":
+                return JSONResponse({"error": "Not Found"}, status_code=404)
             try:
                 path = await self.voice_packs.get_file(bucket, kind, name)
             except VoicePackError as exc:

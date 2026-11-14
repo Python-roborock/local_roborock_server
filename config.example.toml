@@ -74,3 +74,10 @@ username = ""
 password = ""
 realm = "api-roborock.example.com"
 ttl = 86400
+
+[voice_packs]
+# Voice packs for robots without internet access (see docs/voice_packs.md). mirror fetches
+# Roborock's list and each pack the first time a robot or app asks, then serves the copies kept
+# under data_dir/voice_packs. offline serves only those copies and never contacts Roborock.
+# disabled turns the /voice-pkg routes off.
+mode = "mirror"   # mirror | offline | disabled
