@@ -376,19 +376,62 @@ async def _request_cloud_api_data(
     return response.get("data")
 
 
-def _plugin_product_ids(home_data: HomeData) -> list[int]:
+def _positive_int(raw: Any) -> int | None:
+    value = str(raw if raw is not None else "").strip()
+    if not value.isdigit():
+        return None
+    number = int(value)
+    return number if number > 0 else None
+
+
+def _numeric_product_ids_by_model(product_catalog: Any) -> dict[str, int]:
+    """Model -> numeric product id, from the cloud's ``GET /api/v5/product`` answer.
+
+    Newer products (a226, a296, ...) are listed in ``home_data`` with a string id only, but the cloud
+    still has a numeric id for each model, and ``/api/v1/appplugin`` only takes numeric ids (a string
+    is answered with code 1002 "parameter error"). The answer's nesting is not documented, so every
+    object holding a numeric ``id`` and a ``model`` is taken.
+    """
+    found: dict[str, int] = {}
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            model = node.get("model")
+            number = _positive_int(node.get("id"))
+            if isinstance(model, str) and model and number is not None:
+                found.setdefault(model, number)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(product_catalog)
+    return found
+
+
+def _plugin_product_ids(home_data: HomeData, numeric_ids_by_model: dict[str, int] | None = None) -> list[int]:
+    """The numeric product ids to ask ``/api/v1/appplugin`` for.
+
+    Numeric ids are taken as they are. A string id is looked up through its product's model in
+    [numeric_ids_by_model]; one that cannot be mapped is left out, as the catalog refuses strings.
+    Before string ids were mapped, an account with only such products sent no ids at all, so the
+    device plugin catalog was never fetched for them.
+    """
+    by_model = numeric_ids_by_model or {}
+    model_by_string_id = {
+        str(product.id): product.model for product in home_data.products or [] if getattr(product, "model", None)
+    }
+    raw_ids = [product.id for product in home_data.products or []]
+    raw_ids += [getattr(device, "product_id", None) for device in _all_home_devices(home_data)]
     product_ids: set[int] = set()
-    for product in home_data.products or []:
-        try:
-            product_ids.add(int(product.id))
-        except (TypeError, ValueError):
-            continue
-    for device in _all_home_devices(home_data):
-        try:
-            product_ids.add(int(getattr(device, "product_id", 0) or 0))
-        except (TypeError, ValueError):
-            continue
-    return sorted(product_id for product_id in product_ids if product_id > 0)
+    for raw in raw_ids:
+        number = _positive_int(raw)
+        if number is None and raw is not None:
+            number = by_model.get(model_by_string_id.get(str(raw).strip(), ""))
+        if number is not None:
+            product_ids.add(number)
+    return sorted(product_ids)
 
 
 async def _fetch_plugin_catalogs(
@@ -442,7 +485,12 @@ async def _fetch_plugin_catalogs(
         "/api/v1/plugins",
         params={"type": 2, "apiLevel": 10043},
     )
-    product_ids = _plugin_product_ids(home_data)
+    # Only needed for products home_data lists with a string id: the catalog takes numeric ids.
+    numeric_ids_by_model: dict[str, int] = {}
+    if any(_positive_int(product.id) is None for product in home_data.products or []):
+        await fetch_catalog("product", "/api/v5/product")
+        numeric_ids_by_model = _numeric_product_ids_by_model(catalogs["product"].get("data"))
+    product_ids = _plugin_product_ids(home_data, numeric_ids_by_model)
     if product_ids:
         await fetch_catalog(
             "appplugin",
