@@ -351,6 +351,7 @@ class ReleaseSupervisor:
         self.enable_standalone_admin = bool(enable_standalone_admin)
         self.voice_packs = VoicePackMirror(paths.data_dir, config.network.region, offline=config.voice_packs.mode == "offline")
         self._voice_prefetch_started: set[str] = set()
+        self._voice_prefetch_tasks: set[asyncio.Task] = set()
 
         self.root_logger = logging.getLogger("roborock_local_server")
         self.root_logger.setLevel(logging.INFO)
@@ -1857,8 +1858,7 @@ class ReleaseSupervisor:
                 return JSONResponse({"error": str(exc)}, status_code=exc.status)
             if not self.voice_packs.offline and bucket not in self._voice_prefetch_started:
                 # Keep a copy of every pack from the first time the list is asked for.
-                self._voice_prefetch_started.add(bucket)
-                asyncio.create_task(self.voice_packs.prefetch(bucket))
+                self._start_voice_prefetch(bucket)
             port = self.config.network.advertised_https_port
             base_url = f"https://{self.config.network.stack_fqdn}" + ("" if port in (0, 443) else f":{port}")
             return JSONResponse(rewrite_voice_list(info, base_url, bucket))
@@ -2028,8 +2028,35 @@ class ReleaseSupervisor:
         if self._uses_local_tls() and self.config.tls.mode == "cloudflare_acme":
             self._renew_task = asyncio.create_task(self._renew_loop(), name="tls-renew-loop")
 
+    def _start_voice_prefetch(self, bucket: str) -> None:
+        """Download every pack of [bucket] in the background; a failed run may be started again later."""
+        self._voice_prefetch_started.add(bucket)
+        task = asyncio.create_task(self.voice_packs.prefetch(bucket), name=f"voice-prefetch-{bucket}")
+        self._voice_prefetch_tasks.add(task)
+
+        def done(t: asyncio.Task) -> None:
+            self._voice_prefetch_tasks.discard(t)
+            if t.cancelled():
+                self._voice_prefetch_started.discard(bucket)
+                return
+            exc = t.exception()
+            if exc is not None:
+                self._voice_prefetch_started.discard(bucket)
+                self.root_logger.warning("Voice packs: prefetch of %s failed: %s", bucket, exc)
+                return
+            result = t.result()
+            if result.get("failed"):
+                self._voice_prefetch_started.discard(bucket)
+            self.root_logger.info(
+                "Voice packs: %s has %s files stored, %s failed", bucket, result.get("stored"), len(result.get("failed") or {})
+            )
+
+        task.add_done_callback(done)
+
     async def stop(self) -> None:
         self._stop_event.set()
+        for task in list(self._voice_prefetch_tasks):
+            task.cancel()
         self._turn_relay.stop()
         self._refresh_turn_health()
         if self._renew_task is not None:

@@ -53,7 +53,7 @@ async def _fetched_once(tmp_path, monkeypatch):
     mirror = vp.VoicePackMirror(tmp_path, "eu")
     calls = []
 
-    async def fake_download(url):
+    async def fake_download(url, **kwargs):
         calls.append(url)
         if url.endswith("/info"):
             return json.dumps(INFO).encode()
@@ -78,7 +78,7 @@ async def _not_listed(tmp_path, monkeypatch):
     mirror = vp.VoicePackMirror(tmp_path, "eu")
     calls = []
 
-    async def fake_download(url):
+    async def fake_download(url, **kwargs):
         calls.append(url)
         return json.dumps(INFO).encode()
 
@@ -95,14 +95,14 @@ def test_the_last_list_is_used_when_roborock_is_unreachable(tmp_path, monkeypatc
 async def _last_list(tmp_path, monkeypatch):
     mirror = vp.VoicePackMirror(tmp_path, "eu")
 
-    async def ok(url):
+    async def ok(url, **kwargs):
         return json.dumps(INFO).encode()
 
     monkeypatch.setattr(mirror, "_download", ok)
     await mirror.get_list("vida")
     monkeypatch.setattr(vp, "LIST_MAX_AGE_SECONDS", -1)
 
-    async def down(url):
+    async def down(url, **kwargs):
         raise vp.aiohttp.ClientError("offline")
 
     monkeypatch.setattr(mirror, "_download", down)
@@ -116,7 +116,7 @@ def test_offline_serves_stored_copies_and_never_downloads(tmp_path, monkeypatch)
 async def _offline(tmp_path, monkeypatch):
     online = vp.VoicePackMirror(tmp_path, "eu")
 
-    async def fake_download(url):
+    async def fake_download(url, **kwargs):
         return json.dumps(INFO).encode() if url.endswith("/info") else b"dutch"
 
     monkeypatch.setattr(online, "_download", fake_download)
@@ -124,7 +124,7 @@ async def _offline(tmp_path, monkeypatch):
 
     offline = vp.VoicePackMirror(tmp_path, "eu", offline=True)
 
-    async def no_download(url):
+    async def no_download(url, **kwargs):
         raise AssertionError(f"offline mode fetched {url}")
 
     monkeypatch.setattr(offline, "_download", no_download)
@@ -151,7 +151,7 @@ def _client(tmp_path, monkeypatch, extra: str = "", https_port: int = 443):
     config = load_config(config_file)
     supervisor = ReleaseSupervisor(config=config, paths=resolve_paths(config_file, config))
 
-    async def fake_download(url):
+    async def fake_download(url, **kwargs):
         return json.dumps(INFO).encode() if url.endswith("/info") else b"dutch"
 
     monkeypatch.setattr(supervisor.voice_packs, "_download", fake_download)
@@ -174,3 +174,106 @@ def test_disabled_mode_turns_the_routes_off(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch, extra='\n[voice_packs]\nmode="disabled"\n')
     assert client.get("/voice-pkg/vida/info").status_code == 404
     assert client.get("/voice-pkg/vida/package/nl.pkg").status_code == 404
+
+
+def test_a_failed_refresh_is_not_retried_at_once(tmp_path, monkeypatch):
+    asyncio.run(_backoff(tmp_path, monkeypatch))
+
+
+async def _backoff(tmp_path, monkeypatch):
+    mirror = vp.VoicePackMirror(tmp_path, "eu")
+    calls = []
+
+    async def fake(url, **kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            return json.dumps(INFO).encode()
+        raise vp.aiohttp.ClientError("offline")
+
+    monkeypatch.setattr(mirror, "_download", fake)
+    await mirror.get_list("vida")
+    monkeypatch.setattr(vp, "LIST_MAX_AGE_SECONDS", -1)
+    for _ in range(3):
+        assert (await mirror.get_list("vida"))["voice_list"][0]["voice_id"] == 129
+    assert len(calls) == 2
+
+
+def test_only_files_in_the_list_are_fetched_and_refusals_are_remembered(tmp_path, monkeypatch):
+    asyncio.run(_listed_only(tmp_path, monkeypatch))
+
+
+async def _listed_only(tmp_path, monkeypatch):
+    mirror = vp.VoicePackMirror(tmp_path, "eu")
+    calls = []
+
+    async def fake(url, **kwargs):
+        calls.append(url)
+        if url.endswith("/info"):
+            return json.dumps(INFO).encode()
+        raise vp.VoicePackError(404, "gone")
+
+    monkeypatch.setattr(mirror, "_download", fake)
+    with pytest.raises(vp.VoicePackError):
+        await mirror.get_file("vida", "pic", "other.png")
+    assert calls == ["https://eu-app.roborock.com/app/vida/voice-pkg/info"]
+    for _ in range(3):
+        with pytest.raises(vp.VoicePackError):
+            await mirror.get_file("vida", "wav", "nl.wav")
+    assert calls.count("https://eu-app.roborock.com/app/vida/voice-pkg/wav/nl.wav") == 1
+
+
+def test_a_republished_package_is_fetched_again(tmp_path, monkeypatch):
+    asyncio.run(_republished(tmp_path, monkeypatch))
+
+
+async def _republished(tmp_path, monkeypatch):
+    mirror = vp.VoicePackMirror(tmp_path, "eu")
+    info = json.loads(json.dumps(INFO))
+    body = {"v": b"old"}
+
+    async def fake(url, **kwargs):
+        return json.dumps(info).encode() if url.endswith("/info") else body["v"]
+
+    monkeypatch.setattr(mirror, "_download", fake)
+    assert (await mirror.get_file("vida", "package", "nl.pkg")).read_bytes() == b"old"
+    info["voice_list"][0]["version"] = 5
+    body["v"] = b"new"
+    monkeypatch.setattr(vp, "LIST_MAX_AGE_SECONDS", -1)
+    assert (await mirror.get_file("vida", "package", "nl.pkg")).read_bytes() == b"new"
+
+
+def test_the_number_of_mirrored_buckets_is_capped(tmp_path, monkeypatch):
+    asyncio.run(_capped(tmp_path, monkeypatch))
+
+
+async def _capped(tmp_path, monkeypatch):
+    mirror = vp.VoicePackMirror(tmp_path, "eu")
+
+    async def fake(url, **kwargs):
+        return json.dumps(INFO).encode()
+
+    monkeypatch.setattr(mirror, "_download", fake)
+    monkeypatch.setattr(vp, "MAX_BUCKETS", 2)
+    await mirror.get_list("a")
+    await mirror.get_list("b")
+    with pytest.raises(vp.VoicePackError) as refused:
+        await mirror.get_list("c")
+    assert refused.value.status == 404
+    assert (await mirror.get_list("a"))["voice_list"]
+
+
+def test_a_corrupt_stored_list_is_replaced(tmp_path, monkeypatch):
+    asyncio.run(_corrupt(tmp_path, monkeypatch))
+
+
+async def _corrupt(tmp_path, monkeypatch):
+    mirror = vp.VoicePackMirror(tmp_path, "eu")
+    path = tmp_path / "voice_packs" / "vida" / "info.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{not json")
+
+    async def fake(url, **kwargs):
+        return json.dumps(INFO).encode()
+
+    monkeypatch.setattr(mirror, "_download", fake)
+    assert (await mirror.get_list("vida"))["voice_list"][0]["voice_id"] == 129
