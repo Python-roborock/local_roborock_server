@@ -49,6 +49,7 @@ Cloudflare can provide DNS validation for several certificate issuers. Its use a
 
 | Vacuum | Firmware | ZeroSSL | Actalis | Let's Encrypt | SSL.com | Reports |
 |---|---:|---:|---:|---:|---:|---|
+| Roborock S4 (s4) | `02.06.26` | ❓ | ✅ | ❓ | ❓ | — |
 | Roborock S5 Max | Not reported | ❌ | ❓ | ❌ | ❓ | [#3](https://github.com/Python-roborock/local_roborock_server/issues/3) |
 | Roborock S5 Max | `02.16.62` | ❓ | ✅ | ❓ | ❓ | [#3](https://github.com/Python-roborock/local_roborock_server/issues/3#issuecomment-5450368775) |
 | Roborock S5 Max (s5e) | `02.16.68` | ❓ | ✅ | ❓ | ❓ | [#146](https://github.com/Python-roborock/local_roborock_server/issues/146) |
@@ -57,6 +58,7 @@ Cloudflare can provide DNS validation for several certificate issuers. Its use a
 | Roborock S6 MaxV (a10) | `01.58.02` | ✅ | ❓ | ❌ | ❓ | [#122](https://github.com/Python-roborock/local_roborock_server/issues/122) |
 | Roborock S6 MaxV (a10) | `01.60.52` | ❓ | ❓ | ❌ | ✅ | [#177](https://github.com/Python-roborock/local_roborock_server/issues/177) |
 | Roborock S7 | Not reported | ❓ | ✅ | ❌ | ✅ | [#3](https://github.com/Python-roborock/local_roborock_server/issues/3) |
+| Roborock S7 (a15) | `02.16.12` | ❓ | ✅ | ❓ | ❓ | — |
 | Roborock S7 MaxV | Not reported | ❓ | ❓ | ✅ | ❓ | — |
 | Roborock S7 MaxV (a27) | `02.59.36` | ✅ | ❓ | ✅ | ❓ | [#49](https://github.com/Python-roborock/local_roborock_server/issues/49), [#118](https://github.com/Python-roborock/local_roborock_server/issues/118), [#129](https://github.com/Python-roborock/local_roborock_server/issues/129) |
 | Roborock S7 Max Ultra | `02.26.80` | ❓ | ❓ | ✅ | ❓ | [#79](https://github.com/Python-roborock/local_roborock_server/issues/79#issuecomment-5637657592) |
@@ -116,6 +118,8 @@ Cloudflare can provide DNS validation for several certificate issuers. Its use a
 
 Setup notes:
 
+- S4 `02.06.26` and S7 (a15) `02.16.12`: server 1.2.1 with a provided Actalis RSA-2048 certificate (chain ending at Actalis Authentication Root CA). Both onboarded with LocalRock in three cycles: the public key was recovered after the second and the vacuum connected over MQTT (TLSv1) on the third. Home Assistant (Region: Manual) exposed every entity the cloud integration had, including the maps.
+- S4: the vacuum supports only 2.4 GHz Wi-Fi. Given a 5 GHz SSID during onboarding, it reports a Wi-Fi password failure and never tries to join.
 - S5 Max `02.16.68`: the vacuum had been on Mi Home and was moved to a Roborock account before cloud import. The built-in Actalis option in the Home Assistant add-on hung; a provided Actalis certificate issued with Certbot worked.
 - S6: the factory firmware `3.5.8_2076` ignores the custom API server sent during Wi-Fi setup. The reporter joined Wi-Fi through Xiaomi Home, updated to `3.5.8_2700` (`02.33.88`), then onboarded with `start_onboarding.py`.
 - S6 Pure: Home Assistant did not expose the water box attached sensor or the mop mode select locally.
