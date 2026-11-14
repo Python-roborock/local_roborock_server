@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from python_multipart.exceptions import MultipartParseError
 import uvicorn
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
@@ -32,6 +32,7 @@ from .cloud import CloudImportManager
 from .config import AppConfig, AppPaths, load_config, resolve_paths
 from .log_retention import configure_jsonl_logging
 from .turn_relay import EmbeddedTurnRelay
+from .voice_packs import VoicePackError, VoicePackMirror, rewrite_list as rewrite_voice_list
 from .standalone_admin import register_standalone_admin_routes
 from .backend import (
     MqttTlsProxy,
@@ -348,6 +349,8 @@ class ReleaseSupervisor:
         self.config = config
         self.paths = paths
         self.enable_standalone_admin = bool(enable_standalone_admin)
+        self.voice_packs = VoicePackMirror(paths.data_dir, config.network.region)
+        self._voice_prefetch_started: set[str] = set()
 
         self.root_logger = logging.getLogger("roborock_local_server")
         self.root_logger.setLevel(logging.INFO)
@@ -1841,6 +1844,29 @@ class ReleaseSupervisor:
                 return JSONResponse({"error": "Not Found"}, status_code=404)
             self._require_admin(request)
             return JSONResponse(self._ui_vacuums_payload())
+
+        # Voice packs, mirrored from Roborock for robots that can't reach it (see voice_packs.py).
+        # Public like Roborock's own copies: the robot downloads them without credentials.
+        @app.get("/voice-pkg/{bucket}/info")
+        async def voice_pack_list(bucket: str) -> Response:
+            try:
+                info = await self.voice_packs.get_list(bucket)
+            except VoicePackError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=exc.status)
+            if bucket not in self._voice_prefetch_started:
+                # Keep a copy of every pack from the first time the list is asked for.
+                self._voice_prefetch_started.add(bucket)
+                asyncio.create_task(self.voice_packs.prefetch(bucket))
+            base_url = f"https://{self.config.network.stack_fqdn}"
+            return JSONResponse(rewrite_voice_list(info, base_url, bucket))
+
+        @app.get("/voice-pkg/{bucket}/{kind}/{name}")
+        async def voice_pack_file(bucket: str, kind: str, name: str) -> Response:
+            try:
+                path = await self.voice_packs.get_file(bucket, kind, name)
+            except VoicePackError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=exc.status)
+            return FileResponse(path)
 
         @app.api_route("/", methods=list(ALL_HTTP_METHODS))
         async def root_handler(request: Request) -> Response:
