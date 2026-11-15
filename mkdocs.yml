@@ -62,6 +62,7 @@ nav:
     - Known Limitations: known_limitations.md
     - Scene Validity Reports: scene_validity.md
     - Tested Vacuums: tested_vacuums.md
+    - Compatibility Report Details: compatibility_reports.md
     - Reverse Proxy: reverse_proxy.md
     - Custom MQTT: custom_mqtt.md
     - Custom Certificate Management: custom_cert_management.md
