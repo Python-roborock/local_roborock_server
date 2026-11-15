@@ -1,6 +1,6 @@
 # Compatibility report details
 
-These notes reconcile the open compatibility reports and their follow-up comments
+These notes reconcile compatibility reports and their follow-up comments
 as of 15 November 2026. They supplement the [tested-vacuums table](tested_vacuums.md),
 which retains earlier results. Observations are attributed to their reports;
 they are not independent hardware tests by the documentation author.
@@ -100,7 +100,7 @@ WAN access was blocked, then used DHCP-provided local DNS. See
 
 ### Saros 20 Neo (a296), firmware 02.27.04 and 02.29.56
 
-`02.27.04` worked on **main at `94bffa7`**, Docker/Proxmox behind Traefik with
+`02.27.04` worked on **server build `94bffa7`**, Docker/Proxmox behind Traefik with
 Let's Encrypt YR2 → Root YR → ISRG Root X1. The `02.29.56` follow-ups used
 **v1.2.1**, both direct TLS with an ECDSA P-384 chain
 YE1 → Root YE → ISRG Root X2 → ISRG Root X1 and Traefik with a YR2 chain.

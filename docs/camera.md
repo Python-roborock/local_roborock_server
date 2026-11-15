@@ -4,12 +4,6 @@ Camera-capable robots can stream to a local WebRTC consumer such as
 [go2rtc](https://github.com/AlexxIT/go2rtc) with a `roborock://` source.
 Camera bootstrap, authentication and TURN all need to work.
 
-The camera bootstrap/TURN implementation was merged in
-[PR #144](https://github.com/Python-roborock/local_roborock_server/pull/144) and
-[PR #155](https://github.com/Python-roborock/local_roborock_server/pull/155), after
-the `v1.2.1` tag. Results below identify development/custom builds where reported;
-repulling the `v1.2.1` image does not add this implementation.
-
 ## Bootstrap DNS, ports and certificates
 
 Bootstrap depends on firmware. The tested Saros 10R (`roborock.vacuum.a144`,

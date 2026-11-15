@@ -2,7 +2,7 @@
 
 I have tried to copy over most functionality into this server, but some is not 100% completed. There are a few features I know are not currently working
 
-- Vacuum camera live streaming — available with the camera/TURN implementation on `main`; see the [model-specific results](camera.md#reported-camera-results). Bootstrap, activation and audio support vary by firmware, and some reports require custom builds. The camera implementation was merged after the `v1.2.1` tag.
+- Vacuum camera live streaming — available; see the [model-specific results](camera.md#reported-camera-results). Bootstrap, activation and audio support vary by firmware, and some reports require custom builds.
 - Firmware Updates
 - Schedules (Routines/Scenes do work though)
 - China-market devices have model/firmware-specific region and access-renewal restrictions. Unresolved a143/a146/a96 reports reject ordinary commands with `-10002 / rrcheck access denied` after local onboarding. See [known failures](tested_vacuums.md#known-failures). Factory-firmware a184 success was reported with custom interception and compromised-intermediate certificates; it does not establish support through the standard setup or resolve those other reports.
