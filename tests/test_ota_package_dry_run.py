@@ -204,3 +204,27 @@ def test_the_variant_is_recorded_in_the_result() -> None:
     result = asyncio.run(dry_run.run(robot, "https://srv:555", package, {"title_case": True}))
 
     assert result["variant"] == {"title_case": True}
+
+
+def test_the_gate_uses_the_version_the_robot_reports_over_the_clouds() -> None:
+    # After a local install the cloud still names the old version; the robot's own report wins.
+    cloud = FakeCloud(current="02.33.48")
+    with pytest.raises(PackageRefused, match="the robot reports '02.35.52'"):
+        asyncio.run(resolve_package(cloud, "duid", "02.33.48", serve=False, reported="02.35.52"))
+    package = asyncio.run(resolve_package(cloud, "duid", "02.35.52", serve=False, reported="02.35.52"))
+    assert package["md5"] == MD5
+
+
+def test_the_gate_falls_back_to_the_cloud_when_the_robot_has_not_reported() -> None:
+    cloud = FakeCloud(current="02.33.48")
+    assert asyncio.run(resolve_package(cloud, "duid", "02.33.48", serve=False))["md5"] == MD5
+    with pytest.raises(PackageRefused, match="the cloud says '02.33.48'"):
+        asyncio.run(resolve_package(cloud, "duid", "02.35.52", serve=False))
+
+
+def test_a_known_address_skips_the_version_gate_but_not_the_checks() -> None:
+    cloud = FakeCloud(current="02.35.52")
+    assert asyncio.run(resolve_package(cloud, "duid", "02.33.48", serve=False, known_url=URL))["url"] == URL
+    assert cloud.asked == []
+    with pytest.raises(PackageRefused, match="not in the expected form"):
+        asyncio.run(resolve_package(cloud, "duid", "02.33.48", serve=False, known_url="http://x/y.pkg"))

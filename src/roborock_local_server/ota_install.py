@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import firmware_versions
 from .bundled_backend.shared.routine_runner import _RoutineMqttClient
 from .ota_dry_run import PackageRefused, clean_package_cache, resolve_package
 
@@ -42,15 +43,19 @@ class OtaInstaller:
         vacuum = next((v for v in supervisor._vacuums_payload()["vacuums"] if str(v.get("duid") or "") == duid), None)
         if vacuum is None:
             return {"started": False, "reason": f"Unknown device {duid!r}"}
+        reported = firmware_versions.reported_version(supervisor.context.snapshot_store, duid)
         try:
-            info = await supervisor.cloud_manager.firmware_update_info(duid)
+            # The cloud's own idea of the current version is stale after any local install.
+            info = firmware_versions.apply_reported(await supervisor.cloud_manager.firmware_update_info(duid), reported)
         except Exception as exc:  # noqa: BLE001
             return {"started": False, "reason": f"Could not ask the cloud about updates: {exc}"}
         version = info.get("version") if isinstance(info, dict) else None
         if not isinstance(info, dict) or info.get("updatable") is not True or not version:
             return {"started": False, "reason": "The cloud offers no update for this robot"}
         try:
-            package = await resolve_package(supervisor.cloud_manager, duid, str(version), serve=True, allow_update=True, cache_dir=self.cache_dir,
+            package = await resolve_package(
+                supervisor.cloud_manager, duid, str(version), serve=True, allow_update=True, cache_dir=self.cache_dir,
+                reported=reported,
             )
         except PackageRefused as exc:
             return {"started": False, "reason": str(exc)}

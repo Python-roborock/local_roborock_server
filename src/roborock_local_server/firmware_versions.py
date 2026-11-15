@@ -39,7 +39,11 @@ def reported_version(snapshot_store: Any, duid: str) -> str:
 
 def reconcile(info: Any, duid: str, snapshot_store: Any) -> Any:
     """An update answer for one robot with the robot's own version applied."""
-    reported = reported_version(snapshot_store, duid)
+    return apply_reported(info, reported_version(snapshot_store, duid))
+
+
+def apply_reported(info: Any, reported: str) -> Any:
+    """The update answer with [reported] as the current version, or unchanged when the robot has not reported."""
     if not reported or not isinstance(info, dict):
         return info
     fixed = dict(info)
