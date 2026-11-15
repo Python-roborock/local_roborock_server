@@ -585,3 +585,10 @@ def test_persisted_sessions_are_still_capped(tmp_path: Path) -> None:
         auth_store.issue_local_session(base_user_data, source=f"login_{index}")
 
     assert len(auth_store.persisted_sessions()) == 3
+
+
+def test_agreement_latest_is_readable_before_login_on_both_paths() -> None:
+    # The route that answers is /api/v4/app/agreement/latest; it must be as public as the older path.
+    assert ReleaseSupervisor._required_protocol_auth("/api/v4/agreement/latest") is None
+    assert ReleaseSupervisor._required_protocol_auth("/api/v4/app/agreement/latest") is None
+    assert ReleaseSupervisor._required_protocol_auth("/api/v4/app/agreement/latest/") is None

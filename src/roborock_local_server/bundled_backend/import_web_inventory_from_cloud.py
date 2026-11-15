@@ -785,6 +785,15 @@ def _merge_existing_inventory_mutations(
         merged["home_scenes"] = home_scenes
 
     merged["scene_order"] = _merge_scene_order(merged.get("scene_order"), existing_inventory.get("scene_order"))
+
+    overrides = existing_inventory.get("device_overrides")
+    if isinstance(overrides, dict) and overrides:
+        merged["device_overrides"] = overrides
+        for key in ("devices", "received_devices", "receivedDevices"):
+            for item in merged.get(key) or []:
+                override = overrides.get(str(item.get("duid") or "").strip()) if isinstance(item, dict) else None
+                if isinstance(override, dict):
+                    item.update(override)
     return merged
 
 

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .context import ServerContext
 
 WEB_API_INVENTORY_FILE = "web_api_inventory.json"
+DEVICE_OVERRIDES_KEY = "device_overrides"
 _LOGGER = logging.getLogger(__name__)
 _LOCKS: dict[Path, Any] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -82,3 +83,11 @@ def write_inventory(ctx: ServerContext, inventory: dict[str, Any]) -> bool:
         _LOGGER.exception("Unable to persist inventory")
         return False
     return True
+
+
+def device_overrides(inventory: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return the local per-duid device overrides (name, silentOtaSwitch) stored in the inventory."""
+    value = inventory.get(DEVICE_OVERRIDES_KEY)
+    if not isinstance(value, dict):
+        return {}
+    return {str(duid): dict(item) for duid, item in value.items() if isinstance(item, dict)}

@@ -111,7 +111,9 @@ from .routes.auth.login import match_login_password_submit as _match_login_passw
 from .routes.auth.login import match_login_sms_code_send as _match_login_sms_code_send_v1
 from .routes.user.devices.detail import build as _build_get_device
 from .routes.user.devices.detail import build_extra as _build_get_device_extra
+from .routes.user.devices.detail import build_put as _build_put_device
 from .routes.user.devices.detail import match as _match_get_device
+from .routes.user.devices.detail import match_put as _match_put_device
 from .routes.user.devices.detail import match_extra as _match_get_device_extra
 from .routes.user.deviceshare import build_received_devices as _build_get_received_devices
 from .routes.user.deviceshare import build_rooms as _build_get_shared_device_rooms
@@ -603,6 +605,7 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("put_scene_validity", _match_put_scene_validity, _build_put_scene_validity),
         EndpointRule("execute_scene", _match_execute_scene, _build_execute_scene),
         EndpointRule("delete_scene", _match_delete_scene, _build_delete_scene),
+        EndpointRule("put_device", _match_put_device, _build_put_device),
         EndpointRule("get_device", _match_get_device, _build_get_device),
         EndpointRule("get_device_extra", _match_get_device_extra, _build_get_device_extra),
         EndpointRule("get_schedules", _match_get_schedules, _build_get_schedules),

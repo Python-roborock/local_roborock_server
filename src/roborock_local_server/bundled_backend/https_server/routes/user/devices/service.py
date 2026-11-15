@@ -12,8 +12,83 @@ from roborock_local_server.inventory import _merge_vacuum_state
 from shared.constants import DEFAULT_PRODUCT_SCHEMA, DEFAULT_TIMEZONE
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, as_int, default_product_name, get_value
-from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory
+from shared.inventory_io import (
+    DEVICE_OVERRIDES_KEY,
+    WEB_API_INVENTORY_FILE,
+    device_overrides,
+    inventory_mutation,
+    load_inventory,
+    write_inventory,
+)
 _DEFAULT_DEVICE_NAME = "Vacuum 1"
+_MAX_DEVICE_NAME_LENGTH = 64
+_DEVICE_COLLECTIONS = ("devices", "receivedDevices", "received_devices")
+
+
+def _apply_device_overrides(ctx: ServerContext, home_data: dict[str, Any]) -> dict[str, Any]:
+    overrides = device_overrides(load_inventory(ctx))
+    if not overrides:
+        return home_data
+    out = dict(home_data)
+    for key in _DEVICE_COLLECTIONS:
+        devices = home_data.get(key)
+        if not isinstance(devices, list):
+            continue
+        updated: list[Any] = []
+        for device in devices:
+            override = overrides.get(str(get_value(device, "duid", "did", default="")).strip()) if isinstance(device, dict) else None
+            if override:
+                device = {**device, **override}
+            updated.append(device)
+        out[key] = updated
+    return out
+
+
+def parse_device_name(value: Any) -> str | None:
+    name = str(value or "").strip()
+    if not name or len(name) > _MAX_DEVICE_NAME_LENGTH:
+        return None
+    return name
+
+
+def parse_strict_bool(value: Any) -> bool | None:
+    text = str(value or "").strip().lower()
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    return None
+
+
+def _device_known(ctx: ServerContext, device_id: str) -> bool:
+    if not device_id:
+        return False
+    inventory = load_inventory(ctx)
+    if _find_device_record((_load_cloud_home_data(ctx), inventory), device_id):
+        return True
+    return any(
+        str(get_value(item, "duid", "did", default="")).strip() == device_id
+        for key in ("devices", "receivedDevices")
+        for item in (_home_data(ctx).get(key) or [])
+        if isinstance(item, dict)
+    )
+
+
+@inventory_mutation
+def store_device_settings(ctx: ServerContext, device_id: str, updates: dict[str, Any]) -> bool:
+    """Persist local name/silentOtaSwitch overrides for a known device; False if unknown or unwritable."""
+    if not updates or not _device_known(ctx, device_id):
+        return False
+    inventory = load_inventory(ctx)
+    stored = device_overrides(inventory)
+    stored[device_id] = {**stored.get(device_id, {}), **updates}
+    inventory[DEVICE_OVERRIDES_KEY] = stored
+    # Also mirror onto inventory records so readers of the raw inventory see the change.
+    for key in ("devices", "received_devices", "receivedDevices"):
+        for item in inventory.get(key) or []:
+            if isinstance(item, dict) and str(get_value(item, "duid", "did", default="")).strip() == device_id:
+                item.update(updates)
+    return write_inventory(ctx, inventory)
 
 
 def _has_value(value: Any) -> bool:
@@ -314,7 +389,7 @@ def _apply_runtime_online_status(ctx: ServerContext, home_data: dict[str, Any]) 
 def enrich_home_data_with_cloud_snapshot(ctx: ServerContext, home_data: dict[str, Any]) -> dict[str, Any]:
     cloud_home_data = _load_cloud_home_data(ctx) or {}
     if not cloud_home_data:
-        return home_data
+        return _apply_device_overrides(ctx, home_data)
 
     enriched_home = dict(home_data)
 
@@ -389,7 +464,7 @@ def enrich_home_data_with_cloud_snapshot(ctx: ServerContext, home_data: dict[str
         if enriched_devices:
             enriched_home[collection_key] = enriched_devices
 
-    return enriched_home
+    return _apply_device_overrides(ctx, enriched_home)
 
 
 def _home_data(ctx: ServerContext) -> dict[str, Any]:
@@ -427,7 +502,7 @@ def _home_data(ctx: ServerContext) -> dict[str, Any]:
 
     home["id"] = resolve_home_id(home, cloud_home_data, default=0)
     home["name"] = str(get_value(home, "name", "home_name", default="Local Home"))
-    return _apply_runtime_online_status(ctx, home)
+    return _apply_runtime_online_status(ctx, _apply_device_overrides(ctx, home))
 
 
 def device_detail_payload(ctx: ServerContext, device_id: str) -> dict[str, Any]:
@@ -449,6 +524,7 @@ def device_detail_payload(ctx: ServerContext, device_id: str) -> dict[str, Any]:
         {},
     )
     raw_device = _find_device_record((cloud_home_data, inventory), device_id)
+    raw_device.update(device_overrides(inventory).get(device_id, {}))
 
     product_id = str(
         get_value(
