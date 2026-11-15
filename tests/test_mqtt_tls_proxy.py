@@ -23,6 +23,7 @@ class _FakeSourceSocket:
         self._chunks = list(chunks)
         self.sent: list[bytes] = []
         self.closed = False
+        self.shutdown_calls: list[int] = []
         self.recv_calls = 0
 
     def recv(self, _size: int) -> bytes:
@@ -34,6 +35,9 @@ class _FakeSourceSocket:
     def sendall(self, chunk: bytes) -> None:
         self.sent.append(chunk)
 
+    def shutdown(self, how: int) -> None:
+        self.shutdown_calls.append(how)
+
     def close(self) -> None:
         self.closed = True
 
@@ -43,10 +47,14 @@ class _FakeDestinationSocket:
         self.sent: list[bytes] = []
         self.send_event = threading.Event()
         self.closed = False
+        self.shutdown_calls: list[int] = []
 
     def sendall(self, chunk: bytes) -> None:
         self.sent.append(chunk)
         self.send_event.set()
+
+    def shutdown(self, how: int) -> None:
+        self.shutdown_calls.append(how)
 
     def close(self) -> None:
         self.closed = True
@@ -210,6 +218,8 @@ def test_relay_forwards_chunk_before_slow_packet_tracing_finishes(tmp_path, monk
     assert trace_finished.wait(1.0)
     assert src.closed is True
     assert dst.closed is True
+    assert src.shutdown_calls == [socket.SHUT_RDWR]
+    assert dst.shutdown_calls == [socket.SHUT_RDWR]
 
     proxy.stop()
 
@@ -1195,3 +1205,30 @@ def test_stalled_tls_handshake_is_closed_after_timeout(start_tls_proxy) -> None:
     proxy = start_tls_proxy(handshake_timeout_seconds=0.5)
     with socket.create_connection(("127.0.0.1", proxy.listen_port), timeout=5) as stalled:
         assert stalled.recv(1) == b""
+
+
+def test_close_conn_endpoints_shuts_down_sockets(tmp_path) -> None:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+    )
+    s1 = _FakeSourceSocket()
+    s2 = _FakeDestinationSocket()
+    proxy._register_conn_endpoints("test-conn", s1, s2)
+    proxy._close_conn_endpoints("test-conn")
+
+    assert s1.closed is True
+    assert s2.closed is True
+    assert s1.shutdown_calls == [socket.SHUT_RDWR]
+    assert s2.shutdown_calls == [socket.SHUT_RDWR]
+
