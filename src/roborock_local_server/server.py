@@ -704,6 +704,7 @@ class ReleaseSupervisor:
                 result = await self.cloud_manager.iot_get(read[0], read[1])
                 if route_name == "ota_firmware_check":
                     path_duid = check.group(1) if (check := self._OTA_CHECK.match(clean_path)) else ""
+                    self.ota_installer.learn_offers(result, path_duid)
                     result = firmware_versions.reconcile_result(result, path_duid, self.context.snapshot_store)
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger("real_stack").warning("Firmware request %s failed: %s", clean_path, exc)

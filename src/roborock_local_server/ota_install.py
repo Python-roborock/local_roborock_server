@@ -16,7 +16,8 @@ from typing import Any
 
 from . import firmware_versions
 from .bundled_backend.shared.routine_runner import _RoutineMqttClient
-from .ota_dry_run import PackageRefused, clean_package_cache, resolve_package
+from .firmware_catalog import SOURCE_INSTALL, SOURCE_OFFER, SOURCE_ROBOT, FirmwareCatalog
+from .ota_dry_run import PackageRefused, clean_package_cache, package_address, package_md5, resolve_package
 
 # A child logger: only real_stack.<name> loggers have an output handler, plain real_stack drops INFO.
 logger = logging.getLogger("real_stack.api")
@@ -30,17 +31,74 @@ class OtaInstaller:
         # What the official app reads while an install runs: the cloud knows nothing of a local install, so
         # the app's status polls are answered from here. The app treats IDLE as success and an error as failure.
         self._live: dict[str, dict[str, Any]] = {}
+        self._catalog: FirmwareCatalog | None = None
+        self._lookups: dict[tuple[str, str], asyncio.Task[Any]] = {}
 
     @property
     def cache_dir(self) -> Path:
         return self._supervisor.paths.runtime_dir / "ota_packages"
+
+    @property
+    def catalog(self) -> FirmwareCatalog:
+        if self._catalog is None:
+            self._catalog = FirmwareCatalog(self._supervisor.paths.runtime_dir / "firmware_catalog.json")
+        return self._catalog
+
+    @property
+    def _keep_packages(self) -> bool:
+        return bool(getattr(self._supervisor.config.ota, "keep_previous_package", False))
+
+    def _vacuum(self, duid: str) -> dict[str, Any] | None:
+        return next((v for v in self._supervisor._vacuums_payload()["vacuums"] if str(v.get("duid") or "") == duid), None)
+
+    def model_of(self, duid: str, vacuum: dict[str, Any] | None = None) -> str:
+        """The robot's model, from the inventory or else from the account's home data."""
+        model = str(((vacuum if vacuum is not None else self._vacuum(duid)) or {}).get("model") or "")
+        if model:
+            return model
+        devices = getattr(self._supervisor.cloud_manager, "firmware_devices", None)
+        try:
+            rows = devices() if callable(devices) else []
+        except Exception:  # noqa: BLE001
+            rows = []
+        return next((str(row.get("model") or "") for row in rows if str(row.get("duid") or "") == duid), "")
+
+    async def _learn(self, duid: str, model: str, version: str, source: str) -> dict[str, Any] | None:
+        """Adds a version to the catalog, asking the cloud for its package address when the catalog lacks it."""
+        entry = self.catalog.entry(model, version)
+        if entry is not None and entry.get("md5"):
+            return self.catalog.add(model, version, source=source)
+        try:
+            url = await package_address(self._supervisor.cloud_manager, duid, version)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not look up the package of firmware %s for %s: %s", version, model, exc)
+            url = ""
+        return self.catalog.add(model, version, source=source, url=url, md5=package_md5(url))
+
+    def learn_offers(self, result: Any, duid: str = "") -> None:
+        """Adds the versions the cloud offers in an update answer (either shape) to the catalog, in the background."""
+        pairs: list[tuple[str, Any]] = []
+        if isinstance(result, list):
+            pairs = [(str(row.get("duid") or ""), row.get("firmwareUpdateResponse")) for row in result if isinstance(row, dict)]
+        elif isinstance(result, dict):
+            pairs = [(duid, result)]
+        for robot, info in pairs:
+            version = str(info.get("version") or "") if isinstance(info, dict) else ""
+            model = self.model_of(robot) if robot and version else ""
+            if not model:
+                continue
+            entry = self.catalog.entry(model, version)
+            running = self._lookups.get((model, version))
+            if (entry and entry.get("md5") and SOURCE_OFFER in entry["sources"]) or (running and not running.done()):
+                continue
+            self._lookups[(model, version)] = asyncio.create_task(self._learn(robot, model, version, SOURCE_OFFER))
 
     async def start(self, duid: str) -> dict[str, Any]:
         """Begins an install in the background, or says why not. One install runs at a time."""
         supervisor = self._supervisor
         if any(not task.done() for task in self._running.values()):
             return {"started": False, "reason": "Another firmware install is already running"}
-        vacuum = next((v for v in supervisor._vacuums_payload()["vacuums"] if str(v.get("duid") or "") == duid), None)
+        vacuum = self._vacuum(duid)
         if vacuum is None:
             return {"started": False, "reason": f"Unknown device {duid!r}"}
         reported = firmware_versions.reported_version(supervisor.context.snapshot_store, duid)
@@ -52,20 +110,35 @@ class OtaInstaller:
         version = info.get("version") if isinstance(info, dict) else None
         if not isinstance(info, dict) or info.get("updatable") is not True or not version:
             return {"started": False, "reason": "The cloud offers no update for this robot"}
-        try:
-            package = await resolve_package(
+
+        async def resolve(keep: set[str]) -> dict[str, Any]:
+            return await resolve_package(
                 supervisor.cloud_manager, duid, str(version), serve=True, allow_update=True, cache_dir=self.cache_dir,
-                reported=reported,
+                reported=reported, keep=keep,
             )
+
+        return await self._launch(duid, vacuum, reported, str(version), resolve)
+
+    async def _launch(self, duid: str, vacuum: dict[str, Any], reported: str, version: str, resolve: Any) -> dict[str, Any]:
+        """Records the version the robot runs now, fetches the package and starts the install."""
+        model = self.model_of(duid, vacuum)
+        before = await self._learn(duid, model, reported, SOURCE_ROBOT) if model and reported and reported != version else None
+        keep = {f"{before['md5']}.pkg"} if self._keep_packages and before and before.get("md5") else set()
+        try:
+            package = await resolve(keep)
         except PackageRefused as exc:
             return {"started": False, "reason": str(exc)}
         except Exception as exc:  # noqa: BLE001
             return {"started": False, "reason": f"Could not fetch the package: {exc}"}
+        data = package.get("data")
+        size = data.stat().st_size if isinstance(data, Path) else len(data or b"")
+        if model:
+            self.catalog.add(model, version, source=SOURCE_INSTALL, url=package["url"], md5=package["md5"], size=size or None)
         device = {"duid": duid, "localkey": str(vacuum.get("local_key") or "")}
         self.results.pop(duid, None)
         self._set_live(duid, "START")
-        self._running[duid] = asyncio.create_task(self._install(device, package, str(version)))
-        return {"started": True, "version": str(version)}
+        self._running[duid] = asyncio.create_task(self._install(device, package, version, model, reported, keep))
+        return {"started": True, "version": version}
 
     _APP_STATES = {"downloading": "DOWNLOADING", "installing": "INSTALLING", "wait_install": "WAIT_INSTALL"}
     LIVE_SECONDS = 1800
@@ -112,7 +185,10 @@ class OtaInstaller:
             return None
         return {key: value for key, value in entry.items() if key != "at"}
 
-    async def _install(self, device: dict[str, str], package: dict[str, Any], version: str) -> None:
+    async def _install(
+        self, device: dict[str, str], package: dict[str, Any], version: str, model: str = "", previous: str = "",
+        keep: set[str] | None = None,
+    ) -> None:
         supervisor = self._supervisor
         duid = device["duid"]
         client = _RoutineMqttClient(supervisor.context, device, logger)
@@ -137,6 +213,10 @@ class OtaInstaller:
             self._set_live(duid, "FAILED", err_msg=str(result.get("reason") or "The robot did not finish the update"), err_code=1)
         if reported != version:
             logger.warning("After the install the robot %s reports firmware %r, not %s", duid, reported, version)
-        if result.get("ran") and result.get("final_state") == "idle" and result.get("saw_offline"):
-            clean_package_cache(self.cache_dir)
+        changed = bool(reported) and bool(previous) and reported != previous
+        if model and previous and previous != version and result.get("ran") and (succeeded or changed):
+            self.catalog.remember_install(duid, model, previous, version)
+        if succeeded:
+            # With keep_previous_package the packages before and after this install stay for a quick reinstall.
+            clean_package_cache(self.cache_dir, keep={f"{package['md5']}.pkg", *(keep or ())} if self._keep_packages else ())
         logger.info("Firmware install of %s on %s finished: ran=%s final=%s", version, duid, result.get("ran"), result.get("final_state"))

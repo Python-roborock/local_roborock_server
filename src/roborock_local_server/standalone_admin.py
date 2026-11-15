@@ -491,7 +491,15 @@ def register_standalone_admin_routes(
             devices = await supervisor.cloud_manager.firmware_status()
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"success": False, "step": "firmware_status_failed", "error": str(exc)}, status_code=400)
+        for row in devices:
+            supervisor.ota_installer.learn_offers(row.get("update"), str(row.get("duid") or ""))
         return JSONResponse({"success": True, "devices": devices})
+
+    @app.get("/admin/api/firmware/catalog")
+    async def admin_firmware_catalog(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        model = str(request.query_params.get("model") or "").strip()
+        return JSONResponse({"success": True, "models": supervisor.ota_installer.catalog.models(model)})
 
     @app.post("/admin/api/cloud/refresh-plugins")
     async def admin_cloud_refresh_plugins(request: Request) -> JSONResponse:
