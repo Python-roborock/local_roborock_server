@@ -1,0 +1,225 @@
+import json
+from pathlib import Path
+
+from conftest import write_release_config
+from fastapi.testclient import TestClient
+
+from roborock_local_server.config import load_config, resolve_paths
+from roborock_local_server.server import ReleaseSupervisor
+
+INFO = {
+    "voice_pkg_version": 1,
+    "voice_list": [
+        {
+            "voice_id": 3,
+            "version": 7,
+            "applicable": ["us"],
+            "lang": "en",
+            "voice_pri": 3,
+            "voice_title": "English",
+            "voice_pkg_url": "https://cnbj2.fds.api.xiaomi.com/app/beryllite/voice-pkg/package/en.pkg",
+            "voice_pkg_md5": "e4681aee0381290597475a598fdfdda6",
+        }
+    ],
+}
+
+
+def _client(tmp_path: Path) -> TestClient:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    return TestClient(
+        ReleaseSupervisor(config=config, paths=resolve_paths(config_file, config)).app
+    )
+
+
+def _fake_fetch(monkeypatch, answers: dict[str, bytes]) -> list[str]:
+    from https_server.routes.plugin import voice_pkg
+
+    calls: list[str] = []
+
+    async def fake(url: str, *, max_bytes: int, timeout_s: float) -> bytes:
+        calls.append(url)
+        if url not in answers:
+            raise RuntimeError("upstream returned HTTP 404")
+        return answers[url]
+
+    monkeypatch.setattr(voice_pkg, "fetch_voice_bytes", fake)
+    return calls
+
+
+def test_model_maps_to_the_plugin_sound_package_path() -> None:
+    from https_server.routes.plugin.voice_pkg import voice_info_path_for_model
+
+    assert (
+        voice_info_path_for_model("roborock.vacuum.a245")
+        == "/app/beryllite/voice-pkg/info"
+    )
+    assert (
+        voice_info_path_for_model("roborock.vacuum.a136")
+        == "/app/ppscouple/voice-pkg/info"
+    )
+    assert (
+        voice_info_path_for_model("roborock.vacuum.a08")
+        == "/rubysc1/app/voice-pkg/info"
+    )
+    assert (
+        voice_info_path_for_model("roborock.vacuum.a19") == "/rubyse/app/voice-pkg/info"
+    )
+    assert voice_info_path_for_model("roborock.vacuum.zzz") == ""
+
+
+def test_info_is_fetched_from_the_region_host_and_urls_point_at_this_server(
+    tmp_path: Path, monkeypatch
+) -> None:
+    upstream = "https://us-app.roborock.com/app/beryllite/voice-pkg/info"
+    calls = _fake_fetch(monkeypatch, {upstream: json.dumps(INFO).encode()})
+    client = _client(tmp_path)
+
+    response = client.get("/voice-pkg/info", params={"model": "roborock.vacuum.a245"})
+
+    assert response.status_code == 200
+    assert calls == [upstream]
+    item = response.json()["voice_list"][0]
+    assert item["voice_pkg_url"] == (
+        "https://api-roborock.example.com/voice-pkg/files/us-app.roborock.com/app/beryllite/voice-pkg/package/en.pkg"
+    )
+    assert (
+        item["voice_pkg_source_url"]
+        == "https://us-app.roborock.com/app/beryllite/voice-pkg/package/en.pkg"
+    )
+    assert item["voice_pkg_md5"] == INFO["voice_list"][0]["voice_pkg_md5"]
+    assert response.json()["voice_pkg_host"] == "us-app.roborock.com"
+
+
+def test_info_falls_back_to_the_fds_host_then_to_the_cached_copy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    fds = "https://awsusor0.fds.api.xiaomi.com/app/beryllite/voice-pkg/info"
+    calls = _fake_fetch(monkeypatch, {fds: json.dumps(INFO).encode()})
+    client = _client(tmp_path)
+
+    first = client.get("/app/beryllite/voice-pkg/info?time=1")
+    assert first.status_code == 200
+    assert first.headers["X-RR-Voice-Cache"] == "miss"
+    assert calls[-1] == fds
+
+    _fake_fetch(monkeypatch, {})
+    stale = client.get("/app/beryllite/voice-pkg/info")
+    assert stale.status_code == 200
+    assert stale.headers["X-RR-Voice-Cache"] == "stale"
+    assert stale.json()["voice_list"][0]["voice_id"] == 3
+
+
+def test_info_without_any_upstream_is_a_502(tmp_path: Path, monkeypatch) -> None:
+    _fake_fetch(monkeypatch, {})
+    response = _client(tmp_path).get("/voice-pkg/info?model=roborock.vacuum.a245")
+    assert response.status_code == 502
+
+
+def test_unknown_model_is_a_404(tmp_path: Path, monkeypatch) -> None:
+    calls = _fake_fetch(monkeypatch, {})
+    response = _client(tmp_path).get("/voice-pkg/info?model=roborock.vacuum.zzz")
+    assert response.status_code == 404
+    assert calls == []
+
+
+def test_package_is_proxied_once_then_served_from_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = "https://us-app.roborock.com/app/beryllite/voice-pkg/package/en.pkg"
+    calls = _fake_fetch(monkeypatch, {source: b"pkg-bytes"})
+    client = _client(tmp_path)
+    path = "/voice-pkg/files/us-app.roborock.com/app/beryllite/voice-pkg/package/en.pkg"
+
+    first = client.get(path)
+    second = client.get(path)
+
+    assert first.content == second.content == b"pkg-bytes"
+    assert first.headers["X-RR-Voice-Cache"] == "miss"
+    assert second.headers["X-RR-Voice-Cache"] == "hit"
+    assert calls == [source]
+
+
+def test_package_from_an_unknown_host_is_refused(tmp_path: Path, monkeypatch) -> None:
+    calls = _fake_fetch(monkeypatch, {})
+    response = _client(tmp_path).get(
+        "/voice-pkg/files/example.com/app/x/voice-pkg/package/en.pkg"
+    )
+    assert response.status_code == 403
+    assert calls == []
+
+
+def test_a_request_from_our_own_proxy_is_not_proxied_again(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls = _fake_fetch(monkeypatch, {})
+    response = _client(tmp_path).get(
+        "/app/beryllite/voice-pkg/info", headers={"X-RR-Voice-Proxy": "1"}
+    )
+    assert response.status_code == 508
+    assert calls == []
+
+
+def _serve_and_fetch(app, path: str, max_bytes: int) -> Exception | None:
+    import asyncio
+
+    from aiohttp import web
+
+    from roborock_local_server.bundled_backend.https_server.routes.plugin import (
+        voice_pkg,
+    )
+
+    async def run() -> Exception | None:
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+        try:
+            await voice_pkg.fetch_voice_bytes(
+                f"http://127.0.0.1:{port}{path}", max_bytes=max_bytes, timeout_s=5
+            )
+        except Exception as exc:  # noqa: BLE001
+            return exc
+        finally:
+            await runner.cleanup()
+        return None
+
+    return asyncio.run(run())
+
+
+def test_fetch_does_not_follow_redirects_off_the_allowed_host() -> None:
+    from aiohttp import web
+
+    async def redirect(_request):
+        raise web.HTTPFound("http://example.invalid/evil.pkg")
+
+    app = web.Application()
+    app.router.add_get("/a.pkg", redirect)
+    error = _serve_and_fetch(app, "/a.pkg", max_bytes=1024)
+    assert error is not None and "HTTP 302" in str(error)
+
+
+def test_fetch_stops_reading_past_the_size_cap() -> None:
+    from aiohttp import web
+
+    async def big(_request):
+        response = web.StreamResponse()
+        await response.prepare(_request)
+        for _ in range(64):
+            await response.write(b"x" * 1024)
+        return response
+
+    async def declared(_request):
+        return web.Response(body=b"x" * 4096)
+
+    def app():
+        application = web.Application()
+        application.router.add_get("/big.pkg", big)
+        application.router.add_get("/declared.pkg", declared)
+        return application
+
+    streamed = _serve_and_fetch(app(), "/big.pkg", max_bytes=8 * 1024)
+    assert streamed is not None and "too large" in str(streamed)
+    by_length = _serve_and_fetch(app(), "/declared.pkg", max_bytes=1024)
+    assert by_length is not None and "too large: 4096" in str(by_length)

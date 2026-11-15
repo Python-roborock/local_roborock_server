@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from fastapi.responses import Response
 
 from .category import source_from_category_path
 from .common import plugin_proxy_response
 from .proxy import source_from_proxy_request
+from .voice_pkg import VoicePkgError, dispatch_voice_pkg_request
 
 PLUGIN_PROXY_ROUTE_NAME = "plugin_proxy"
 
@@ -37,10 +40,23 @@ async def dispatch_plugin_zip_request(
     clean_path: str,
     query_params: dict[str, list[str]],
     runtime_dir: Path,
+    context: Any = None,
+    headers: Mapping[str, str] | None = None,
 ) -> PluginZipDispatchResult | None:
     source_url = resolve_plugin_zip_source(clean_path, query_params)
     if not source_url:
-        return None
+        if context is None:
+            return None
+        try:
+            return await dispatch_voice_pkg_request(
+                clean_path=clean_path,
+                query_params=query_params,
+                headers=headers or {},
+                context=context,
+                runtime_dir=runtime_dir,
+            )
+        except VoicePkgError as exc:
+            raise PluginZipDispatchError(route_name="voice_pkg_proxy", source_url=exc.source_url, cause=exc) from exc
 
     try:
         response = await plugin_proxy_response(runtime_dir=runtime_dir, source_url=source_url)
