@@ -478,3 +478,18 @@ def register_standalone_admin_routes(
             result = {"success": False, "step": "code_submit_failed", "error": str(exc)}
         supervisor.runtime_state.record_cloud_request(result)
         return JSONResponse(result, status_code=200 if result.get("success") else 400)
+
+    @app.get("/admin/api/cloud/plugins")
+    async def admin_cloud_plugins(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        return JSONResponse({"success": True, **supervisor.cloud_manager.plugin_catalogs()})
+
+    @app.post("/admin/api/cloud/refresh-plugins")
+    async def admin_cloud_refresh_plugins(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            result = await supervisor.cloud_manager.refresh_plugin_catalogs()
+        except Exception as exc:  # noqa: BLE001
+            result = {"success": False, "step": "plugin_refresh_failed", "error": str(exc)}
+        supervisor.runtime_state.record_cloud_request(result)
+        return JSONResponse(result, status_code=200 if result.get("success") else 400)
