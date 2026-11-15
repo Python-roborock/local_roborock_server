@@ -656,6 +656,8 @@ class ReleaseSupervisor:
     _OTA_STATUS = re.compile(r"^/ota/firmware/upgrade/status/?$")
     _OTA_STATUS_PATH = re.compile(r"^/ota/firmware/([^/]+)/upgrade/status/?$")
     _OTA_UPGRADE = re.compile(r"^/ota/device/([^/]+)/upgrade(/latest-stable)?/?$")
+    # LocalRock's install of another catalog version (?version=, else the previous one); not a cloud route.
+    _OTA_UPGRADE_VERSION = re.compile(r"^/ota/device/([^/]+)/upgrade/version/?$")
 
     def _is_firmware_read(self, clean_path: str) -> bool:
         return bool(
@@ -706,12 +708,21 @@ class ReleaseSupervisor:
                     path_duid = check.group(1) if (check := self._OTA_CHECK.match(clean_path)) else ""
                     self.ota_installer.learn_offers(result, path_duid)
                     result = firmware_versions.reconcile_result(result, path_duid, self.context.snapshot_store)
+                    if path_duid and isinstance(result, dict):
+                        # Extra fields for LocalRock's firmware screen; the cloud's own fields stay as they were.
+                        result = {**result, **self.ota_installer.version_info(path_duid)}
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger("real_stack").warning("Firmware request %s failed: %s", clean_path, exc)
                 return route_name, {
                     "success": False, "code": 502, "msg": "firmware_check_unavailable", "data": {"error": str(exc)},
                 }
             return route_name, {"success": True, "code": 200, "msg": "success", "data": result, "result": result}
+        other = self._OTA_UPGRADE_VERSION.match(clean_path)
+        if other and method == "POST":
+            started = await self.ota_installer.start_version(other.group(1), first("version"))
+            if started["started"]:
+                return "ota_upgrade_version_started", {"success": True, "code": 200, "msg": "success", "data": started, "result": started}
+            return "ota_upgrade_version_refused", {"success": False, "code": 409, "msg": "firmware_upgrade_refused", "data": started}
         upgrade = self._OTA_UPGRADE.match(clean_path)
         if upgrade and method == "POST" and not upgrade.group(2) and self.config.ota.enable_install:
             started = await self.ota_installer.start(upgrade.group(1))

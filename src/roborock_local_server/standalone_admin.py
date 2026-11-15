@@ -501,6 +501,26 @@ def register_standalone_admin_routes(
         model = str(request.query_params.get("model") or "").strip()
         return JSONResponse({"success": True, "models": supervisor.ota_installer.catalog.models(model)})
 
+    @app.get("/admin/api/firmware/{duid}/versions")
+    async def admin_firmware_versions(duid: str, request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        installer = supervisor.ota_installer
+        return JSONResponse({
+            "success": True, "duid": duid, "model": installer.model_of(duid),
+            "lastInstall": installer.catalog.robot(duid), **installer.version_info(duid),
+        })
+
+    @app.post("/admin/api/firmware/{duid}/install-version")
+    async def admin_firmware_install_version(duid: str, request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            body = {}
+        version = str((body or {}).get("version") or "").strip() if isinstance(body, dict) else ""
+        started = await supervisor.ota_installer.start_version(duid, version)
+        return JSONResponse({"success": started["started"], **started}, status_code=200 if started["started"] else 409)
+
     @app.post("/admin/api/cloud/refresh-plugins")
     async def admin_cloud_refresh_plugins(request: Request) -> JSONResponse:
         supervisor._require_admin(request)
