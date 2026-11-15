@@ -12,13 +12,16 @@ import time
 from typing import Any, Literal
 
 import aiohttp
+from roborock.data import UserData
 from roborock.web_api import RoborockApiClient
 
 from .backend import (
     _build_inventory,
     _fetch_additional_web_cache,
     _fetch_cloud_home_data_with_api,
+    _fetch_plugin_catalogs,
     _flatten_device_scenes,
+    _hawk_get_result,
     _load_existing_inventory_for_merge,
     _merge_existing_inventory_mutations,
     _normalize_dict_list,
@@ -28,6 +31,27 @@ from .backend import (
     _normalize_value_map,
 )
 from shared.inventory_io import atomic_write_inventory, inventory_transaction
+
+
+def summarize_plugin_catalogs(catalogs: dict[str, Any]) -> dict[str, Any]:
+    """The plugin catalogs reduced to what picks a plugin: versions, levels and download URLs."""
+    keep = ("version", "apiLevel", "apilevel", "pluginLevel", "productid", "categoryId", "category", "moduleType", "url", "id", "model")
+    summary: dict[str, Any] = {"fetched_at_utc": catalogs.get("fetched_at_utc")}
+    for name, catalog in catalogs.items():
+        if not isinstance(catalog, dict):
+            continue
+        entry: dict[str, Any] = {"params": catalog.get("params") or catalog.get("json") or {}}
+        if "error" in catalog:
+            entry["error"] = catalog["error"]
+        data = catalog.get("data")
+        if isinstance(data, dict):
+            data = data.get("categoryPluginList")
+        records = data if isinstance(data, list) else []
+        entry["plugins"] = [
+            {key: record[key] for key in keep if key in record} for record in records if isinstance(record, dict)
+        ]
+        summary[name] = entry
+    return summary
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -127,6 +151,114 @@ class CloudImportManager:
             "expires_at": datetime.fromtimestamp(expires_at_ts, tz=timezone.utc).isoformat(),
         }
 
+    def _read_snapshot(self) -> dict[str, Any]:
+        try:
+            parsed = json.loads(self.snapshot_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _stored_cloud_login(self) -> tuple[dict[str, Any], dict[str, Any], UserData, str]:
+        """The snapshot, its meta, and the login the last sign-in stored."""
+        snapshot = self._read_snapshot()
+        meta = snapshot.get("meta") if isinstance(snapshot.get("meta"), dict) else {}
+        try:
+            user_data = UserData.from_dict(snapshot.get("user_data"))
+        except (TypeError, ValueError, KeyError):
+            user_data = None
+        email = str(meta.get("username") or "")
+        if user_data is None or not user_data.token or not email:
+            raise ValueError("No cloud login is stored. Request a code and sign in first.")
+        return snapshot, meta, user_data, email
+
+    @staticmethod
+    def _cloud_client(session: aiohttp.ClientSession, meta: dict[str, Any], email: str) -> RoborockApiClient:
+        api = RoborockApiClient(username=email, base_url=str(meta.get("base_url") or "") or None, session=session)
+        if meta.get("device_identifier"):
+            setattr(api, "_device_identifier", str(meta["device_identifier"]))
+        return api
+
+    async def iot_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        """A signed read of Roborock's IoT API with the stored login; returns the reply's `result`."""
+        _, meta, user_data, email = self._stored_cloud_login()
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            api = self._cloud_client(session, meta, email)
+            return await _hawk_get_result(api, user_data, path, params=params)
+
+    async def firmware_update_info(self, duid: str, *, lang: str = "en") -> Any:
+        """What the cloud says about a robot's firmware update, read with the stored login."""
+        return await self.iot_get(f"/ota/firmware/{duid}/updatev2", {"lang": lang})
+
+    def firmware_devices(self) -> list[dict[str, Any]]:
+        """Every robot on the signed-in account, from the home data the sign-in stored."""
+        home = self._read_snapshot().get("home_data")
+        home = home if isinstance(home, dict) else {}
+        models = {
+            str(product.get("id")): product.get("model")
+            for product in home.get("products") or [] if isinstance(product, dict)
+        }
+        rows: list[dict[str, Any]] = []
+        for device in [*(home.get("devices") or []), *(home.get("received_devices") or [])]:
+            if isinstance(device, dict) and device.get("duid"):
+                rows.append({
+                    "duid": device["duid"], "name": device.get("name"),
+                    "model": models.get(str(device.get("product_id"))),
+                    "cloud_firmware": device.get("fv"), "online": device.get("online"),
+                })
+        return rows
+
+    async def firmware_status(self, *, lang: str = "en") -> list[dict[str, Any]]:
+        """Each account robot with the cloud's firmware update answer; one failure does not hide the rest."""
+        self._stored_cloud_login()
+        rows = self.firmware_devices()
+        if not rows:
+            raise ValueError("No devices are stored. Sign in with an email code to import them.")
+        for row in rows:
+            try:
+                row["update"] = await self.iot_get("/ota/firmware/updatev2", {"duids": row["duid"], "lang": lang})
+            except Exception as exc:  # noqa: BLE001
+                row["error"] = str(exc)
+        return rows
+
+    def plugin_catalogs(self) -> dict[str, Any]:
+        """The stored plugin catalogs, summarized, without any cloud request."""
+        web_cache = self._read_snapshot().get("web_api_cache")
+        catalogs = web_cache.get("plugin_catalogs") if isinstance(web_cache, dict) else None
+        return summarize_plugin_catalogs(catalogs) if isinstance(catalogs, dict) else {}
+
+    async def refresh_plugin_catalogs(self) -> dict[str, Any]:
+        """Re-reads the plugin catalogs from the cloud with the login the snapshot already holds.
+
+        Only the plugin catalogs in the snapshot change; the inventory is left alone. A rejected
+        login needs the email-code sign-in again, which stores a fresh one.
+        """
+        snapshot, meta, user_data, email = self._stored_cloud_login()
+
+        timeout = aiohttp.ClientTimeout(total=120)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            api = self._cloud_client(session, meta, email)
+            try:
+                home_data = await _fetch_cloud_home_data_with_api(api, user_data)
+                catalogs = await _fetch_plugin_catalogs(api, user_data, home_data)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(
+                    f"The cloud rejected the stored login ({exc}). Request a code and sign in again."
+                ) from exc
+
+        failed = [name for name, item in catalogs.items() if isinstance(item, dict) and "error" in item]
+        if failed and len(failed) == sum(1 for item in catalogs.values() if isinstance(item, dict)):
+            errors = "; ".join(str(catalogs[name]["error"]) for name in failed)
+            raise ValueError(f"The cloud returned no plugin catalogs ({errors}). Request a code and sign in again.")
+
+        web_cache = snapshot.get("web_api_cache")
+        if not isinstance(web_cache, dict):
+            web_cache = {}
+            snapshot["web_api_cache"] = web_cache
+        web_cache["plugin_catalogs"] = _to_jsonable(catalogs)
+        self.snapshot_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
+        return {"success": True, "step": "plugins_refreshed", **summarize_plugin_catalogs(catalogs)}
+
     async def submit_code(self, *, session_id: str, code: str) -> dict[str, Any]:
         normalized_session_id = session_id.strip()
         normalized_code = code.strip()
@@ -180,6 +312,7 @@ class CloudImportManager:
                 "generated_at_utc": datetime.now(timezone.utc).isoformat(),
                 "username": session_data.email,
                 "base_url": session_data.base_url,
+                "device_identifier": session_data.device_identifier,
                 "source": "admin_email_code_login",
             },
             "user_data": _to_jsonable(user_data),

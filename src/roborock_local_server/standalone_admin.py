@@ -478,3 +478,55 @@ def register_standalone_admin_routes(
             result = {"success": False, "step": "code_submit_failed", "error": str(exc)}
         supervisor.runtime_state.record_cloud_request(result)
         return JSONResponse(result, status_code=200 if result.get("success") else 400)
+
+    @app.get("/admin/api/cloud/plugins")
+    async def admin_cloud_plugins(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        return JSONResponse({"success": True, **supervisor.cloud_manager.plugin_catalogs()})
+
+    @app.get("/admin/api/cloud/firmware")
+    async def admin_cloud_firmware(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            devices = await supervisor.cloud_manager.firmware_status()
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"success": False, "step": "firmware_status_failed", "error": str(exc)}, status_code=400)
+        for row in devices:
+            supervisor.ota_installer.learn_offers(row.get("update"), str(row.get("duid") or ""))
+        return JSONResponse({"success": True, "devices": devices})
+
+    @app.get("/admin/api/firmware/catalog")
+    async def admin_firmware_catalog(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        model = str(request.query_params.get("model") or "").strip()
+        return JSONResponse({"success": True, "models": supervisor.ota_installer.catalog.models(model)})
+
+    @app.get("/admin/api/firmware/{duid}/versions")
+    async def admin_firmware_versions(duid: str, request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        installer = supervisor.ota_installer
+        return JSONResponse({
+            "success": True, "duid": duid, "model": installer.model_of(duid),
+            "lastInstall": installer.catalog.robot(duid), **installer.version_info(duid),
+        })
+
+    @app.post("/admin/api/firmware/{duid}/install-version")
+    async def admin_firmware_install_version(duid: str, request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            body = {}
+        version = str((body or {}).get("version") or "").strip() if isinstance(body, dict) else ""
+        started = await supervisor.ota_installer.start_version(duid, version)
+        return JSONResponse({"success": started["started"], **started}, status_code=200 if started["started"] else 409)
+
+    @app.post("/admin/api/cloud/refresh-plugins")
+    async def admin_cloud_refresh_plugins(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            result = await supervisor.cloud_manager.refresh_plugin_catalogs()
+        except Exception as exc:  # noqa: BLE001
+            result = {"success": False, "step": "plugin_refresh_failed", "error": str(exc)}
+        supervisor.runtime_state.record_cloud_request(result)
+        return JSONResponse(result, status_code=200 if result.get("success") else 400)
