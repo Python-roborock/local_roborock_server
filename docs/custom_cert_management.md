@@ -39,6 +39,10 @@ If you manage certificates externally on the host (for example via `acme.sh` or 
 1. Configure your host tool's deploy/copy hook to write certificates to `./data/certs/`, or
 2. Add an additional volume mount to `compose.yaml` (e.g. `- /etc/letsencrypt:/etc/letsencrypt:ro`) and set `cert_file` to the corresponding container path.
 
+### Certificate renewal
+
+The server watches the configured `cert_file` and `key_file` (every `tls.renew_check_seconds`, default 12 hours) and reloads its HTTPS and MQTT TLS listeners when either file changes, so an externally renewed certificate is picked up without restarting the container. Replace the key before or together with the certificate, and make the files readable by the container.
+
 ## Related Docs
 
 - [Installation](installation.md)
