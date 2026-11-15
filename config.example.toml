@@ -79,3 +79,8 @@ ttl = 86400
 # The package comes from Roborock's CDN, is checked against its checksum, and is served to the robot from here.
 [ota]
 enable_install = false
+# Also lets LocalRock or the admin install another version from the firmware catalog, older ones included.
+# Proven on one Qrevo Curv 2 Flow only; needs enable_install too.
+allow_downgrade = false
+# Keeps the package files from before and after an install (about 300 MB each) for a quick reinstall.
+keep_previous_package = false
