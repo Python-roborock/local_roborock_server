@@ -1,7 +1,8 @@
 """Installs firmware when the official app's Update button is pressed.
 
 The cloud says which version is on offer; the package is fetched, checked against the checksum in its
-address and served to the robot from this server, which then downloads, installs and reboots.
+address and served to the robot from this server, which then downloads, installs and reboots. With
+[ota] allow_downgrade any other version in the firmware catalog can be installed the same way.
 """
 
 from __future__ import annotations
@@ -17,7 +18,14 @@ from typing import Any
 from . import firmware_versions
 from .bundled_backend.shared.routine_runner import _RoutineMqttClient
 from .firmware_catalog import SOURCE_INSTALL, SOURCE_OFFER, SOURCE_ROBOT, FirmwareCatalog
-from .ota_dry_run import PackageRefused, clean_package_cache, package_address, package_md5, resolve_package
+from .ota_dry_run import (
+    PackageRefused,
+    PackageUnavailable,
+    clean_package_cache,
+    package_address,
+    package_md5,
+    resolve_package,
+)
 
 # A child logger: only real_stack.<name> loggers have an output handler, plain real_stack drops INFO.
 logger = logging.getLogger("real_stack.api")
@@ -118,6 +126,73 @@ class OtaInstaller:
             )
 
         return await self._launch(duid, vacuum, reported, str(version), resolve)
+
+    @property
+    def other_versions_allowed(self) -> bool:
+        ota = self._supervisor.config.ota
+        return bool(ota.enable_install and getattr(ota, "allow_downgrade", False))
+
+    async def start_version(self, duid: str, version: str = "") -> dict[str, Any]:
+        """Installs a catalog version other than the robot's current one (older ones included), by default the one
+        it ran before its last install. Proven on one Qrevo Curv 2 Flow only, so it needs its own opt-in."""
+        supervisor = self._supervisor
+        if not self.other_versions_allowed:
+            return {"started": False, "reason": "Installing another firmware version is off ([ota] enable_install and allow_downgrade)"}
+        if any(not task.done() for task in self._running.values()):
+            return {"started": False, "reason": "Another firmware install is already running"}
+        vacuum = self._vacuum(duid)
+        if vacuum is None:
+            return {"started": False, "reason": f"Unknown device {duid!r}"}
+        model = self.model_of(duid, vacuum)
+        reported = firmware_versions.reported_version(supervisor.context.snapshot_store, duid)
+        if not model or not reported:
+            return {"started": False, "reason": "The robot's model or its own firmware report is not known yet"}
+        version = version or str((self.catalog.robot(duid) or {}).get("previous_version") or "")
+        if not version:
+            return {"started": False, "reason": "No previous version is remembered for this robot"}
+        if version == reported:
+            return {"started": False, "reason": f"The robot already runs {version}"}
+        entry = self.catalog.entry(model, version)
+        if entry is None:
+            return {"started": False, "reason": f"{version} is not in the firmware catalog for {model}"}
+        if not entry.get("md5"):
+            entry = await self._learn(duid, model, version, entry["sources"][0] if entry.get("sources") else SOURCE_OFFER)
+        if not entry or not entry.get("md5"):
+            return {"started": False, "reason": f"The cloud gives no package for {version}"}
+
+        async def resolve(keep: set[str]) -> dict[str, Any]:
+            try:
+                return await resolve_package(
+                    supervisor.cloud_manager, duid, version, serve=True, cache_dir=self.cache_dir, known_url=entry["url"], keep=keep,
+                )
+            except PackageUnavailable:
+                # The remembered address went stale: ask again, and only take the same package.
+                url = await package_address(supervisor.cloud_manager, duid, version)
+                if package_md5(url) != entry["md5"]:
+                    raise PackageRefused(f"The remembered package of {version} is gone and the cloud has no matching one") from None
+                return await resolve_package(
+                    supervisor.cloud_manager, duid, version, serve=True, cache_dir=self.cache_dir, known_url=url, keep=keep,
+                )
+
+        return await self._launch(duid, vacuum, reported, version, resolve)
+
+    def version_info(self, duid: str) -> dict[str, Any]:
+        """The catalog versions for the robot's model, the current one marked, for LocalRock's firmware screen."""
+        model = self.model_of(duid)
+        reported = firmware_versions.reported_version(self._supervisor.context.snapshot_store, duid)
+        allowed = self.other_versions_allowed and bool(reported)
+        previous = str((self.catalog.robot(duid) or {}).get("previous_version") or "")
+        info: dict[str, Any] = {"downgradeAllowed": allowed, "availableVersions": [
+            {
+                "version": entry["version"], "current": entry["version"] == reported,
+                "installable": allowed and bool(entry.get("md5")) and entry["version"] != reported,
+                "firstSeen": entry.get("first_seen"), "size": entry.get("size"),
+            }
+            for entry in (self.catalog.versions(model) if model else [])
+        ]}
+        if previous and previous != reported:
+            info["previousVersion"] = previous
+        return info
 
     async def _launch(self, duid: str, vacuum: dict[str, Any], reported: str, version: str, resolve: Any) -> dict[str, Any]:
         """Records the version the robot runs now, fetches the package and starts the install."""

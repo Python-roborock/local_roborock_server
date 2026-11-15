@@ -63,7 +63,9 @@ def test_the_older_path_style_check_is_read_from_the_cloud(tmp_path, monkeypatch
     body = client.get(CHECK_BY_PATH, headers=_signed(snapshot, CHECK_BY_PATH)).json()
 
     assert calls == [("/ota/firmware/duid-1/updatev2", {"lang": "en"})]
-    assert body["result"] == INFO
+    # The cloud's fields as they came, plus the catalog fields LocalRock reads.
+    assert {key: body["result"][key] for key in INFO} == INFO
+    assert body["result"]["downgradeAllowed"] is False and body["result"]["availableVersions"] == []
 
 
 def test_upgrade_progress_is_read_from_the_cloud(tmp_path, monkeypatch) -> None:
