@@ -110,6 +110,10 @@ class OtaConfig:
     """Firmware installs from the official app's Update button; off until the owner opts in."""
 
     enable_install: bool = False
+    # Installing a catalog version other than the cloud's offer, older ones included; proven on one model only.
+    allow_downgrade: bool = False
+    # Keeps the package files of the versions before and after an install in the cache, for a quick reinstall.
+    keep_previous_package: bool = False
 
 
 @dataclass(frozen=True)
@@ -367,7 +371,11 @@ def load_config(path: str | Path) -> AppConfig:
             cert_file=str(tls.get("cert_file", "")).strip(),
             key_file=str(tls.get("key_file", "")).strip(),
         ),
-        ota=OtaConfig(enable_install=_ota_install_enabled(_as_bool(ota.get("enable_install"), False))),
+        ota=OtaConfig(
+            enable_install=_ota_install_enabled(_as_bool(ota.get("enable_install"), False)),
+            allow_downgrade=_as_bool(ota.get("allow_downgrade"), False),
+            keep_previous_package=_as_bool(ota.get("keep_previous_package"), False),
+        ),
         admin=AdminConfig(
             password_hash=_require_non_empty(admin.get("password_hash"), "admin.password_hash"),
             session_secret=_require_non_empty(admin.get("session_secret"), "admin.session_secret"),

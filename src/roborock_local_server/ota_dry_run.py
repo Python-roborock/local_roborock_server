@@ -14,11 +14,14 @@ import os
 import re
 import secrets
 import time
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from fastapi.responses import Response, StreamingResponse
+
+from . import firmware_versions
 
 FILE_BYTES = 64 * 1024
 TOKEN_TTL_SECONDS = 600
@@ -267,6 +270,10 @@ class PackageRefused(Exception):
     """The firmware package could not be used safely; the message says why."""
 
 
+class PackageUnavailable(PackageRefused):
+    """The package server would not hand out the file, so its address may have gone stale."""
+
+
 async def _download_to_file(url: str, target: Path) -> tuple[str, dict[str, str]]:
     """Streams the package to [target] and returns its md5 and the CDN's response headers."""
     import aiohttp
@@ -279,7 +286,7 @@ async def _download_to_file(url: str, target: Path) -> tuple[str, dict[str, str]
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as response:
                 if response.status != 200:
-                    raise PackageRefused(f"The package server answered HTTP {response.status}")
+                    raise PackageUnavailable(f"The package server answered HTTP {response.status}")
                 headers = dict(response.headers)
                 with partial.open("wb") as handle:
                     async for chunk in response.content.iter_chunked(1024 * 1024):
@@ -302,10 +309,11 @@ def _file_md5(path: Path) -> str:
     return digest.hexdigest()
 
 
-def clean_package_cache(cache_dir: Path, keep: str = "") -> None:
-    """Removes cached packages (and half-downloaded ones) other than the one named [keep]."""
+def clean_package_cache(cache_dir: Path, keep: str | Collection[str] = ()) -> None:
+    """Removes cached packages (and half-downloaded ones) other than the ones named in [keep]."""
+    kept = {keep} if isinstance(keep, str) else set(keep)
     for path in cache_dir.glob("*.pkg*") if cache_dir.is_dir() else ():
-        if path.name != keep:
+        if path.name not in kept:
             path.unlink(missing_ok=True)
 
 
@@ -317,38 +325,57 @@ async def _download(url: str) -> tuple[bytes, dict[str, str]]:
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.get(url) as response:
             if response.status != 200:
-                raise PackageRefused(f"The package server answered HTTP {response.status}")
+                raise PackageUnavailable(f"The package server answered HTTP {response.status}")
             if int(response.headers.get("Content-Length") or 0) > MAX_PACKAGE_BYTES:
                 raise PackageRefused("The package is larger than the limit")
             return await response.read(), dict(response.headers)
 
 
+def package_md5(url: Any) -> str:
+    """The checksum in a package address, or an empty string when the address is not in the expected form."""
+    match = _PACKAGE_MD5.search(str(url or ""))
+    return match.group(1) if match and str(url).startswith("https://") else ""
+
+
+async def package_address(cloud: Any, duid: str, version: str) -> str:
+    """The package address the cloud gives for [version]: an https URL with its checksum, or an empty string
+    for a version that was never released."""
+    reply = await cloud.iot_get(f"/user/devices/{duid}/fw", {"version": version})
+    url = reply.get("url") if isinstance(reply, dict) else None
+    return str(url) if package_md5(url) else ""
+
+
 async def resolve_package(
     cloud: Any, duid: str, version: str, *, serve: bool, allow_update: bool = False, cache_dir: Path | None = None,
+    reported: str = "", known_url: str = "", keep: Collection[str] = (),
 ) -> dict[str, Any]:
     """The robot's current firmware package: its address from the cloud, and its checksum verified.
 
-    Only the version the cloud says the robot runs is accepted, so a dry run can never change the
-    firmware. With [serve] the bytes are fetched here and checked against the checksum in the file
-    name; the robot then downloads them from this server instead of the CDN.
+    Only the version the robot runs is accepted (as it reports it, else as the cloud says), so a dry
+    run can never change the firmware. With [known_url] the caller vouches for the version and the
+    gate is skipped. With [serve] the bytes are fetched here and checked against the checksum in the
+    file name; the robot then downloads them from this server instead of the CDN.
     """
-    info = await cloud.firmware_update_info(duid)
-    current = info.get("currentVersion") if isinstance(info, dict) else None
-    offered = info.get("version") if isinstance(info, dict) and info.get("updatable") is True else None
-    if not version or (current != version and not (allow_update and offered == version)):
-        raise PackageRefused(f"Only the robot's current version can be used (the cloud says {current!r}, asked for {version!r})")
-    reply = await cloud.iot_get(f"/user/devices/{duid}/fw", {"version": version})
-    url = reply.get("url") if isinstance(reply, dict) else None
-    match = _PACKAGE_MD5.search(str(url or ""))
-    if not url or not str(url).startswith("https://") or match is None:
+    if known_url:
+        url = known_url
+    else:
+        info = firmware_versions.apply_reported(await cloud.firmware_update_info(duid), reported)
+        current = info.get("currentVersion") if isinstance(info, dict) else None
+        offered = info.get("version") if isinstance(info, dict) and info.get("updatable") is True else None
+        if not version or (current != version and not (allow_update and offered == version)):
+            source = "the robot reports" if reported else "the cloud says"
+            raise PackageRefused(f"Only the robot's current version can be used ({source} {current!r}, asked for {version!r})")
+        reply = await cloud.iot_get(f"/user/devices/{duid}/fw", {"version": version})
+        url = reply.get("url") if isinstance(reply, dict) else None
+    md5 = package_md5(url)
+    if not md5:
         raise PackageRefused(f"The cloud's package address is not in the expected form: {url!r}")
-    md5 = match.group(1)
     if not serve:
         return {"url": url, "md5": md5, "data": None}
     if cache_dir is not None:
         name = f"{md5}.pkg"
         path = cache_dir / name
-        clean_package_cache(cache_dir, keep=name)
+        clean_package_cache(cache_dir, keep={name, *keep})
         loop = asyncio.get_running_loop()
         if path.is_file() and await loop.run_in_executor(None, _file_md5, path) == md5:
             cdn_headers: dict[str, str] = {}
