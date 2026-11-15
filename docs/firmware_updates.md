@@ -27,6 +27,8 @@ in place of the cloud's:
 - `currentVersion` in the update check is the version the robot reports.
 - `updatable` is `false` when that version is the offered one or newer. Versions are compared as numbers.
 - The `fv` field the apps read from the device list and device detail is the reported version.
+- The install checks compare against the reported version too, so a package is only accepted for the version the
+  robot really runs or the version on offer.
 
 A robot that has not reported yet is left as the cloud describes it.
 
@@ -53,8 +55,59 @@ With it on, pressing Update in the official app (`POST /ota/device/<duid>/upgrad
    (`miIO.ota`, `proc: "dnld install"`).
 5. It follows the robot through download, install and reboot, and returns once the robot is idle again.
 
-The `latest-stable` upgrade call is still refused, and only the version the cloud offers can be installed. The
-package cache is cleared after a successful install and holds a single file otherwise.
+The `latest-stable` upgrade call is still refused, and the Update button only installs the version the cloud offers.
+The package cache is cleared after a successful install and holds a single file otherwise, unless
+`keep_previous_package` is on (see below).
+
+## The firmware catalog
+
+Roborock's cloud has no route that lists firmware versions. It only gives a package address for a version asked for
+by name (`/user/devices/<duid>/fw?version=<version>`), and answers `{"url": null}` for versions that were never
+released. The server therefore keeps its own catalog in `runtime/firmware_catalog.json`, keyed by robot model, and
+never removes an entry. A version is added when the server learns of a real package:
+
+- the version a robot reports just before an install (`robot_reported`),
+- the package being installed (`install`),
+- a version the cloud offers in an update check the server answers or the admin listing (`cloud_offer`).
+
+Each entry has the model, version, package URL, MD5, size when known, the time it was first seen and the sources it
+was learned from. An entry is never given a different MD5. The catalog also keeps, per robot, the version it ran
+before its last install. `GET /admin/api/firmware/catalog` lists it, `?model=roborock.vacuum.a245` for one model.
+
+## Installing another version
+
+!!! warning
+    Installing an older version was proven on one robot only, a Qrevo Curv 2 Flow (a245), going from 02.35.52 back
+    to 02.33.48. It is untested on every other model.
+
+This is off unless both are set:
+
+```toml
+[ota]
+enable_install = true
+allow_downgrade = true
+```
+
+With both on, any catalog version of the robot's model other than the one it reports can be installed, older ones
+included. Without a version the one the robot ran before its last install is used. The install goes the same way as
+an update: the same docked, idle, error-free and 80% battery checks, the same one-time URL and the same live status
+for the app. The package is fetched from the address in the catalog and checked against its MD5; if that address no
+longer works, a new one is asked for and accepted only with the same MD5.
+
+- LocalRock: `POST /ota/device/<duid>/upgrade/version?version=<version>`. The path-style update check
+  (`GET /ota/firmware/<duid>/updatev2`) adds `downgradeAllowed`, `availableVersions` (each with `version`,
+  `current`, `installable`, `firstSeen`, `size`) and `previousVersion` when the robot ran another version before its
+  last install.
+- Admin: `GET /admin/api/firmware/<duid>/versions` and `POST /admin/api/firmware/<duid>/install-version` with
+  `{"version": "02.33.48"}` (or no body for the previous version).
+
+`keep_previous_package = true` keeps the package files from before and after each install in `runtime/ota_packages/`
+(two files of about 300 MB), so going back needs no download. The catalog is kept either way.
+
+The downgrade was done with a development debug endpoint that sends the same OTA command; the catalog route above
+has not run against a robot yet. On the Curv 2 Flow the older package downloaded through the server in 36 seconds, the robot installed it, was offline
+for about 30 seconds while it restarted and was idle again about 4 minutes after the start. Maps, rooms and settings
+were unchanged, and the official app then showed 02.33.48 with the update to 02.35.52 on offer.
 
 ### What the robot needs
 
@@ -108,6 +161,6 @@ while installing) and `miIO.ota` with `{"mode": "normal", "install": "0" or "1",
 ## Limits
 
 - The cloud login stored at sign-in is required.
-- The server does not update robots by itself. Nothing installs unless someone presses Update.
+- The server does not update robots by itself. Nothing installs unless someone presses Update or asks for another version.
 - Only robots paired to this server can be installed to; the robot has to be online and reachable over MQTT.
 - Voice packages are downloaded by the robot the same way and need the same header handling. They are not covered here.
