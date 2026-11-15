@@ -308,8 +308,31 @@ def _single_start_entry(step: RoutineStep) -> dict[str, Any]:
     return entry
 
 
+_CLEAN_MOTOR_MODE_KEYS = ("fan_power", "mop_mode", "water_box_mode")
+
+
 def _settings_commands(entry: dict[str, Any]) -> list[RoutineCommand]:
     commands: list[RoutineCommand] = []
+    if all(key in entry for key in _CLEAN_MOTOR_MODE_KEYS):
+        # Newer firmware (e.g. QRevo) rejects the individual set_custom_mode /
+        # set_mop_mode / set_water_box_custom_mode commands with -10005
+        # "param error" while the robot is in SmartPlan mode. The Roborock app
+        # sends all three at once with set_clean_motor_mode, which is accepted
+        # in every mode, so do the same when the scene carries all three.
+        commands.append(
+            RoutineCommand(
+                RoborockCommand.SET_CLEAN_MOTOR_MODE,
+                [{key: _as_int(entry.get(key), 0) for key in _CLEAN_MOTOR_MODE_KEYS}],
+            )
+        )
+        if "mop_template_id" in entry:
+            commands.append(
+                RoutineCommand(
+                    RoborockCommand.SET_MOP_TEMPLATE_ID,
+                    [_as_int(entry.get("mop_template_id"), 0)],
+                )
+            )
+        return commands
     if "fan_power" in entry:
         commands.append(
             RoutineCommand(
