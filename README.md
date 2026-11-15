@@ -8,6 +8,22 @@ Run Roborock's cloud backend on your own local network. Your vacuum keeps live m
 
 ---
 
+## Support the Project
+
+If this repository worked for you, consider giving it a star on GitHub to help others find it!
+
+If you are purchasing a Roborock device and want to support continued development, consider using an affiliate link:
+
+[![Amazon Affiliate][badge-amazon]][link-amazon]
+[![Roborock Affiliate][badge-roborock-affiliate]][link-roborock-affiliate]
+
+Direct donations:
+
+[![Buy Me a Coffee][badge-bmac]][link-bmac]
+[![PayPal][badge-paypal]][link-paypal]
+
+---
+
 ## Why this exists
 
 While Home Assistant communicates with Roborock vacuums over a local protocol, two constraints previously prevented running them completely offline:
@@ -101,22 +117,6 @@ If you would like to contribute, help in these areas is especially welcome:
 - [@humbertogontijo](https://github.com/humbertogontijo) who first created the python-roborock repo.
 - [@allenporter](https://github.com/allenporter) who has taken up a significant role in the maintenance of the python-roborock library as well as the Roborock integration. The improvements Allen has made to the repository cannot be overstated.
 - [@rccoleman](https://github.com/rccoleman) who was the first beta tester and helped work out some kinks!
-
----
-
-## Support the Project
-
-If this repository worked for you, consider giving it a star on GitHub to help others find it!
-
-If you are purchasing a Roborock device and want to support continued development, consider using an affiliate link:
-
-[![Amazon Affiliate][badge-amazon]][link-amazon]
-[![Roborock Affiliate][badge-roborock-affiliate]][link-roborock-affiliate]
-
-Direct donations:
-
-[![Buy Me a Coffee][badge-bmac]][link-bmac]
-[![PayPal][badge-paypal]][link-paypal]
 
 ---
 
