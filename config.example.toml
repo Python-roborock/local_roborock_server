@@ -74,3 +74,7 @@ username = ""
 password = ""
 realm = "api-roborock.example.com"
 ttl = 86400
+
+# Forwards a robot's Matter key request to Roborock's cloud (see docs/matter.md).
+[matter]
+key_proxy = false
