@@ -119,6 +119,32 @@ date (`released`) is the package's `Last-Modified` header on the CDN, read with 
 comes from the same reply. Running it again for versions already in the catalog fills in a missing release date or
 size. Candidate version numbers can be found by asking the cloud for them, which is a read-only call.
 
+#### Scanning for versions
+
+`POST /admin/api/firmware/<duid>/scan-versions` with an optional `{"max_empty_minors": 8}` (1 to 30) does the asking
+for you in the background and returns the initial state at once. It starts from the version the robot reported (else
+the version the cloud believes is current, else the newest catalog version of the model) and walks down, one minor
+line (`major.minor`) at a time, asking the cloud for builds 99 down to 0 of each. The builds of the starting line at or
+above the current one are skipped. Every version the cloud confirms is added to the catalog exactly as
+`learn-versions` does it, with its release date and size. Versions already in the catalog with a checksum are not
+asked for again and count as found.
+
+The scan stops after `max_empty_minors` minor lines in a row with nothing found. A line with at least one version
+(new or already known) resets the count. The walk continues across the major boundary (after minor 0 comes minor 99
+of the previous major) and ends at 00.00.00. On the Qrevo Pro and the Curv 2 Flow the longest empty stretch inside
+the real version history was 4 minor lines, so the default of 8 is a safe margin. A scan stops early with an error on
+the first cloud failure and records the version it was on.
+
+Requests are paced 0.2 seconds apart, so a full minor line takes about 20 seconds. The scan only reads from the cloud
+(the same package-address question the app asks) and installs nothing. One scan runs at a time per server.
+
+- `POST /admin/api/firmware/<duid>/scan-versions` starts a scan: 409 when one is running, 404 for an unknown device,
+  400 for a bad parameter or when no current version is known.
+- `GET /admin/api/firmware/scan` returns the state: `running`, `model`, `startedAt`, `finishedAt`, `checking` (the
+  version being asked for), `minorsDone`, `emptyMinors`, `found`, `error`, `stoppedAt` and `stoppedReason`
+  (`empty_minors`, `floor`, `error` or `cancelled`).
+- `POST /admin/api/firmware/scan/cancel` stops the running scan after its current request.
+
 ### What the robot needs
 
 The robot's downloader only accepts HTTP responses whose header names are capitalised (`Content-Length`), as its

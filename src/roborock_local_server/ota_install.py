@@ -18,6 +18,7 @@ from typing import Any
 from . import firmware_versions
 from .bundled_backend.shared.routine_runner import _RoutineMqttClient
 from .firmware_catalog import SOURCE_INSTALL, SOURCE_OFFER, SOURCE_ROBOT, FirmwareCatalog
+from .firmware_scan import DEFAULT_MAX_EMPTY, FirmwareScan
 from .ota_dry_run import (
     PackageRefused,
     PackageUnavailable,
@@ -41,6 +42,7 @@ class OtaInstaller:
         self._live: dict[str, dict[str, Any]] = {}
         self._catalog: FirmwareCatalog | None = None
         self._lookups: dict[tuple[str, str], asyncio.Task[Any]] = {}
+        self.scan = FirmwareScan()
 
     @property
     def cache_dir(self) -> Path:
@@ -70,6 +72,26 @@ class OtaInstaller:
         except Exception:  # noqa: BLE001
             rows = []
         return next((str(row.get("model") or "") for row in rows if str(row.get("duid") or "") == duid), "")
+
+    async def start_scan(self, duid: str, max_empty: int = DEFAULT_MAX_EMPTY) -> tuple[int, dict[str, Any]]:
+        """Starts the version scan for a robot; returns an HTTP status and the body."""
+        if self.scan.running:
+            return 409, {"success": False, "error": "A scan is already running", "scan": self.scan.state()}
+        model = self.model_of(duid)
+        if not model:
+            return 404, {"success": False, "error": f"Unknown device {duid!r}"}
+        current = firmware_versions.reported_version(self._supervisor.context.snapshot_store, duid)
+        if len(firmware_versions.parse(current) or ()) != 3:
+            try:
+                info = await self._supervisor.cloud_manager.firmware_update_info(duid)
+            except Exception:  # noqa: BLE001
+                info = None
+            current = str((info or {}).get("currentVersion") or "") if isinstance(info, dict) else ""
+        if len(firmware_versions.parse(current) or ()) != 3:
+            current = next((e["version"] for e in self.catalog.versions(model) if len(firmware_versions.parse(e["version"]) or ()) == 3), "")
+        if not current:
+            return 400, {"success": False, "error": "The robot's current firmware version is not known"}
+        return 200, {"success": True, "scan": self.scan.start(self._supervisor.cloud_manager, self.catalog, duid, model, current, max_empty)}
 
     async def _learn(self, duid: str, model: str, version: str, source: str) -> dict[str, Any] | None:
         """Adds a version to the catalog, asking the cloud for its package address when the catalog lacks it."""

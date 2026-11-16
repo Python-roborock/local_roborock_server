@@ -572,6 +572,31 @@ def register_standalone_admin_routes(
             await asyncio.sleep(0.2)
         return JSONResponse({"success": True, "model": model, "checked": len(versions), "learned": learned})
 
+    @app.post("/admin/api/firmware/{duid}/scan-versions")
+    async def admin_firmware_scan_versions(duid: str, request: Request) -> JSONResponse:
+        """Starts a background scan that asks the cloud for released versions below the current one; installs nothing."""
+        supervisor._require_admin(request)
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            body = {}
+        raw = body.get("max_empty_minors", 8) if isinstance(body, dict) else 8
+        if isinstance(raw, bool) or not isinstance(raw, int) or not 1 <= raw <= 30:
+            return JSONResponse({"success": False, "error": "max_empty_minors must be an integer from 1 to 30"}, status_code=400)
+        status, payload = await supervisor.ota_installer.start_scan(duid, raw)
+        return JSONResponse(payload, status_code=status)
+
+    @app.get("/admin/api/firmware/scan")
+    async def admin_firmware_scan_state(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        return JSONResponse({"success": True, "scan": supervisor.ota_installer.scan.state()})
+
+    @app.post("/admin/api/firmware/scan/cancel")
+    async def admin_firmware_scan_cancel(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        cancelled = supervisor.ota_installer.scan.cancel()
+        return JSONResponse({"success": True, "cancelled": cancelled, "scan": supervisor.ota_installer.scan.state()})
+
     @app.post("/admin/api/cloud/refresh-plugins")
     async def admin_cloud_refresh_plugins(request: Request) -> JSONResponse:
         supervisor._require_admin(request)
