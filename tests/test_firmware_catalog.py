@@ -117,6 +117,15 @@ def test_entries_are_deduped_per_model_and_version_and_never_removed(tmp_path) -
     assert "02.33.48" in json.loads((tmp_path / "catalog.json").read_text(encoding="utf-8"))["models"][MODEL]
 
 
+def test_released_is_kept_and_never_overwritten_by_an_empty_value(tmp_path) -> None:
+    catalog = FirmwareCatalog(tmp_path / "catalog.json")
+    catalog.add(MODEL, "02.33.48", source="probe", released="2025-07-25T06:27:35Z")
+    catalog.add(MODEL, "02.33.48", source="install", released="")
+    assert catalog.entry(MODEL, "02.33.48")["released"] == "2025-07-25T06:27:35Z"
+    catalog.add(MODEL, "02.35.52", source="probe")
+    assert "released" not in catalog.entry(MODEL, "02.35.52")
+
+
 def test_an_install_records_the_version_before_it_and_the_package_installed(tmp_path, monkeypatch, robot) -> None:
     supervisor, store = _supervisor(tmp_path, monkeypatch)
     started = _install(supervisor, store, robot, lambda: supervisor.ota_installer.start("robot"), "02.35.52")

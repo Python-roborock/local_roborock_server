@@ -62,6 +62,7 @@ class FirmwareCatalog:
 
     def add(
         self, model: str, version: str, *, source: str, url: str = "", md5: str = "", size: int | None = None,
+        released: str = "",
     ) -> dict[str, Any] | None:
         """Adds or completes the entry for (model, version); an entry is never removed or given another checksum."""
         if not model or not version or firmware_versions.parse(version) is None:
@@ -78,6 +79,8 @@ class FirmwareCatalog:
                 entry["md5"], entry["url"] = md5, url
             if size and not entry.get("size"):
                 entry["size"] = int(size)
+            if released and not entry.get("released"):
+                entry["released"] = released
             if source not in entry["sources"]:
                 entry["sources"].append(source)
             self._save(data)
