@@ -98,7 +98,7 @@ longer works, a new one is asked for and accepted only with the same MD5.
 
 - LocalRock: `POST /ota/device/<duid>/upgrade/version?version=<version>`. The path-style update check
   (`GET /ota/firmware/<duid>/updatev2`) adds `downgradeAllowed`, `availableVersions` (each with `version`,
-  `current`, `installable`, `firstSeen`, `size`) and `previousVersion` when the robot ran another version before its
+  `current`, `installable`, `firstSeen`, `size`, `released`) and `previousVersion` when the robot ran another version before its
   last install.
 - Admin: `GET /admin/api/firmware/<duid>/versions` and `POST /admin/api/firmware/<duid>/install-version` with
   `{"version": "02.33.48"}` (or no body for the previous version).
@@ -110,6 +110,14 @@ The downgrade was done with a development debug endpoint that sends the same OTA
 has not run against a robot yet. On the Curv 2 Flow the older package downloaded through the server in 36 seconds, the robot installed it, was offline
 for about 30 seconds while it restarted and was idle again about 4 minutes after the start. Maps, rooms and settings
 were unchanged, and the official app then showed 02.33.48 with the update to 02.35.52 on offer.
+
+### Adding versions the server has not seen
+
+`POST /admin/api/firmware/<duid>/learn-versions` with `{"versions": ["02.15.20", ...]}` (at most 100) asks the cloud
+for a package address for each version and adds the ones it confirms to the catalog. Nothing is installed. The release
+date (`released`) is the package's `Last-Modified` header on the CDN, read with a headers-only request, and the size
+comes from the same reply. Running it again for versions already in the catalog fills in a missing release date or
+size. Candidate version numbers can be found by asking the cloud for them, which is a read-only call.
 
 ### What the robot needs
 

@@ -161,7 +161,17 @@ def test_the_admin_reads_and_triggers_another_version(tmp_path, monkeypatch) -> 
     assert refused.status_code == 409 and "allow_downgrade" in refused.json()["reason"]
 
 
+def _fake_headers(monkeypatch, result):
+    async def fake(url):
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr("roborock_local_server.standalone_admin.package_headers", fake)
+
+
 def test_the_admin_learns_only_versions_the_cloud_gives_an_address_for(tmp_path, monkeypatch) -> None:
+    _fake_headers(monkeypatch, ("", None))
     supervisor, _ = _supervisor(tmp_path, monkeypatch, reported="02.35.52")
     client = TestClient(supervisor.app)
     assert client.post("/admin/api/firmware/robot/learn-versions", json={"versions": ["02.33.48"]}).status_code == 401
@@ -172,3 +182,37 @@ def test_the_admin_learns_only_versions_the_cloud_gives_an_address_for(tmp_path,
     assert entry["md5"] == OLD_MD5 and entry["sources"] == ["probe"]
     assert supervisor.ota_installer.catalog.entry(MODEL, "02.01.01") is None
     assert client.post("/admin/api/firmware/robot/learn-versions", json={"versions": []}).status_code == 400
+
+
+def _learn(client, versions):
+    client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    return client.post("/admin/api/firmware/robot/learn-versions", json={"versions": versions})
+
+
+def test_learn_versions_stores_released_and_size_from_the_package_headers(tmp_path, monkeypatch) -> None:
+    _fake_headers(monkeypatch, ("2025-07-25T06:27:35Z", 123456))
+    supervisor, _ = _supervisor(tmp_path, monkeypatch, reported="02.35.52")
+    assert _learn(TestClient(supervisor.app), ["02.33.48"]).json()["learned"] == ["02.33.48"]
+    entry = supervisor.ota_installer.catalog.entry(MODEL, "02.33.48")
+    assert entry["released"] == "2025-07-25T06:27:35Z" and entry["size"] == 123456
+    info = supervisor.ota_installer.version_info("robot")
+    assert [v["released"] for v in info["availableVersions"]] == ["2025-07-25T06:27:35Z"]
+
+
+def test_a_failing_header_lookup_leaves_released_empty(tmp_path, monkeypatch) -> None:
+    _fake_headers(monkeypatch, ("", None))
+    supervisor, _ = _supervisor(tmp_path, monkeypatch, reported="02.35.52")
+    assert _learn(TestClient(supervisor.app), ["02.33.48"]).json()["learned"] == ["02.33.48"]
+    assert "released" not in supervisor.ota_installer.catalog.entry(MODEL, "02.33.48")
+    assert supervisor.ota_installer.version_info("robot")["availableVersions"][0]["released"] is None
+
+
+def test_learn_versions_backfills_an_existing_entry(tmp_path, monkeypatch) -> None:
+    _fake_headers(monkeypatch, ("2025-07-25T06:27:35Z", 99))
+    supervisor, _ = _supervisor(tmp_path, monkeypatch, reported="02.35.52")
+    catalog = supervisor.ota_installer.catalog
+    catalog.add(MODEL, "02.33.48", source="install", url=OLD_URL, md5=OLD_MD5, size=5)
+    _learn(TestClient(supervisor.app), ["02.33.48"])
+    entry = catalog.entry(MODEL, "02.33.48")
+    assert entry["released"] == "2025-07-25T06:27:35Z" and entry["size"] == 5
+

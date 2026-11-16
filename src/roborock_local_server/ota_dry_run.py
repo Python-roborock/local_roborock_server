@@ -16,6 +16,8 @@ import secrets
 import time
 from collections.abc import Collection
 from dataclasses import dataclass, field
+from datetime import UTC
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -343,6 +345,27 @@ async def package_address(cloud: Any, duid: str, version: str) -> str:
     reply = await cloud.iot_get(f"/user/devices/{duid}/fw", {"version": version})
     url = reply.get("url") if isinstance(reply, dict) else None
     return str(url) if package_md5(url) else ""
+
+
+async def package_headers(url: str) -> tuple[str, int | None]:
+    """The CDN's upload time as ISO UTC and the package size from a headers-only request; ("", None) on any failure."""
+    import aiohttp
+
+    try:
+        async with (
+            aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session,
+            session.head(url, allow_redirects=True) as response,
+        ):
+            if response.status != 200:
+                return "", None
+            modified, length = response.headers.get("Last-Modified", ""), response.headers.get("Content-Length", "")
+    except Exception:  # noqa: BLE001
+        return "", None
+    try:
+        released = parsedate_to_datetime(modified).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError):
+        released = ""
+    return released, int(length) if length.isdigit() and int(length) > 0 else None
 
 
 async def resolve_package(

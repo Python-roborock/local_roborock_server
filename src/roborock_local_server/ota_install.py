@@ -187,6 +187,7 @@ class OtaInstaller:
                 "version": entry["version"], "current": entry["version"] == reported,
                 "installable": allowed and bool(entry.get("md5")) and entry["version"] != reported,
                 "firstSeen": entry.get("first_seen"), "size": entry.get("size"),
+                "released": entry.get("released"),
             }
             for entry in (self.catalog.versions(model) if model else [])
         ]}
