@@ -275,7 +275,11 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
                 new_connections_enabled: document.getElementById("newConnectionsEnabled").checked
               }})
             }});
-            connectionsEdited = false;
+            // Only a choice the server now holds stops being unsaved; a change made while Save
+            // was in flight stays unsaved.
+            if (document.getElementById("newConnectionsEnabled").checked === Boolean(payload.new_connections_enabled)) {{
+              connectionsEdited = false;
+            }}
             renderAuth(payload);
             await refresh();
           }} catch (error) {{
