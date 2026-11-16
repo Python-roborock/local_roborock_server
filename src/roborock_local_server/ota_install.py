@@ -195,25 +195,32 @@ class OtaInstaller:
         return info
 
     async def _launch(self, duid: str, vacuum: dict[str, Any], reported: str, version: str, resolve: Any) -> dict[str, Any]:
-        """Records the version the robot runs now, fetches the package and starts the install."""
-        model = self.model_of(duid, vacuum)
-        before = await self._learn(duid, model, reported, SOURCE_ROBOT) if model and reported and reported != version else None
-        keep = {f"{before['md5']}.pkg"} if self._keep_packages and before and before.get("md5") else set()
-        try:
-            package = await resolve(keep)
-        except PackageRefused as exc:
-            return {"started": False, "reason": str(exc)}
-        except Exception as exc:  # noqa: BLE001
-            return {"started": False, "reason": f"Could not fetch the package: {exc}"}
-        data = package.get("data")
-        size = data.stat().st_size if isinstance(data, Path) else len(data or b"")
-        if model:
-            self.catalog.add(model, version, source=SOURCE_INSTALL, url=package["url"], md5=package["md5"], size=size or None)
+        """Answers at once and does the package fetch and the install in the background."""
         device = {"duid": duid, "localkey": str(vacuum.get("local_key") or "")}
         self.results.pop(duid, None)
         self._set_live(duid, "START")
-        self._running[duid] = asyncio.create_task(self._install(device, package, version, model, reported, keep))
+        self._running[duid] = asyncio.create_task(self._prepare(device, vacuum, reported, version, resolve))
         return {"started": True, "version": version}
+
+    async def _prepare(self, device: dict[str, str], vacuum: dict[str, Any], reported: str, version: str, resolve: Any) -> None:
+        """Records the version the robot runs now, fetches the package (the slow part), then installs it."""
+        duid = device["duid"]
+        model = self.model_of(duid, vacuum)
+        try:
+            before = await self._learn(duid, model, reported, SOURCE_ROBOT) if model and reported and reported != version else None
+            keep = {f"{before['md5']}.pkg"} if self._keep_packages and before and before.get("md5") else set()
+            package = await resolve(keep)
+            data = package.get("data")
+            size = data.stat().st_size if isinstance(data, Path) else len(data or b"")
+            if model:
+                self.catalog.add(model, version, source=SOURCE_INSTALL, url=package["url"], md5=package["md5"], size=size or None)
+        except Exception as exc:  # noqa: BLE001
+            reason = str(exc) if isinstance(exc, PackageRefused) else f"Could not fetch the package: {exc}"
+            logger.warning("Firmware install of %s on %s did not start: %s", version, duid, reason)
+            self.results[duid] = {"ran": False, "reason": reason, "version": version, "firmware_version_reported": reported}
+            self._set_live(duid, "FAILED", err_msg=reason, err_code=1)
+            return
+        await self._install(device, package, version, model, reported, keep)
 
     _APP_STATES = {"downloading": "DOWNLOADING", "installing": "INSTALLING", "wait_install": "WAIT_INSTALL"}
     LIVE_SECONDS = 1800

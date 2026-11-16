@@ -46,7 +46,9 @@ works for a `config.toml` that already exists.
 
 With it on, pressing Update in the official app (`POST /ota/device/<duid>/upgrade`) does the following:
 
-1. The server asks the cloud for the offered version and refuses if there is none.
+1. The server asks the cloud for the offered version and refuses if there is none. The request then answers at once
+   (`started`) and steps 2 to 5 run in the background, so a slow package download cannot time the request out. The
+   status poll shows `START` until the robot takes over, and a failure in the steps below shows as `FAILED` with the reason.
 2. It asks the cloud for the package address (`/user/devices/<duid>/fw?version=<version>`). The file name carries the
    package's MD5. The server downloads the package to `runtime/ota_packages/` and checks it against that MD5.
 3. It checks the robot: docked (charging, fully charged, or asleep on the charger), idle, not cleaning, no error, at

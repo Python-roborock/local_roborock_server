@@ -192,3 +192,51 @@ def test_an_unknown_package_path_is_a_404_not_the_generic_ok(tmp_path, monkeypat
     supervisor = _supervisor(tmp_path, monkeypatch, enable=False)
     client = TestClient(supervisor.app)
     assert client.get("/ota_test/abcdefghijklmnopqrstuvwxyz/pkg.signed.pkg").status_code == 404
+
+
+def test_start_returns_before_the_package_is_fetched(tmp_path, monkeypatch) -> None:
+    supervisor = _supervisor(tmp_path, monkeypatch, enable=True)
+    installer = supervisor.ota_installer
+    gate = asyncio.Event()
+    installed = []
+
+    async def slow_resolve(*args, **kwargs):
+        await gate.wait()
+        return {"data": b"x", "url": "http://x/p", "md5": MD5}
+
+    async def fake_install(*args, **kwargs):
+        installed.append(args[2])
+
+    monkeypatch.setattr(ota_install, "resolve_package", slow_resolve)
+    monkeypatch.setattr(installer, "_install", fake_install)
+
+    async def go():
+        started = await asyncio.wait_for(installer.start("robot"), 2)
+        assert started == {"started": True, "version": "02.16.00"}
+        assert installer.live_status("robot")["status"] == "START" and not installed
+        assert (await installer.start("robot"))["started"] is False
+        gate.set()
+        await asyncio.gather(*installer._running.values())
+
+    asyncio.run(go())
+    assert installed == ["02.16.00"]
+
+
+def test_a_failed_package_fetch_is_recorded_as_a_failure(tmp_path, monkeypatch) -> None:
+    supervisor = _supervisor(tmp_path, monkeypatch, enable=True)
+    installer = supervisor.ota_installer
+
+    for error, reason in ((ota_install.PackageRefused("not docked"), "not docked"), (OSError("boom"), "boom")):
+        async def failing(*args, error=error, **kwargs):
+            raise error
+
+        monkeypatch.setattr(ota_install, "resolve_package", failing)
+
+        async def go():
+            assert (await installer.start("robot"))["started"] is True
+            await asyncio.gather(*installer._running.values())
+
+        asyncio.run(go())
+        live = installer.live_status("robot")
+        assert live["status"] == "FAILED" and reason in live["errMsg"] and live["errCode"] == 1
+        assert installer.results["robot"]["ran"] is False and reason in installer.results["robot"]["reason"]

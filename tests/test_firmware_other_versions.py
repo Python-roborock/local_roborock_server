@@ -109,8 +109,13 @@ def test_a_stale_address_is_replaced_only_by_the_same_package(tmp_path, monkeypa
 
     supervisor.cloud_manager.urls = {"02.35.52": NEW_URL.replace(NEW_MD5, "f" * 32)}
     monkeypatch.setattr(ota_dry_run, "_download_to_file", _always_403)
-    refused = asyncio.run(supervisor.ota_installer.start_version("robot", "02.35.52"))
-    assert refused["started"] is False and "no matching one" in refused["reason"]
+    async def go():
+        assert (await supervisor.ota_installer.start_version("robot", "02.35.52"))["started"] is True
+        await asyncio.gather(*supervisor.ota_installer._running.values())
+
+    asyncio.run(go())
+    assert "no matching one" in supervisor.ota_installer.live_status("robot")["errMsg"]
+    assert supervisor.ota_installer.live_status("robot")["status"] == "FAILED"
 
 
 async def _always_403(url, target):
