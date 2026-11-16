@@ -9,6 +9,9 @@ services:
       - "${ROBOROCK_SERVER_HTTPS_PORT:-555}:${ROBOROCK_SERVER_HTTPS_PORT:-555}"
       - "${ROBOROCK_SERVER_MQTT_TLS_PORT:-8881}:${ROBOROCK_SERVER_MQTT_TLS_PORT:-8881}"
     volumes:
+      # Remove this line if you're generating config.toml from ROBOROCK_SERVER_*
+      # env vars instead of running `configure` first — see the "Environment
+      # Variables Only" section in docs/installation.md.
       - ./config.toml:/app/config.toml:ro
       - ./data:/data
       - ./secrets:/run/secrets:ro

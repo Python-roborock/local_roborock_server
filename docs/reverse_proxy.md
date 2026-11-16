@@ -1,6 +1,8 @@
 # Reverse Proxy
 
-Reverse proxy support is mainly useful when public or LAN clients reach the stack on different ports than the backend listeners, or when you already run a proxy (Caddy, Traefik, nginx) that owns your TLS certificates. I do not use a reverse proxy for my own setup, so please report any issues.
+Reverse proxy support is mainly useful when public or LAN clients reach the stack on different ports than the backend listeners, or when you already run a proxy (Caddy, Traefik, nginx, SWAG) that owns your TLS certificates. I do not use a reverse proxy for my own setup, so please report any issues.
+
+> **Neither the `configure` CLI wizard nor the browser Setup Wizard (`/admin` on first boot) can generate `listener_mode`, `advertised_*_port`, or `trusted_proxies` today** — they only produce the simple `local_tls` case. If your setup needs any of the settings on this page (which it will, for a proxy like SWAG that terminates TLS itself), generate `config.toml` from `ROBOROCK_SERVER_*` environment variables instead (see [Installation](installation.md)) - that path covers everything below directly, with no manual `config.toml` edits needed. The TOML shown on this page is what those env vars produce; it's included so you can see (or hand-edit) the result either way.
 
 Whatever endpoint a vacuum or the Roborock app connects to **must present a valid, trusted TLS certificate** — vacuums refuse to connect otherwise. That endpoint can be the server itself or the proxy in front of it; the rest of this page is about choosing which one terminates TLS.
 
@@ -28,6 +30,8 @@ With that config the server listens on `*:555` / `*:8881`, but responses adverti
 
 - `https://api-roborock.example.com`
 - `ssl://api-roborock.example.com:8883`
+
+Equivalent env vars: `ROBOROCK_SERVER_ADVERTISED_HTTPS_PORT=443`, `ROBOROCK_SERVER_ADVERTISED_MQTT_TLS_PORT=8883`.
 
 ## TLS Termination Modes
 
@@ -59,6 +63,8 @@ listener_mode = "external_tls"
 # No certificate material is required in this mode.
 mode = "provided"
 ```
+
+Equivalent env vars: `ROBOROCK_SERVER_LISTENER_MODE=external_tls`, `ROBOROCK_SERVER_TLS_MODE=provided`.
 
 Requirements:
 
@@ -132,6 +138,8 @@ List every proxy or SNAT address that forwards traffic to the server in `trusted
 # Default: ["127.0.0.1", "::1"]
 trusted_proxies = ["10.42.0.0/16", "10.1.1.10"]
 ```
+
+Equivalent env var: `ROBOROCK_SERVER_TRUSTED_PROXIES=10.42.0.0/16,10.1.1.10` (comma-separated).
 
 - **HTTP:** requests from a trusted proxy use the `X-Forwarded-For` header to find the vacuum's real IP. The header is ignored from any other client, so it can't be spoofed. Traefik and Caddy set it by default; nginx needs `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
 - **MQTT:** during an active onboarding session, a new MQTT login is normally accepted only from the IP that completed `/region` and `/nc`. A connection from a trusted proxy is also accepted, because a stream proxy hides the vacuum's address. The session must still have completed `/region` and `/nc`, and the first publish must be on that vacuum's topic.

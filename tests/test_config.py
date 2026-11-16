@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from conftest import write_release_config
 
-from roborock_local_server.config import load_config, resolve_paths
+from roborock_local_server.config import diagnose_config, load_config, resolve_paths
 
 
 def test_logging_defaults_and_overrides(tmp_path):
@@ -557,3 +557,54 @@ def test_load_config_rejects_invalid_trusted_proxy(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="network.trusted_proxies entry 'traefik'"):
         load_config(config_file)
+
+
+_VALID_NETWORK_BROKER_STORAGE_TLS = """
+[network]
+stack_fqdn = "api-roborock.example.com"
+
+[broker]
+mode = "embedded"
+
+[storage]
+data_dir = "data"
+
+[tls]
+mode = "provided"
+cert_file = "certs/fullchain.pem"
+key_file = "certs/privkey.pem"
+"""
+
+_VALID_ADMIN = """
+[admin]
+password_hash = "pbkdf2_sha256$600000$abc$def"
+session_secret = "abcdefghijklmnopqrstuvwxyz123456"
+protocol_login_email = "user@example.com"
+protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
+"""
+
+
+def test_diagnose_config_ok(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text((_VALID_NETWORK_BROKER_STORAGE_TLS + _VALID_ADMIN).strip(), encoding="utf-8")
+
+    assert diagnose_config(config_file) == "ok"
+
+
+def test_diagnose_config_missing_admin_when_only_admin_section_absent(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_VALID_NETWORK_BROKER_STORAGE_TLS.strip(), encoding="utf-8")
+
+    assert diagnose_config(config_file) == "missing_admin"
+
+
+def test_diagnose_config_invalid_when_file_does_not_exist(tmp_path: Path) -> None:
+    assert diagnose_config(tmp_path / "does-not-exist.toml") == "invalid"
+
+
+def test_diagnose_config_invalid_when_network_is_broken_even_if_admin_is_fine(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    broken_network = _VALID_NETWORK_BROKER_STORAGE_TLS.replace('mode = "embedded"', 'mode = "bogus"')
+    config_file.write_text((broken_network + _VALID_ADMIN).strip(), encoding="utf-8")
+
+    assert diagnose_config(config_file) == "invalid"
