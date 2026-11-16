@@ -160,3 +160,15 @@ def test_the_admin_reads_and_triggers_another_version(tmp_path, monkeypatch) -> 
     refused = client.post("/admin/api/firmware/robot/install-version", json={"version": "02.33.48"})
     assert refused.status_code == 409 and "allow_downgrade" in refused.json()["reason"]
 
+
+def test_the_admin_learns_only_versions_the_cloud_gives_an_address_for(tmp_path, monkeypatch) -> None:
+    supervisor, _ = _supervisor(tmp_path, monkeypatch, reported="02.35.52")
+    client = TestClient(supervisor.app)
+    assert client.post("/admin/api/firmware/robot/learn-versions", json={"versions": ["02.33.48"]}).status_code == 401
+    client.post("/admin/api/login", json={"password": "correct horse battery staple"})
+    done = client.post("/admin/api/firmware/robot/learn-versions", json={"versions": ["02.33.48", "02.01.01", "bad"]}).json()
+    assert done["learned"] == ["02.33.48"] and done["checked"] == 3
+    entry = supervisor.ota_installer.catalog.entry(MODEL, "02.33.48")
+    assert entry["md5"] == OLD_MD5 and entry["sources"] == ["probe"]
+    assert supervisor.ota_installer.catalog.entry(MODEL, "02.01.01") is None
+    assert client.post("/admin/api/firmware/robot/learn-versions", json={"versions": []}).status_code == 400

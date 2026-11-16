@@ -20,6 +20,7 @@ logger = logging.getLogger("real_stack.api")
 # Where an entry was learned: the version a robot ran before an install, a package installed, or a cloud offer.
 SOURCE_ROBOT = "robot_reported"
 SOURCE_INSTALL = "install"
+SOURCE_PROBE = "probe"
 SOURCE_OFFER = "cloud_offer"
 
 

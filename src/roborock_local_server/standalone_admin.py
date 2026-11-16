@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from textwrap import dedent
 from typing import Any
@@ -9,6 +10,9 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from . import firmware_versions
+from .firmware_catalog import SOURCE_PROBE
+from .ota_dry_run import package_address, package_md5
 from .security import verify_password
 
 
@@ -534,6 +538,34 @@ def register_standalone_admin_routes(
         version = str((body or {}).get("version") or "").strip() if isinstance(body, dict) else ""
         started = await supervisor.ota_installer.start_version(duid, version)
         return JSONResponse({"success": started["started"], **started}, status_code=200 if started["started"] else 409)
+
+    @app.post("/admin/api/firmware/{duid}/learn-versions")
+    async def admin_firmware_learn_versions(duid: str, request: Request) -> JSONResponse:
+        """Adds listed versions to the catalog when the cloud itself gives a package address for them; installs nothing."""
+        supervisor._require_admin(request)
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            body = {}
+        versions = (body or {}).get("versions")
+        if not isinstance(versions, list) or not 0 < len(versions) <= 100:
+            return JSONResponse({"error": "versions must be a list of 1 to 100"}, status_code=400)
+        installer = supervisor.ota_installer
+        model = installer.model_of(duid)
+        if not model:
+            return JSONResponse({"success": False, "error": f"Unknown device {duid!r}"}, status_code=404)
+        learned: list[str] = []
+        for version in (str(v).strip() for v in versions):
+            if firmware_versions.parse(version) is None:
+                continue
+            try:
+                url = await package_address(supervisor.cloud_manager, duid, version)
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse({"success": False, "stoppedAt": version, "error": str(exc), "learned": learned}, status_code=502)
+            if url and installer.catalog.add(model, version, source=SOURCE_PROBE, url=url, md5=package_md5(url)):
+                learned.append(version)
+            await asyncio.sleep(0.2)
+        return JSONResponse({"success": True, "model": model, "checked": len(versions), "learned": learned})
 
     @app.post("/admin/api/cloud/refresh-plugins")
     async def admin_cloud_refresh_plugins(request: Request) -> JSONResponse:
