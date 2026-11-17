@@ -59,7 +59,11 @@ def upsert_inventory_room(ctx: ServerContext, *, home_id: int, room_name: str) -
         None,
     )
     if existing_room is not None:
-        room_payload = {"id": as_int(existing_room.get("id"), 0), "name": str(existing_room.get("name") or normalized_name)}
+        # The match ignores case so a room isn't created twice. A name that differs only in case
+        # is a correction to that room's spelling, so store it; otherwise the first spelling could
+        # never be changed, since nothing else renames a room.
+        existing_room["name"] = normalized_name
+        room_payload = {"id": as_int(existing_room.get("id"), 0), "name": normalized_name}
         created = False
     else:
         next_room_id = max((as_int(room.get("id"), 0) for room in rooms if isinstance(room, dict)), default=0) + 1
