@@ -1778,6 +1778,44 @@ class ReleaseSupervisor:
             )
             return True
 
+    def record_reported_firmware(self, device_id: str, firmware_version: str) -> bool:
+        """Store the firmware version a blind-onboarded vacuum reports over MQTT.
+
+        Onboarded records have no cloud ``fv``, so home data would otherwise fall back to a
+        placeholder. Cloud-imported records stay authoritative and are never rewritten here.
+        """
+        normalized_id = str(device_id or "").strip()
+        normalized_version = str(firmware_version or "").strip()
+        if not normalized_id or not normalized_version:
+            return False
+        with inventory_transaction(self.paths.inventory_path):
+            inventory = _load_inventory(self.paths.inventory_path)
+            devices = inventory.get("devices")
+            if not isinstance(devices, list):
+                return False
+            for existing in devices:
+                if not isinstance(existing, dict):
+                    continue
+                existing_ids = {
+                    str(existing.get(key) or "").strip()
+                    for key in ("duid", "did", "device_id", "deviceId")
+                }
+                if normalized_id not in existing_ids:
+                    continue
+                if existing.get("source") != "onboarding":
+                    return False
+                if str(existing.get("fv") or "").strip() == normalized_version:
+                    return False
+                existing["fv"] = normalized_version
+                atomic_write_inventory(self.paths.inventory_path, inventory)
+                self.root_logger.info(
+                    "recorded firmware %s reported by onboarded device id=%s",
+                    normalized_version,
+                    normalized_id,
+                )
+                return True
+        return False
+
     def clear_onboarding_session(self, *, session_id: str) -> dict[str, Any]:
         snapshot = self.runtime_state.onboarding_session_snapshot()
         normalized_session_id = str(session_id or "").strip()
@@ -1906,6 +1944,7 @@ class ReleaseSupervisor:
             zone_ranges_store=self.context.zone_ranges_store,
             tls_enabled=self._uses_local_tls(),
             on_onboarding_credentials_learned=self.persist_active_onboarding_device,
+            on_device_firmware_reported=self.record_reported_firmware,
         )
         self._mqtt_proxy.start()
         self.runtime_state.set_service("mqtt_tls_proxy", running=True, required=True, enabled=True)

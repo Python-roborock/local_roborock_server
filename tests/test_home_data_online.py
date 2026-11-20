@@ -459,3 +459,62 @@ def test_home_data_preserves_last_working_app_contract(tmp_path: Path, home_path
     assert device["productId"] == "5gUei3OIJIXVD3eD85Balg"
     assert "local_key" not in device
     assert "product_id" not in device
+
+
+@pytest.mark.parametrize("home_path", ["/v3/user/homes/1233716", "/v4/user/homes/1233716"])
+def test_home_data_uses_firmware_version_reported_by_onboarded_device(tmp_path: Path, home_path: str) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+
+    paths.runtime_dir.mkdir(parents=True, exist_ok=True)
+    paths.state_dir.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps(
+            {
+                "home": {"id": 1233716, "name": "My Home"},
+                "devices": [
+                    {
+                        "duid": "1103844865396",
+                        "did": "1103844865396",
+                        "name": "Roborock Qrevo 2 Pro",
+                        "model": "roborock.vacuum.a294",
+                        "product_id": "local_a294",
+                        "local_key": "aBcDeFgHiJkLmNoP",
+                        "source": "onboarding",
+                    },
+                    {
+                        "duid": "6HL2zfniaoYYV01CkVuhkO",
+                        "name": "Roborock S7",
+                        "model": "roborock.vacuum.a15",
+                        "product_id": "5gUei3OIJIXVD3eD85Balg",
+                        "local_key": "xPd5Dr8CGGqtdDlH",
+                        "fv": "02.16.12",
+                    },
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _seed_cloud_snapshot(paths.cloud_snapshot_path, {"id": 1233716, "name": "My Home", "devices": []})
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    supervisor.refresh_inventory_state()
+
+    assert supervisor.record_reported_firmware("1103844865396", "02.44.86") is True
+    # An unchanged version is not written again, and cloud-imported records keep their own fv.
+    assert supervisor.record_reported_firmware("1103844865396", "02.44.86") is False
+    assert supervisor.record_reported_firmware("6HL2zfniaoYYV01CkVuhkO", "02.99.99") is False
+
+    client = TestClient(supervisor.app)
+    response = client.get(home_path, headers=_hawk_headers(paths.cloud_snapshot_path, home_path))
+    assert response.status_code == 200
+
+    firmware_by_duid = {device["duid"]: device["fv"] for device in response.json()["data"]["devices"]}
+    assert firmware_by_duid["1103844865396"] == "02.44.86"
+    inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    assert {device["duid"]: device.get("fv") for device in inventory["devices"]} == {
+        "1103844865396": "02.44.86",
+        "6HL2zfniaoYYV01CkVuhkO": "02.16.12",
+    }
