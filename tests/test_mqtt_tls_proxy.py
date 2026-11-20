@@ -12,6 +12,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 import pytest
+from roborock.protocol import create_mqtt_encoder
+from roborock.roborock_message import RoborockMessage
 
 from roborock_local_server.backend import MqttTlsProxy
 from roborock_local_server.bundled_backend.shared.runtime_credentials import RuntimeCredentialsStore
@@ -153,10 +155,19 @@ def _build_connect_packet(*, client_id: str, username: str, password: str, proto
     return bytes([0x10, len(remaining)]) + remaining
 
 
+def _encode_remaining_length(length: int) -> bytes:
+    encoded = bytearray()
+    while True:
+        byte, length = length % 128, length // 128
+        encoded.append(byte | 0x80 if length else byte)
+        if not length:
+            return bytes(encoded)
+
+
 def _build_publish_packet(*, topic: str, payload: bytes = b"{}") -> bytes:
     topic_bytes = topic.encode()
     remaining = len(topic_bytes).to_bytes(2, "big") + topic_bytes + payload
-    return bytes([0x30, len(remaining)]) + remaining
+    return bytes([0x30]) + _encode_remaining_length(len(remaining)) + remaining
 
 
 def test_relay_forwards_chunk_before_slow_packet_tracing_finishes(tmp_path, monkeypatch) -> None:
@@ -672,6 +683,36 @@ def test_trace_packet_persists_confirmed_onboarding_device_mqtt_credentials(tmp_
     assert persisted["device_mqtt_pass"] == "ff8922d24a9a9af81f18f35dcee9a5a5"
     assert proxy._get_pending_onboarding_auth("1") is None
     assert len(learned_callbacks) == 1
+
+
+def test_trace_packet_reports_firmware_version_published_by_device(tmp_path) -> None:
+    local_key = "xPd5Dr8CGGqtdDlH"
+    reports: list[tuple[str, str]] = []
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey=local_key,
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        on_device_firmware_reported=lambda device_id, version: reports.append((device_id, version)),
+    )
+    payload = create_mqtt_encoder(local_key)(
+        RoborockMessage(
+            protocol=203,
+            payload=b'{"mqttOtaData":{"mqttOtaFirmwareVersion":{"version":"02.44.86"}}}',
+        )
+    )
+
+    proxy._trace_packet("1", "c2b", _build_publish_packet(topic="rr/d/i/1103844865396/c25b14ceac358d2a", payload=payload))
+    # Only a device publishing on its own topic reports its firmware.
+    proxy._trace_packet("1", "b2c", _build_publish_packet(topic="rr/d/i/1103844865396/c25b14ceac358d2a", payload=payload))
+    proxy._trace_packet("2", "c2b", _build_publish_packet(topic="rr/m/i/hawk-user/6485d8e9/1103844865396", payload=payload))
+
+    assert reports == [("1103844865396", "02.44.86")]
 
 
 def test_trace_packet_closes_provisional_onboarding_session_when_first_publish_topic_mismatches(tmp_path) -> None:

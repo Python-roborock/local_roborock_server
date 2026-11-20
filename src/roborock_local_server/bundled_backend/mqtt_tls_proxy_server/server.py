@@ -8,6 +8,7 @@ import json
 import logging
 from pathlib import Path
 import queue
+import re
 import socket
 import ssl
 import threading
@@ -22,6 +23,12 @@ from shared.runtime_state import RuntimeState
 from shared.zone_ranges_store import ZoneRangesStore
 
 from .command_handlers import RpcCommandRegistry
+
+# Vacuums publish {"mqttOtaData": {"mqttOtaFirmwareVersion": {"version": "02.44.86"}}}
+# with protocol 203 on their own topic after connecting.
+_FIRMWARE_REPORT_PROTOCOL = 203
+_SAFE_FIRMWARE_VERSION = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
 
 class MqttTlsProxy:
     _MAX_FIRST_PACKET_BYTES = 1024 * 1024
@@ -48,6 +55,7 @@ class MqttTlsProxy:
         zone_ranges_store: ZoneRangesStore | None = None,
         tls_enabled: bool = True,
         on_onboarding_credentials_learned: Callable[[], None] | None = None,
+        on_device_firmware_reported: Callable[[str, str], None] | None = None,
     ) -> None:
         self.cert_file = cert_file
         self.key_file = key_file
@@ -66,6 +74,7 @@ class MqttTlsProxy:
         self.runtime_credentials = runtime_credentials
         self.zone_ranges_store = zone_ranges_store
         self._on_onboarding_credentials_learned = on_onboarding_credentials_learned
+        self._on_device_firmware_reported = on_device_firmware_reported
         self._server_socket: socket.socket | None = None
         self._running = False
         self._counter = 0
@@ -521,6 +530,42 @@ class MqttTlsProxy:
             parsed["error"] = rpc_obj.get("error")
         return parsed
 
+    @staticmethod
+    def _reported_firmware_version(payload_utf8: str | None) -> str | None:
+        if not payload_utf8:
+            return None
+        try:
+            payload_obj = json.loads(payload_utf8)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        ota_data = payload_obj.get("mqttOtaData") if isinstance(payload_obj, dict) else None
+        firmware = ota_data.get("mqttOtaFirmwareVersion") if isinstance(ota_data, dict) else None
+        version = firmware.get("version") if isinstance(firmware, dict) else None
+        if not isinstance(version, str):
+            return None
+        version = version.strip()
+        return version if _SAFE_FIRMWARE_VERSION.fullmatch(version) else None
+
+    @staticmethod
+    def _device_id_from_topic(topic: str) -> str | None:
+        # Device-to-broker topics are rr/d/i/<duid>/<device mqtt user hash>.
+        parts = topic.split("/")
+        if len(parts) < 4 or parts[:3] != ["rr", "d", "i"]:
+            return None
+        return parts[3].strip() or None
+
+    def _report_device_firmware(self, topic: str, payload_utf8: str | None) -> None:
+        if self._on_device_firmware_reported is None:
+            return
+        device_id = self._device_id_from_topic(topic)
+        firmware_version = self._reported_firmware_version(payload_utf8)
+        if device_id is None or firmware_version is None:
+            return
+        try:
+            self._on_device_firmware_reported(device_id, firmware_version)
+        except Exception:
+            self.logger.exception("recording firmware %s reported by %s failed", firmware_version, device_id)
+
     def _trace_packet(self, conn_id: str, direction: str, packet: bytes) -> None:
         packet_type = packet[0] >> 4
         if packet_type in (12, 13):  # PINGREQ, PINGRESP
@@ -594,6 +639,9 @@ class MqttTlsProxy:
             )
             payload_bytes = message.payload if isinstance(message.payload, bytes) else b""
             payload_data = self._decode_payload_bytes(payload_bytes)
+            if direction == "c2b" and proto_value == _FIRMWARE_REPORT_PROTOCOL:
+                payload_utf8 = payload_data.get("payload_utf8")
+                self._report_device_firmware(topic, payload_utf8 if isinstance(payload_utf8, str) else None)
             payload_compact = payload_data.get("payload_utf8")
             if isinstance(payload_compact, str):
                 try:
