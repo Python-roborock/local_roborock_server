@@ -30,6 +30,8 @@ _FIRMWARE_REPORT_PROTOCOL = 203
 _SAFE_FIRMWARE_VERSION = re.compile(r"[A-Za-z0-9._-]{1,64}")
 # CONNECT results that mean the client logged in with a vacuum's own MQTT credentials.
 _DEVICE_AUTH_REASONS = frozenset({"device_mqtt_user", "device_mqtt_recovered"})
+# Trace queue direction for the marker _handle_client queues after a connection's last packet.
+_CONN_CLOSED = "closed"
 
 
 class MqttTlsProxy:
@@ -754,12 +756,21 @@ class MqttTlsProxy:
         entry["decoded_messages"] = decoded_messages
         append_jsonl(self.decoded_jsonl, entry)
 
+    def _forget_conn_trace_state(self, conn_id: str) -> None:
+        with self._lock:
+            self._conn_protocol_levels.pop(conn_id, None)
+            self._conn_device_topics.pop(conn_id, None)
+            self._pending_onboarding_auth.pop(conn_id, None)
+
     def _run_trace_worker(self) -> None:
         while True:
             item = self._trace_queue.get()
             if item is None:
                 return
             conn_id, direction, packet = item
+            if direction == _CONN_CLOSED:
+                self._forget_conn_trace_state(conn_id)
+                continue
             try:
                 self._trace_packet(conn_id, direction, packet)
             except Exception:
@@ -783,6 +794,11 @@ class MqttTlsProxy:
     def _queue_trace_packet(self, conn_id: str, direction: str, packet: bytes) -> None:
         self._ensure_trace_worker()
         self._trace_queue.put((conn_id, direction, packet))
+
+    def _queue_conn_closed(self, conn_id: str) -> None:
+        """Forget the connection's trace state once the worker has traced its queued packets."""
+        self._ensure_trace_worker()
+        self._trace_queue.put((conn_id, _CONN_CLOSED, b""))
 
     def _relay(self, src: socket.socket, dst: socket.socket, conn_id: str, direction: str, frame_buf: bytearray) -> None:
         try:
@@ -876,7 +892,6 @@ class MqttTlsProxy:
         except Exception as exc:
             self.logger.error("[conn %s] connection error: %s", conn_id, exc)
         finally:
-            self._pop_pending_onboarding_auth(conn_id)
             self._pop_conn_endpoints(conn_id)
             if not relay_started:
                 for endpoint in (tls_conn, backend):
@@ -888,9 +903,9 @@ class MqttTlsProxy:
                         pass
             if self.runtime_state is not None:
                 self.runtime_state.record_mqtt_disconnect(conn_id=conn_id)
-            with self._lock:
-                self._conn_protocol_levels.pop(conn_id, None)
-                self._conn_device_topics.pop(conn_id, None)
+            # The trace worker may not have reached this connection's last packets yet, and
+            # tracing them needs its protocol level, device topic and onboarding candidate.
+            self._queue_conn_closed(conn_id)
             self.logger.info("[conn %s] closed", conn_id)
 
     def start(self) -> threading.Thread:

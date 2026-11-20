@@ -798,6 +798,150 @@ def test_handle_client_takes_firmware_reports_only_from_the_vacuums_own_login(
 
     assert backend.connected_to == ("127.0.0.1", 1883)
     assert reports == expected_reports
+    proxy.stop()  # The trace worker forgets the binding after the connection's packets.
+    assert proxy._get_conn_device_topic("1") is None
+
+
+_VACUUM_A = {
+    "did": "1103844865396",
+    "duid": "4kQ2xZf9mWnB7cVd1LpRt8",
+    "name": "Roborock Qrevo 2 Pro",
+    "model": "roborock.vacuum.a294",
+    "product_id": "",
+    "localkey": "xPd5Dr8CGGqtdDlH",
+    "local_key_source": "inventory",
+    "device_mqtt_usr": "c25b14ceac358d2a",
+    "device_mqtt_pass": "ff8922d24a9a9af81f18f35dcee9a5a5",
+    "updated_at": "2026-11-19T17:00:00+00:00",
+    "last_nc_at": "",
+    "last_mqtt_seen_at": "",
+}
+
+
+def _hold_tracing(proxy: MqttTlsProxy, monkeypatch: pytest.MonkeyPatch) -> threading.Event:
+    """Hold the trace worker until the returned event is set."""
+    release = threading.Event()
+    trace_packet = proxy._trace_packet
+
+    def held_trace_packet(conn_id: str, direction: str, packet: bytes) -> None:
+        release.wait(5.0)
+        trace_packet(conn_id, direction, packet)
+
+    monkeypatch.setattr(proxy, "_trace_packet", held_trace_packet)
+    return release
+
+
+def _build_vacuum_a_proxy(
+    tmp_path: Path,
+    *,
+    device: dict[str, str],
+    reports: list[tuple[str, str]] | None = None,
+) -> tuple[MqttTlsProxy, RuntimeCredentialsStore]:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    runtime_credentials_path = tmp_path / "runtime_credentials.json"
+    _write_json(runtime_credentials_path, {"schema_version": 2, "devices": [device]})
+    runtime_credentials = RuntimeCredentialsStore(runtime_credentials_path)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        runtime_credentials=runtime_credentials,
+        on_device_firmware_reported=(
+            (lambda device_id, version: reports.append((device_id, version))) if reports is not None else None
+        ),
+    )
+    return proxy, runtime_credentials
+
+
+def test_handle_client_keeps_the_vacuums_binding_until_its_queued_packets_are_traced(tmp_path, monkeypatch) -> None:
+    reports: list[tuple[str, str]] = []
+    proxy, runtime_credentials = _build_vacuum_a_proxy(tmp_path, device=dict(_VACUUM_A), reports=reports)
+    release_tracing = _hold_tracing(proxy, monkeypatch)
+    tls_conn = _FakeSourceSocket(
+        _build_connect_packet(
+            client_id="vacuum-a",
+            username=_VACUUM_A["device_mqtt_usr"],
+            password=_VACUUM_A["device_mqtt_pass"],
+        )
+        + _build_publish_packet(
+            topic=f"rr/d/i/{_VACUUM_A['did']}/{_VACUUM_A['device_mqtt_usr']}",
+            payload=_firmware_report_payload(_VACUUM_A["localkey"]),
+        )
+    )
+    backend = _FakeBackendSocket()
+    monkeypatch.setattr(socket, "socket", lambda *args, **kwargs: backend)
+
+    # The vacuum disconnects before the trace worker reaches its packets.
+    proxy._running = True
+    proxy._handle_client(tls_conn, ("127.0.0.1", 4321))
+    release_tracing.set()
+    proxy.stop()  # Returns once the trace worker has finished the queue.
+
+    assert reports == [(_VACUUM_A["did"], "02.44.86")]
+    vacuum_a = runtime_credentials.resolve_device(did=_VACUUM_A["did"])
+    assert vacuum_a is not None
+    assert vacuum_a["last_mqtt_seen_at"] != ""
+    assert proxy._get_conn_device_topic("1") is None
+
+
+def test_handle_client_keeps_the_onboarding_candidate_until_its_queued_packets_are_traced(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    proxy, runtime_credentials = _build_vacuum_a_proxy(
+        tmp_path,
+        device={**_VACUUM_A, "device_mqtt_usr": "", "device_mqtt_pass": ""},
+    )
+    candidate = {
+        "did": _VACUUM_A["did"],
+        "duid": _VACUUM_A["duid"],
+        "name": _VACUUM_A["name"],
+        "username": _VACUUM_A["device_mqtt_usr"],
+        "password": _VACUUM_A["device_mqtt_pass"],
+        "client_ip": "127.0.0.1",
+    }
+    monkeypatch.setattr(
+        proxy,
+        "_authorize_connect_packet_for_client",
+        lambda _packet, *, client_ip: (
+            True,
+            "device_mqtt_onboarding_pending",
+            {"protocol_level": 4, "username": candidate["username"]},
+            dict(candidate),
+        ),
+    )
+    release_tracing = _hold_tracing(proxy, monkeypatch)
+    tls_conn = _FakeSourceSocket(
+        _build_connect_packet(
+            client_id="vacuum-a",
+            username=candidate["username"],
+            password=candidate["password"],
+        )
+        + _build_publish_packet(topic=f"rr/d/i/{_VACUUM_A['did']}/{candidate['username']}")
+    )
+    backend = _FakeBackendSocket()
+    monkeypatch.setattr(socket, "socket", lambda *args, **kwargs: backend)
+
+    # The vacuum disconnects before the trace worker reaches its first publish.
+    proxy._running = True
+    proxy._handle_client(tls_conn, ("127.0.0.1", 4321))
+    release_tracing.set()
+    proxy.stop()  # Returns once the trace worker has finished the queue.
+
+    vacuum_a = runtime_credentials.resolve_device(did=_VACUUM_A["did"])
+    assert vacuum_a is not None
+    assert vacuum_a["device_mqtt_usr"] == candidate["username"]
+    assert vacuum_a["device_mqtt_pass"] == candidate["password"]
+    assert vacuum_a["last_mqtt_seen_at"] != ""
+    assert proxy._get_pending_onboarding_auth("1") is None
     assert proxy._get_conn_device_topic("1") is None
 
 
