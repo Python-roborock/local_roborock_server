@@ -945,6 +945,139 @@ def test_handle_client_keeps_the_onboarding_candidate_until_its_queued_packets_a
     assert proxy._get_conn_device_topic("1") is None
 
 
+_VACUUM_B = {
+    "did": "1103821560705",
+    "duid": "6HL2zfniaoYYV01CkVuhkO",
+    "name": "Roborock Qrevo MaxV 2",
+    "model": "roborock.vacuum.a87",
+    "product_id": "",
+    "localkey": "Qm3vT9sLx2Wc8RkA",
+    "local_key_source": "inventory",
+    "device_mqtt_usr": "0f9e8d7c6b5a4f3e",
+    "device_mqtt_pass": "0123456789abcdef0123456789abcdef",
+    "updated_at": "2026-11-19T17:00:00+00:00",
+    "last_nc_at": "",
+    "last_mqtt_seen_at": "",
+}
+
+
+def _run_client_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    client_id: str,
+    username: str,
+    password: str,
+    publish_topics: list[str],
+) -> tuple[MqttTlsProxy, RuntimeCredentialsStore]:
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    runtime_credentials_path = tmp_path / "runtime_credentials.json"
+    _write_json(
+        runtime_credentials_path,
+        {
+            "schema_version": 2,
+            "mqtt_usr": "bootstrap-user",
+            "mqtt_passwd": "bootstrap-pass",
+            "mqtt_clientid": "bootstrap-client",
+            "devices": [dict(_VACUUM_A), dict(_VACUUM_B)],
+        },
+    )
+    runtime_credentials = RuntimeCredentialsStore(runtime_credentials_path)
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        runtime_credentials=runtime_credentials,
+    )
+    packets = _build_connect_packet(client_id=client_id, username=username, password=password)
+    for topic in publish_topics:
+        packets += _build_publish_packet(topic=topic)
+    tls_conn = _FakeSourceSocket(packets)
+    backend = _FakeBackendSocket()
+
+    monkeypatch.setattr(socket, "socket", lambda *args, **kwargs: backend)
+    monkeypatch.setattr(proxy, "_queue_trace_packet", proxy._trace_packet)
+
+    proxy._running = True
+    proxy._handle_client(tls_conn, ("127.0.0.1", 4321))
+
+    assert backend.connected_to == ("127.0.0.1", 1883)
+    return proxy, runtime_credentials
+
+
+@pytest.mark.parametrize(
+    ("client_id", "username", "password"),
+    [
+        # An app login (protocol auth).
+        ("ha-client", "52359d04", "cb5af78c8d901feb"),
+        # The bootstrap login.
+        ("bootstrap-client", "bootstrap-user", "bootstrap-pass"),
+        # Another vacuum's own device login.
+        ("vacuum-b", _VACUUM_B["device_mqtt_usr"], _VACUUM_B["device_mqtt_pass"]),
+    ],
+)
+def test_handle_client_ignores_device_topics_published_by_other_logins(
+    tmp_path,
+    monkeypatch,
+    client_id: str,
+    username: str,
+    password: str,
+) -> None:
+    proxy, runtime_credentials = _run_client_session(
+        tmp_path,
+        monkeypatch,
+        client_id=client_id,
+        username=username,
+        password=password,
+        publish_topics=[
+            f"rr/d/i/{_VACUUM_A['did']}/spoofed-user",
+            "rr/d/i/2000000000001/spoofed-user",
+        ],
+    )
+
+    vacuum_a = runtime_credentials.resolve_device(did=_VACUUM_A["did"])
+    assert vacuum_a is not None
+    assert vacuum_a["device_mqtt_usr"] == _VACUUM_A["device_mqtt_usr"]
+    assert vacuum_a["last_mqtt_seen_at"] == ""
+    assert runtime_credentials.resolve_device(did="2000000000001") is None
+    assert len(runtime_credentials.devices()) == 2
+
+    # Vacuum A can still log in with its own credentials.
+    authorized, reason, _info = proxy._authorize_connect_packet(
+        _build_connect_packet(
+            client_id="vacuum-a",
+            username=_VACUUM_A["device_mqtt_usr"],
+            password=_VACUUM_A["device_mqtt_pass"],
+        )
+    )
+    assert (authorized, reason) == (True, "device_mqtt_user")
+
+
+def test_handle_client_records_activity_from_the_vacuums_own_login(tmp_path, monkeypatch) -> None:
+    _proxy, runtime_credentials = _run_client_session(
+        tmp_path,
+        monkeypatch,
+        client_id="vacuum-a",
+        username=_VACUUM_A["device_mqtt_usr"],
+        password=_VACUUM_A["device_mqtt_pass"],
+        publish_topics=[f"rr/d/i/{_VACUUM_A['did']}/{_VACUUM_A['device_mqtt_usr']}"],
+    )
+
+    vacuum_a = runtime_credentials.resolve_device(did=_VACUUM_A["did"])
+    assert vacuum_a is not None
+    assert vacuum_a["device_mqtt_usr"] == _VACUUM_A["device_mqtt_usr"]
+    assert vacuum_a["last_mqtt_seen_at"] != ""
+    assert len(runtime_credentials.devices()) == 2
+
+
 def test_trace_packet_closes_provisional_onboarding_session_when_first_publish_topic_mismatches(tmp_path) -> None:
     cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
     _seed_cloud_snapshot(cloud_snapshot_path)
