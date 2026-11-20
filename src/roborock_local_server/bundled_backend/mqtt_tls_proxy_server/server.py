@@ -28,6 +28,8 @@ from .command_handlers import RpcCommandRegistry
 # with protocol 203 on their own topic after connecting.
 _FIRMWARE_REPORT_PROTOCOL = 203
 _SAFE_FIRMWARE_VERSION = re.compile(r"[A-Za-z0-9._-]{1,64}")
+# CONNECT results that mean the client logged in with a vacuum's own MQTT credentials.
+_DEVICE_AUTH_REASONS = frozenset({"device_mqtt_user", "device_mqtt_recovered"})
 
 
 class MqttTlsProxy:
@@ -82,6 +84,7 @@ class MqttTlsProxy:
         self._conn_protocol_levels: dict[str, int] = {}
         self._conn_endpoints: dict[str, tuple[socket.socket, socket.socket]] = {}
         self._pending_onboarding_auth: dict[str, dict[str, str]] = {}
+        self._conn_device_topics: dict[str, str] = {}
         self._trace_queue: queue.Queue[tuple[str, str, bytes] | None] = queue.Queue()
         self._trace_thread: threading.Thread | None = None
         self._protocol_auth = (
@@ -132,6 +135,24 @@ class MqttTlsProxy:
         with self._lock:
             candidate = self._pending_onboarding_auth.pop(conn_id, None)
             return dict(candidate) if candidate is not None else None
+
+    def _set_conn_device_topic(self, conn_id: str, topic: str) -> None:
+        with self._lock:
+            self._conn_device_topics[conn_id] = topic
+
+    def _get_conn_device_topic(self, conn_id: str) -> str | None:
+        with self._lock:
+            return self._conn_device_topics.get(conn_id)
+
+    def _bind_authenticated_device_topic(self, conn_id: str, auth_reason: str, username: str) -> None:
+        """Remember the topic of the vacuum whose own MQTT credentials this connection used."""
+        if auth_reason not in _DEVICE_AUTH_REASONS or self.runtime_credentials is None:
+            return
+        normalized_username = username.strip()
+        device = self.runtime_credentials.resolve_device_by_mqtt_username(normalized_username)
+        did = str((device or {}).get("did") or "").strip()
+        if did:
+            self._set_conn_device_topic(conn_id, f"rr/d/i/{did}/{normalized_username}")
 
     @staticmethod
     def _decode_remaining_length(data: bytes, start: int) -> tuple[int | None, int]:
@@ -360,6 +381,7 @@ class MqttTlsProxy:
             )
             self._close_conn_endpoints(conn_id)
             return False
+        self._set_conn_device_topic(conn_id, expected_topic)
         self.logger.info(
             "[conn %s] learned onboarding MQTT credentials did=%s duid=%s username=%s",
             conn_id,
@@ -548,14 +570,18 @@ class MqttTlsProxy:
 
     @staticmethod
     def _device_id_from_topic(topic: str) -> str | None:
-        # Device-to-broker topics are rr/d/i/<duid>/<device mqtt user hash>.
+        # Device-to-broker topics are rr/d/i/<did>/<device mqtt username>.
         parts = topic.split("/")
         if len(parts) < 4 or parts[:3] != ["rr", "d", "i"]:
             return None
         return parts[3].strip() or None
 
-    def _report_device_firmware(self, topic: str, payload_utf8: str | None) -> None:
+    def _report_device_firmware(self, conn_id: str, topic: str, payload_utf8: str | None) -> None:
         if self._on_device_firmware_reported is None:
+            return
+        # App and bootstrap logins can publish on any topic, so a report counts only on the
+        # topic of the vacuum whose own credentials this connection logged in with.
+        if topic != self._get_conn_device_topic(conn_id):
             return
         device_id = self._device_id_from_topic(topic)
         firmware_version = self._reported_firmware_version(payload_utf8)
@@ -641,7 +667,7 @@ class MqttTlsProxy:
             payload_data = self._decode_payload_bytes(payload_bytes)
             if direction == "c2b" and proto_value == _FIRMWARE_REPORT_PROTOCOL:
                 payload_utf8 = payload_data.get("payload_utf8")
-                self._report_device_firmware(topic, payload_utf8 if isinstance(payload_utf8, str) else None)
+                self._report_device_firmware(conn_id, topic, payload_utf8 if isinstance(payload_utf8, str) else None)
             payload_compact = payload_data.get("payload_utf8")
             if isinstance(payload_compact, str):
                 try:
@@ -826,6 +852,7 @@ class MqttTlsProxy:
                         self._queue_trace_packet(conn_id, "b2c", reject_packet)
                 return
 
+            self._bind_authenticated_device_topic(conn_id, auth_reason, str((connect_info or {}).get("username") or ""))
             backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             backend.connect((self.backend_host, self.backend_port))
             self._register_conn_endpoints(conn_id, tls_conn, backend)
@@ -863,6 +890,7 @@ class MqttTlsProxy:
                 self.runtime_state.record_mqtt_disconnect(conn_id=conn_id)
             with self._lock:
                 self._conn_protocol_levels.pop(conn_id, None)
+                self._conn_device_topics.pop(conn_id, None)
             self.logger.info("[conn %s] closed", conn_id)
 
     def start(self) -> threading.Thread:

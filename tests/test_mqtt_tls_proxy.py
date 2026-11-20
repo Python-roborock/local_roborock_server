@@ -682,11 +682,22 @@ def test_trace_packet_persists_confirmed_onboarding_device_mqtt_credentials(tmp_
     assert persisted["device_mqtt_usr"] == "c25b14ceac358d2a"
     assert persisted["device_mqtt_pass"] == "ff8922d24a9a9af81f18f35dcee9a5a5"
     assert proxy._get_pending_onboarding_auth("1") is None
+    assert proxy._get_conn_device_topic("1") == "rr/d/i/1103821560705/c25b14ceac358d2a"
     assert len(learned_callbacks) == 1
+
+
+def _firmware_report_payload(local_key: str) -> bytes:
+    return create_mqtt_encoder(local_key)(
+        RoborockMessage(
+            protocol=203,
+            payload=b'{"mqttOtaData":{"mqttOtaFirmwareVersion":{"version":"02.44.86"}}}',
+        )
+    )
 
 
 def test_trace_packet_reports_firmware_version_published_by_device(tmp_path) -> None:
     local_key = "xPd5Dr8CGGqtdDlH"
+    device_topic = "rr/d/i/1103844865396/c25b14ceac358d2a"
     reports: list[tuple[str, str]] = []
     proxy = MqttTlsProxy(
         cert_file=tmp_path / "fullchain.pem",
@@ -700,19 +711,94 @@ def test_trace_packet_reports_firmware_version_published_by_device(tmp_path) -> 
         decoded_jsonl=tmp_path / "decoded.jsonl",
         on_device_firmware_reported=lambda device_id, version: reports.append((device_id, version)),
     )
-    payload = create_mqtt_encoder(local_key)(
-        RoborockMessage(
-            protocol=203,
-            payload=b'{"mqttOtaData":{"mqttOtaFirmwareVersion":{"version":"02.44.86"}}}',
-        )
-    )
+    payload = _firmware_report_payload(local_key)
+    proxy._set_conn_device_topic("1", device_topic)
+    proxy._set_conn_device_topic("3", "rr/d/i/1103821560705/0f9e8d7c6b5a4f3e")
 
-    proxy._trace_packet("1", "c2b", _build_publish_packet(topic="rr/d/i/1103844865396/c25b14ceac358d2a", payload=payload))
-    # Only a device publishing on its own topic reports its firmware.
-    proxy._trace_packet("1", "b2c", _build_publish_packet(topic="rr/d/i/1103844865396/c25b14ceac358d2a", payload=payload))
+    proxy._trace_packet("1", "c2b", _build_publish_packet(topic=device_topic, payload=payload))
+    # Only the vacuum's own login, publishing on its own topic, reports its firmware.
+    proxy._trace_packet("1", "b2c", _build_publish_packet(topic=device_topic, payload=payload))
+    proxy._trace_packet("2", "c2b", _build_publish_packet(topic=device_topic, payload=payload))
+    proxy._trace_packet("3", "c2b", _build_publish_packet(topic=device_topic, payload=payload))
     proxy._trace_packet("2", "c2b", _build_publish_packet(topic="rr/m/i/hawk-user/6485d8e9/1103844865396", payload=payload))
 
     assert reports == [("1103844865396", "02.44.86")]
+
+
+@pytest.mark.parametrize(
+    ("username", "password", "expected_reports"),
+    [
+        # The vacuum's own device MQTT login.
+        ("c25b14ceac358d2a", "ff8922d24a9a9af81f18f35dcee9a5a5", [("1103844865396", "02.44.86")]),
+        # An app login that knows the vacuum's localKey from home data.
+        ("52359d04", "cb5af78c8d901feb", []),
+    ],
+)
+def test_handle_client_takes_firmware_reports_only_from_the_vacuums_own_login(
+    tmp_path,
+    monkeypatch,
+    username: str,
+    password: str,
+    expected_reports: list[tuple[str, str]],
+) -> None:
+    local_key = "xPd5Dr8CGGqtdDlH"
+    cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
+    _seed_cloud_snapshot(cloud_snapshot_path)
+    runtime_credentials_path = tmp_path / "runtime_credentials.json"
+    _write_json(
+        runtime_credentials_path,
+        {
+            "schema_version": 2,
+            "devices": [
+                {
+                    "did": "1103844865396",
+                    "duid": "4kQ2xZf9mWnB7cVd1LpRt8",
+                    "name": "Roborock Qrevo 2 Pro",
+                    "model": "roborock.vacuum.a294",
+                    "product_id": "",
+                    "localkey": local_key,
+                    "local_key_source": "inventory",
+                    "device_mqtt_usr": "c25b14ceac358d2a",
+                    "device_mqtt_pass": "ff8922d24a9a9af81f18f35dcee9a5a5",
+                    "updated_at": "2026-11-19T17:00:00+00:00",
+                    "last_nc_at": "",
+                    "last_mqtt_seen_at": "",
+                }
+            ],
+        },
+    )
+    reports: list[tuple[str, str]] = []
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+        cloud_snapshot_path=cloud_snapshot_path,
+        runtime_credentials=RuntimeCredentialsStore(runtime_credentials_path),
+        on_device_firmware_reported=lambda device_id, version: reports.append((device_id, version)),
+    )
+    connect_packet = _build_connect_packet(client_id="client-1", username=username, password=password)
+    publish_packet = _build_publish_packet(
+        topic="rr/d/i/1103844865396/c25b14ceac358d2a",
+        payload=_firmware_report_payload(local_key),
+    )
+    tls_conn = _FakeSourceSocket(connect_packet + publish_packet)
+    backend = _FakeBackendSocket()
+
+    monkeypatch.setattr(socket, "socket", lambda *args, **kwargs: backend)
+    monkeypatch.setattr(proxy, "_queue_trace_packet", proxy._trace_packet)
+
+    proxy._running = True
+    proxy._handle_client(tls_conn, ("127.0.0.1", 4321))
+
+    assert backend.connected_to == ("127.0.0.1", 1883)
+    assert reports == expected_reports
+    assert proxy._get_conn_device_topic("1") is None
 
 
 def test_trace_packet_closes_provisional_onboarding_session_when_first_publish_topic_mismatches(tmp_path) -> None:
