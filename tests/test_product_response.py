@@ -56,6 +56,22 @@ def _products_v5(tmp_path: Path, devices: list[dict[str, object]]) -> dict:
     return payload["data"]
 
 
+def _plugin_agreements(tmp_path: Path) -> list[dict]:
+    _route, payload = resolve_route(
+        rules=default_endpoint_rules(),
+        context=_make_context(tmp_path),
+        clean_path="/api/v1/checkAppAgreement",
+        query_params={},
+        body_params={},
+        method="GET",
+    )
+    return payload["data"]["userPluginAgreementList"]
+
+
+def _versions_by_type(agreements: list[dict]) -> dict[str, int]:
+    return {agreement["type"]: agreement["version"] for agreement in agreements}
+
+
 _DEVICE = {
     "duid": "device-a",
     "name": "Vacuum A",
@@ -74,7 +90,28 @@ def test_product_entry_carries_rriotid_category_id_and_agreements(tmp_path: Path
     # Product.rriotid is what the app joins the home data device's productId on.
     assert product["rriotid"] == "iot-product-a"
     assert product["categoryId"] == category["id"]
-    assert product["agreements"] == []
+    assert [agreement["type"] for agreement in product["agreements"]] == [
+        "USER_AGREEMENT",
+        "PRIVACY_POLICY",
+    ]
+
+
+def test_product_agreements_are_signed_in_plugin_agreements(tmp_path: Path) -> None:
+    device = dict(_DEVICE, model="roborock.vacuum.a307")
+    data = _products_v5(tmp_path, [device])
+    plugin_agreements = _plugin_agreements(tmp_path)
+
+    [product] = data["categoryDetailList"][0]["productList"]
+    latest = _versions_by_type(product["agreements"])
+    signed = _versions_by_type(
+        [agreement for agreement in plugin_agreements if agreement["deviceId"] == "device-a"]
+    )
+
+    # hasSignLastestPluginPrivacyAgreement in the device plugin returns true
+    # only if both lists name both types and every signed version is at least
+    # the latest version. Otherwise the plugin goes to its privacy dialog path.
+    for agreement_type in ("USER_AGREEMENT", "PRIVACY_POLICY"):
+        assert signed[agreement_type] >= latest[agreement_type]
 
 
 def test_product_category_carries_code(tmp_path: Path) -> None:

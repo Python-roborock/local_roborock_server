@@ -9,6 +9,7 @@ from shared.data_helpers import as_int, default_product_name, model_product_ids,
 from ..plugin.common import snapshot_plugin_catalog_data
 
 from ..user.homes.service import home_payload
+from .v1.agreement import product_agreements
 
 
 def build_product_response(ctx: ServerContext) -> dict[str, Any]:
@@ -57,8 +58,10 @@ def build_product_response(ctx: ServerContext) -> dict[str, Any]:
             "ncMode": "global",
             "status": 10,
             # Read by PluginSDKModule.getProductAgreements; a missing field is
-            # null and the device plugin's privacy check never completes.
-            "agreements": [],
+            # null and the device plugin's privacy check never completes. An
+            # empty list fails the check and sends the plugin to its privacy
+            # dialog path before it requests the map.
+            "agreements": product_agreements(),
         }
         icon_url = product.get("iconUrl")
         if isinstance(icon_url, str) and icon_url:
