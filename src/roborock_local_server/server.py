@@ -438,11 +438,6 @@ class ReleaseSupervisor:
             mqtt_backend_port=self.config.broker.port,
         )
         self.runtime_credentials.sync_inventory()
-        recovered_device_passwords = self.runtime_credentials.backfill_device_mqtt_passwords(
-            self.paths.runtime_dir / "mqtt_server.log"
-        )
-        if recovered_device_passwords:
-            self.root_logger.info("Recovered %d device MQTT password(s) from mqtt_server.log", recovered_device_passwords)
 
         # Recover legacy state before retention trims oversized files or removes
         # backups, including when the user lowers the configured limits.
