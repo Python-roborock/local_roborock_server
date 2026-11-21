@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 
 def classify_host(host: str) -> str:
@@ -32,6 +32,31 @@ def pick_first(values: list[str]) -> str:
         if value:
             return value
     return ""
+
+
+# Route builders receive no request headers. These headers reach them as
+# "__header_<name>" query pseudo-params, like "__host".
+_ROUTE_HEADERS = ("v", "n", "t", "s")
+_ROUTE_HEADER_PREFIX = "__header_"
+
+
+def with_route_headers(query_params: dict[str, list[str]], headers: Mapping[str, str]) -> dict[str, list[str]]:
+    """Return query_params with the route headers added as pseudo-params.
+
+    A query cannot supply them: pseudo-params from the query are dropped.
+    """
+    params = {key: values for key, values in query_params.items() if not key.startswith(_ROUTE_HEADER_PREFIX)}
+    for name in _ROUTE_HEADERS:
+        value = str(headers.get(name) or "").strip()
+        if value:
+            params[f"{_ROUTE_HEADER_PREFIX}{name}"] = [value]
+    return params
+
+
+def route_header(query_params: dict[str, list[str]], name: str) -> str:
+    """Return a header that with_route_headers added, or "" if it was absent."""
+    values = query_params.get(f"{_ROUTE_HEADER_PREFIX}{name}") or [""]
+    return values[0]
 
 
 def wrap_response(data: Any) -> dict[str, Any]:
