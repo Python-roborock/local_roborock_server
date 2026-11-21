@@ -454,3 +454,78 @@ def test_app_plugin_ios_falls_back_to_android_catalog_from_older_imports(tmp_pat
 
     [record] = response.json()["data"]
     assert _source_from_proxied_url(record["url"]) == ANDROID_ZIP
+
+
+def _app_plugin_record(product_id: int, url: str) -> dict:
+    return {"version": 6846, "url": url, "pluginLevel": 3002, "productid": product_id, "apilevel": 10030}
+
+
+IOS_ONLY_ZIP = "https://app-files.roborock.com/iot/plugin/ios-only.zip"
+ANDROID_ONLY_ZIP = "https://app-files.roborock.com/iot/plugin/android-only.zip"
+ANDROID_23_ZIP = "https://app-files.roborock.com/iot/plugin/android-23.zip"
+
+
+def _ios_app_plugin_client(tmp_path: Path) -> TestClient:
+    # Product 199 is in both catalogs, and 300 is only in the iOS catalog. Products 23
+    # and 4242 are only in the Android catalog. The built-in list also has 23.
+    supervisor = _build_supervisor(tmp_path)
+    _write_app_plugin_snapshot(
+        supervisor,
+        {
+            "appplugin": {
+                "data": [
+                    _app_plugin_record(199, ANDROID_ZIP),
+                    _app_plugin_record(23, ANDROID_23_ZIP),
+                    _app_plugin_record(4242, ANDROID_ONLY_ZIP),
+                ]
+            },
+            "appplugin_ios": {"data": [_app_plugin_record(199, IOS_ZIP), _app_plugin_record(300, IOS_ONLY_ZIP)]},
+        },
+    )
+    return TestClient(supervisor.app)
+
+
+def _app_plugin_sources(payload: dict) -> list[tuple[int, str]]:
+    assert payload["code"] == 200
+    return [(item["productid"], _source_from_proxied_url(item["url"])) for item in payload["data"]]
+
+
+def test_app_plugin_ios_answers_requested_ids_from_ios_catalog(tmp_path: Path) -> None:
+    client = _ios_app_plugin_client(tmp_path)
+
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [199], "type": 1})
+
+    assert _app_plugin_sources(response.json()) == [(199, IOS_ZIP)]
+
+
+def test_app_plugin_ios_ignores_android_catalog_if_ios_catalog_exists(tmp_path: Path) -> None:
+    from https_server.routes.plugin import common as plugin_common
+
+    client = _ios_app_plugin_client(tmp_path)
+    [built_in_23] = [record for record in plugin_common.APPPLUGIN_LIST if record["productid"] == 23]
+
+    # The iOS catalog replaces the whole Android catalog. So an id that only the
+    # Android catalog has gets the built-in record, or nothing.
+    android_only = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [4242], "type": 1})
+    built_in = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23], "type": 1})
+
+    assert _app_plugin_sources(android_only.json()) == []
+    assert _app_plugin_sources(built_in.json()) == [(23, built_in_23["url"])]
+
+
+def test_app_plugin_ios_answers_no_plugin_for_unmatched_product_ids(tmp_path: Path) -> None:
+    client = _ios_app_plugin_client(tmp_path)
+
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [659231], "type": 1})
+
+    assert _app_plugin_sources(response.json()) == []
+
+
+def test_app_plugin_ios_answers_full_ios_catalog_without_product_ids(tmp_path: Path) -> None:
+    client = _ios_app_plugin_client(tmp_path)
+
+    no_ids = client.post("/api/v1/appplugin", json={"apilevel": 10046, "type": 1})
+    empty_ids = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [], "type": 1})
+
+    assert _app_plugin_sources(no_ids.json()) == [(199, IOS_ZIP), (300, IOS_ONLY_ZIP)]
+    assert _app_plugin_sources(empty_ids.json()) == [(199, IOS_ZIP), (300, IOS_ONLY_ZIP)]
