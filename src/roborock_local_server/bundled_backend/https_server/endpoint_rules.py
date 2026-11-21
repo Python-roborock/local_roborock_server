@@ -7,9 +7,17 @@ import re
 import time
 from typing import Any, Callable, Sequence
 
-from shared.constants import DEFAULT_HOME_NAME, DEFAULT_PRODUCT_SCHEMA, DEFAULT_TIMEZONE, MODEL_PRODUCT_ID_OVERRIDES
+from shared.constants import DEFAULT_HOME_NAME, DEFAULT_PRODUCT_SCHEMA, MODEL_PRODUCT_ID_OVERRIDES
 from shared.context import ServerContext
-from shared.data_helpers import as_bool, as_int, default_home_id, default_product_name, get_value, stable_int
+from shared.data_helpers import (
+    as_bool,
+    as_int,
+    default_home_id,
+    default_product_name,
+    default_timezone,
+    get_value,
+    stable_int,
+)
 from shared.http_helpers import wrap_response
 from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory, write_inventory
 
@@ -306,6 +314,7 @@ def _normalize_devices(
     connected_ids = runtime_connected_ids or set()
     products_by_id: dict[str, dict[str, Any]] = {}
     devices: list[dict[str, Any]] = []
+    fallback_timezone = default_timezone(ctx)
     for index, raw in enumerate(devices_raw):
         raw_item = raw if isinstance(raw, dict) else {}
         fallback_duid = ctx.duid if index == 0 else f"{ctx.duid}_{index + 1}"
@@ -323,7 +332,7 @@ def _normalize_devices(
         model = str(get_value(raw_item, "model", default="roborock.vacuum.a117"))
         category = str(get_value(raw_item, "category", default="robot.vacuum.cleaner"))
         product_name = str(get_value(raw_item, "product_name", "productName", default=default_product_name(model)))
-        timezone = str(get_value(raw_item, "timezone", "timeZoneId", "time_zone_id", default=DEFAULT_TIMEZONE))
+        timezone = str(get_value(raw_item, "timezone", "timeZoneId", "time_zone_id", default=fallback_timezone))
         room_id_value = get_value(raw_item, "room_id", "roomId")
         room_id = as_int(room_id_value, 0) if room_id_value is not None else None
         runtime_online = _runtime_online_for_device(

@@ -18,9 +18,11 @@ def write_release_config(
     tmp_path: Path,
     *,
     stack_fqdn: str = "api-roborock.example.com",
+    region: str = "us",
     listener_mode: str = "local_tls",
     https_port: int = 443,
     mqtt_tls_port: int = 8883,
+    timezone: str = "",
     broker_mode: str = "external",
     enable_topic_bridge: bool = False,
     protocol_auth_enabled: bool = True,
@@ -33,14 +35,17 @@ def write_release_config(
     (cert_dir / "fullchain.pem").write_text("test-cert\n", encoding="utf-8")
     (cert_dir / "privkey.pem").write_text("test-key\n", encoding="utf-8")
 
+    timezone_line = f'timezone = "{timezone}"' if timezone else ""
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         f"""
 [network]
 stack_fqdn = "{stack_fqdn}"
+region = "{region}"
 listener_mode = "{listener_mode}"
 https_port = {https_port}
 mqtt_tls_port = {mqtt_tls_port}
+{timezone_line}
 
 [broker]
 mode = "{broker_mode}"

@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 DEFAULT_HOME_NAME = "Local Home"
-DEFAULT_TIMEZONE = "America/New_York"
 
 DEFAULT_PRODUCT_SCHEMA: list[dict[str, Any]] = [
     {

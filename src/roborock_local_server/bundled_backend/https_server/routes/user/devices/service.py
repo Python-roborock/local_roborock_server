@@ -9,9 +9,9 @@ from typing import Any, Sequence
 
 from roborock_local_server.inventory import _extract_inventory_vacuums
 from roborock_local_server.inventory import _merge_vacuum_state
-from shared.constants import DEFAULT_PRODUCT_SCHEMA, DEFAULT_TIMEZONE
+from shared.constants import DEFAULT_PRODUCT_SCHEMA
 from shared.context import ServerContext
-from shared.data_helpers import as_bool, as_int, default_product_name, get_value
+from shared.data_helpers import as_bool, as_int, default_product_name, default_timezone, get_value
 from shared.inventory_io import (
     DEVICE_OVERRIDES_KEY,
     WEB_API_INVENTORY_FILE,
@@ -244,6 +244,7 @@ def _normalize_devices(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     products_by_id: dict[str, dict[str, Any]] = {}
     devices: list[dict[str, Any]] = []
+    fallback_timezone = default_timezone(ctx)
     for index, raw in enumerate(devices_raw):
         raw_item = raw if isinstance(raw, dict) else {}
         fallback_duid = ctx.duid if index == 0 else f"{ctx.duid}_{index + 1}"
@@ -261,7 +262,7 @@ def _normalize_devices(
         model = str(get_value(raw_item, "model", default="roborock.vacuum.a117"))
         category = str(get_value(raw_item, "category", default="robot.vacuum.cleaner"))
         product_name = str(get_value(raw_item, "product_name", "productName", default=default_product_name(model)))
-        timezone = str(get_value(raw_item, "timezone", "timeZoneId", "time_zone_id", default=DEFAULT_TIMEZONE))
+        timezone = str(get_value(raw_item, "timezone", "timeZoneId", "time_zone_id", default=fallback_timezone))
         room_id_value = get_value(raw_item, "room_id", "roomId")
         room_id = as_int(room_id_value, 0) if room_id_value is not None else None
         device = {
@@ -629,7 +630,7 @@ def device_detail_payload(ctx: ServerContext, device_id: str) -> dict[str, Any]:
                 "timeZoneId",
                 "time_zone_id",
                 "timezone",
-                default=get_value(normalized_device, "timeZoneId", default=DEFAULT_TIMEZONE),
+                default=get_value(normalized_device, "timeZoneId", default=default_timezone(ctx)),
             )
         ),
         "iconUrl": str(

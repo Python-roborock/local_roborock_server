@@ -61,6 +61,25 @@ def default_home_id(ctx: ServerContext) -> int:
     return stable_int(f"{ctx.duid}:home")
 
 
+REGION_TIMEZONES: dict[str, str] = {
+    "eu": "Europe/Berlin",
+    "us": "America/New_York",
+    "cn": "Asia/Shanghai",
+    "ru": "Europe/Moscow",
+}
+
+FALLBACK_TIMEZONE = "America/New_York"
+
+
+def default_timezone(ctx: ServerContext) -> str:
+    """Return network.timezone if set, else the timezone of the region."""
+    if ctx.timezone and ctx.timezone.strip():
+        return ctx.timezone.strip()
+
+    region = (ctx.region or "").strip().lower()
+    return REGION_TIMEZONES.get(region, FALLBACK_TIMEZONE)
+
+
 def default_product_name(model: str) -> str:
     short_model = model.split(".")[-1].upper() if model else "VACUUM"
     return f"Roborock {short_model}"
