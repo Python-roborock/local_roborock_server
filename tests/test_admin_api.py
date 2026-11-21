@@ -1602,3 +1602,36 @@ def test_create_room_returns_bare_id_in_result_and_object_in_data(tmp_path: Path
     assert body["data"]["id"] == body["result"]
     assert body["data"]["name"] == "Study"
     assert body["data"]["created"] is True
+
+
+def test_create_room_with_new_capitalization_updates_existing_room(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    rooms = [{"id": 11100, "name": "Master bedroom"}, {"id": 11101, "name": "Hallway"}]
+    paths.inventory_path.write_text(
+        json.dumps({"home": {"id": 1316433, "name": "My Home", "rooms": rooms}, "rooms": rooms}) + "\n",
+        encoding="utf-8",
+    )
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    path = "/user/homes/1316433/rooms"
+    response = client.post(
+        path,
+        data={"name": "Master Bedroom"},
+        headers=_hawk_headers(paths.cloud_snapshot_path, path, form_values={"name": "Master Bedroom"}),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"] == 11100
+    assert body["data"]["name"] == "Master Bedroom"
+    assert body["data"]["created"] is False
+
+    stored_inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    for stored_rooms in (stored_inventory["home"]["rooms"], stored_inventory["rooms"]):
+        assert stored_rooms == [{"id": 11100, "name": "Master Bedroom"}, {"id": 11101, "name": "Hallway"}]
