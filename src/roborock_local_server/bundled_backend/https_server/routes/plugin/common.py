@@ -84,7 +84,9 @@ CATEGORY_PLUGIN_LIST = [
 ]
 
 # Android device plugin records from the Roborock EU cloud. /api/v1/appplugin
-# answers them for the product ids that the cloud snapshot has no record for.
+# answers all of them to a request without product ids. For a requested id
+# that the cloud snapshot has no record for, it answers the record of the
+# model that /api/v5/product gives the id to.
 APPPLUGIN_LIST = BUILTIN_APPPLUGIN_RECORDS
 
 

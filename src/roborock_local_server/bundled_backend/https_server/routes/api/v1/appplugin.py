@@ -4,16 +4,16 @@ import json
 from typing import Any
 
 from shared.context import ServerContext
-from shared.data_helpers import as_int, model_product_ids
-from shared.device_plugin_catalog import BUILTIN_MODELS_BY_PRODUCT_ID
+from shared.data_helpers import as_int
+from shared.device_plugin_catalog import BUILTIN_APPPLUGIN_RECORDS_BY_MODEL
 
 from ...auth.service import ok
 from ...plugin.common import (
     APPPLUGIN_LIST,
     proxied_plugin_records,
-    snapshot_plugin_catalog_data,
     snapshot_plugin_records,
 )
+from ..product_service import served_models_by_product_id
 
 # Request "type" of the iOS app; Android sends 2.
 IOS_APP_TYPE = 1
@@ -66,20 +66,25 @@ def _product_id(record: dict[str, Any]) -> int:
 
 
 def _built_in_records(ctx: ServerContext, product_ids: set[int]) -> list[dict[str, Any]]:
-    # The built-in records are keyed by the product ids of the EU cloud, and
-    # the ids differ by cloud region. If the cloud import gives an id to
-    # another model, the built-in record of that id is the plugin of another
-    # model here. So that id gets no built-in record.
-    import_models = {
-        product_id: model
-        for model, product_id in model_product_ids(snapshot_plugin_catalog_data(ctx, "product")).items()
-    }
+    # Product ids differ by cloud region, so the built-in record is looked up
+    # by the model that /api/v5/product gives the id to. An id that no device
+    # has, or that names two models, gets no record.
+    served_models = served_models_by_product_id(ctx)
     records = []
-    for record in APPPLUGIN_LIST:
-        product_id = _product_id(record)
-        built_in_model = BUILTIN_MODELS_BY_PRODUCT_ID.get(product_id)
-        if product_id in product_ids and import_models.get(product_id, built_in_model) == built_in_model:
-            records.append(record)
+    for product_id in sorted(product_ids):
+        models = served_models.get(product_id, set())
+        if len(models) != 1:
+            continue
+        [model] = models
+        record = BUILTIN_APPPLUGIN_RECORDS_BY_MODEL.get(model)
+        if record is None:
+            continue
+        # The built-in records come from the EU cloud. For another region, the
+        # device gets the EU record of the same model, with the id that the app
+        # requested. That record is not verified for the other region, but it
+        # is the plugin of the same model. Without it, the device would get no
+        # plugin.
+        records.append(dict(record, productid=product_id))
     return records
 
 
@@ -103,10 +108,12 @@ def build(
     # list.
     matching = [record for record in snapshot_records if _product_id(record) in product_ids]
     # A device added after the snapshot import has no snapshot record, so the
-    # ids that the snapshot lacks come from the built-in list. The built-in list
-    # is the same for both platforms. So an iOS request can get an Android zip
-    # here, which the iOS app cannot load. The fallback to the Android catalog
-    # above has the same limitation if the snapshot has no iOS catalog.
+    # ids that the snapshot lacks get the built-in record of their model. The
+    # built-in list is the same for both platforms. So an iOS request can get
+    # an Android zip here, which the iOS app cannot load. The fallback to the
+    # Android catalog above has the same limitation if the snapshot has no iOS
+    # catalog.
     missing_ids = product_ids - {_product_id(record) for record in snapshot_records}
-    matching += _built_in_records(ctx, missing_ids)
+    if missing_ids:
+        matching += _built_in_records(ctx, missing_ids)
     return ok(proxied_plugin_records(ctx, matching))
