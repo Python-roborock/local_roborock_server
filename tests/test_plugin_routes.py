@@ -211,6 +211,63 @@ def test_app_plugin_filters_cloud_snapshot_catalog(tmp_path: Path) -> None:
     assert _source_from_proxied_url(record["url"]) == "https://rrpkg-us.roborock.com/iot/plugin/cloud-second.zip"
 
 
+def _write_android_app_plugin_snapshot(supervisor: ReleaseSupervisor, records: list[dict]) -> None:
+    _write_app_plugin_snapshot(supervisor, {"appplugin": {"data": records}})
+
+
+def test_app_plugin_falls_back_to_built_in_list_for_ids_missing_from_snapshot(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    # A device added after the snapshot import has no record in the snapshot.
+    _write_android_app_plugin_snapshot(
+        supervisor,
+        [
+            {
+                "version": 7777,
+                "url": "https://rrpkg-us.roborock.com/iot/plugin/cloud-only.zip",
+                "pluginLevel": 3001,
+                "productid": 4242,
+                "apilevel": 10043,
+            }
+        ],
+    )
+    client = TestClient(supervisor.app)
+
+    missing = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23], "type": 2})
+    mixed = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23, 4242], "type": 2})
+
+    [record] = missing.json()["data"]
+    assert record["productid"] == 23
+    assert record["version"] == 5208
+    assert _source_from_proxied_url(record["url"]) == (
+        "https://cdn.awsusor0.fds.api.mi-img.com/resources/iot/plugin/7cf4eb4c705c420483741189be389927.zip"
+    )
+    # Snapshot records come first, built-in records after them.
+    assert _app_plugin_product_ids(mixed.json()) == [4242, 23]
+
+
+def test_app_plugin_prefers_snapshot_record_over_built_in_record(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    _write_android_app_plugin_snapshot(
+        supervisor,
+        [
+            {
+                "version": 9999,
+                "url": "https://rrpkg-us.roborock.com/iot/plugin/cloud-23.zip",
+                "pluginLevel": 3001,
+                "productid": 23,
+                "apilevel": 10043,
+            }
+        ],
+    )
+    client = TestClient(supervisor.app)
+
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23, 10001], "type": 2})
+
+    records = response.json()["data"]
+    assert [(item["productid"], item["version"]) for item in records] == [(23, 9999), (10001, 90)]
+    assert _source_from_proxied_url(records[0]["url"]) == "https://rrpkg-us.roborock.com/iot/plugin/cloud-23.zip"
+
+
 def test_plugin_category_zip_uses_expected_source_and_cache(tmp_path: Path, monkeypatch) -> None:
     from https_server.routes.plugin import common as plugin_common
 
