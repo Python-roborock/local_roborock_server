@@ -7,9 +7,10 @@ import re
 import time
 from typing import Any, Callable, Sequence
 
-from shared.constants import DEFAULT_HOME_NAME, DEFAULT_PRODUCT_SCHEMA, DEFAULT_TIMEZONE, MODEL_PRODUCT_ID_OVERRIDES
+from shared.constants import DEFAULT_HOME_NAME, DEFAULT_PRODUCT_SCHEMA, DEFAULT_TIMEZONE
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, as_int, default_home_id, default_product_name, get_value, stable_int
+from shared.device_plugin_catalog import BUILTIN_PRODUCT_IDS
 from shared.http_helpers import wrap_response
 from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory, write_inventory
 
@@ -525,9 +526,10 @@ def _build_product_response(ctx: ServerContext, home_data: dict[str, Any]) -> di
             }
         model = str(product.get("model") or "roborock.vacuum.a117")
         model_key = model.strip().lower()
-        product_id = MODEL_PRODUCT_ID_OVERRIDES.get(
-            model_key,
-            as_int(raw_product_id, stable_int(raw_product_id or category_name) % 1_000_000),
+        product_id = (
+            as_int(raw_product_id, 0)
+            or BUILTIN_PRODUCT_IDS.get(model_key)
+            or stable_int(raw_product_id or category_name) % 1_000_000
         )
         product_entry = {
             "id": product_id,

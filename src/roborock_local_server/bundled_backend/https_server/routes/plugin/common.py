@@ -11,6 +11,7 @@ import aiohttp
 from fastapi.responses import Response
 
 from shared.context import ServerContext
+from shared.device_plugin_catalog import BUILTIN_APPPLUGIN_RECORDS
 from ..auth.service import load_cloud_full_snapshot
 
 PLUGIN_PROXY_ALLOWED_HOSTS = {
@@ -82,29 +83,9 @@ CATEGORY_PLUGIN_LIST = [
     },
 ]
 
-APPPLUGIN_LIST = [
-    {
-        "version": 6058,
-        "url": "https://files.roborock.com/iot/plugin/ea53983b82e948638904d9154bb7f474.zip",
-        "pluginLevel": 3001,
-        "productid": 110,
-        "apilevel": 10028,
-    },
-    {
-        "version": 5208,
-        "url": "https://cdn.awsusor0.fds.api.mi-img.com/resources/iot/plugin/7cf4eb4c705c420483741189be389927.zip",
-        "pluginLevel": 3001,
-        "productid": 23,
-        "apilevel": 10028,
-    },
-    {
-        "version": 90,
-        "url": "https://rrpkg-us.roborock.com/iot/plugin/019b4e083fbe7f81a28d79756be6f0ed.zip",
-        "pluginLevel": 3001,
-        "productid": 10001,
-        "apilevel": 10028,
-    },
-]
+# Android device plugin records from the Roborock EU cloud. /api/v1/appplugin
+# answers them for the product ids that the cloud snapshot has no record for.
+APPPLUGIN_LIST = BUILTIN_APPPLUGIN_RECORDS
 
 
 def plugin_proxy_url(ctx: ServerContext, source_url: str) -> str:

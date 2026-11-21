@@ -4,10 +4,16 @@ import json
 from typing import Any
 
 from shared.context import ServerContext
-from shared.data_helpers import as_int
+from shared.data_helpers import as_int, model_product_ids
+from shared.device_plugin_catalog import BUILTIN_MODELS_BY_PRODUCT_ID
 
 from ...auth.service import ok
-from ...plugin.common import APPPLUGIN_LIST, proxied_plugin_records, snapshot_plugin_records
+from ...plugin.common import (
+    APPPLUGIN_LIST,
+    proxied_plugin_records,
+    snapshot_plugin_catalog_data,
+    snapshot_plugin_records,
+)
 
 # Request "type" of the iOS app; Android sends 2.
 IOS_APP_TYPE = 1
@@ -59,6 +65,24 @@ def _product_id(record: dict[str, Any]) -> int:
     return as_int(record.get("productid"), 0)
 
 
+def _built_in_records(ctx: ServerContext, product_ids: set[int]) -> list[dict[str, Any]]:
+    # The built-in records are keyed by the product ids of the EU cloud, and
+    # the ids differ by cloud region. If the cloud import gives an id to
+    # another model, the built-in record of that id is the plugin of another
+    # model here. So that id gets no built-in record.
+    import_models = {
+        product_id: model
+        for model, product_id in model_product_ids(snapshot_plugin_catalog_data(ctx, "product")).items()
+    }
+    records = []
+    for record in APPPLUGIN_LIST:
+        product_id = _product_id(record)
+        built_in_model = BUILTIN_MODELS_BY_PRODUCT_ID.get(product_id)
+        if product_id in product_ids and import_models.get(product_id, built_in_model) == built_in_model:
+            records.append(record)
+    return records
+
+
 def build(
     ctx: ServerContext,
     _query_params: dict[str, list[str]],
@@ -84,5 +108,5 @@ def build(
     # here, which the iOS app cannot load. The fallback to the Android catalog
     # above has the same limitation if the snapshot has no iOS catalog.
     missing_ids = product_ids - {_product_id(record) for record in snapshot_records}
-    matching += [record for record in APPPLUGIN_LIST if _product_id(record) in missing_ids]
+    matching += _built_in_records(ctx, missing_ids)
     return ok(proxied_plugin_records(ctx, matching))

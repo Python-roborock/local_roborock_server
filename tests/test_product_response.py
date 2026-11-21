@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from roborock_local_server.backend import (
     ServerContext,
     default_endpoint_rules,
@@ -141,3 +143,115 @@ def test_string_product_id_uses_cloud_numeric_id_by_model(tmp_path: Path) -> Non
     [product] = data["categoryDetailList"][0]["productList"]
     assert product["id"] == 199
     assert product["rriotid"] == "30uADinyLKa3Qpga60B1Ke"
+
+
+@pytest.mark.parametrize(
+    ("model", "rriotid", "expected_id"),
+    [
+        # The rriotids are the ones in product_catalog.json, which onboarding stores.
+        ("roborock.vacuum.a307", "4J89YHjAc2uUG9W0HLxKPP", 263),
+        ("roborock.vacuum.a87", "5gUei3OIJIXVD3eD85Balg", 103),
+        ("roborock.vacuum.a15", "1YYW18rpgyAJTISwb1NM91", 23),
+        ("roborock.vacuum.sc05", "5ayEx3aKgStqZZ0v5IpMBP", 10001),
+        ("roborock.wdv.a194", "MUKZV1YH7JkqlXXjJnO64", 180),
+    ],
+)
+def test_product_uses_built_in_cloud_product_id(tmp_path: Path, model: str, rriotid: str, expected_id: int) -> None:
+    device = dict(_DEVICE, model=model, product_id=rriotid)
+
+    data = _products_v5(tmp_path, [device])
+
+    [product] = data["categoryDetailList"][0]["productList"]
+    # The app requests the device plugin with this id.
+    assert product["id"] == expected_id
+    assert product["rriotid"] == rriotid
+
+
+def test_product_of_unknown_model_keeps_hashed_id(tmp_path: Path) -> None:
+    from shared.data_helpers import stable_int
+
+    device = dict(_DEVICE, model="roborock.vacuum.zz99", product_id="iot-product-z")
+
+    data = _products_v5(tmp_path, [device])
+
+    [product] = data["categoryDetailList"][0]["productList"]
+    assert product["id"] == stable_int("iot-product-z") % 1_000_000
+
+
+def test_numeric_inventory_product_id_wins_over_built_in_id(tmp_path: Path) -> None:
+    device = dict(_DEVICE, model="roborock.vacuum.a307", product_id="4242")
+
+    data = _products_v5(tmp_path, [device])
+
+    [product] = data["categoryDetailList"][0]["productList"]
+    assert product["id"] == 4242
+
+
+def _write_cloud_products(tmp_path: Path, products: dict[str, int]) -> None:
+    # The import stores the cloud's /api/v5/product answer in the snapshot.
+    product_list = [{"id": product_id, "model": model} for model, product_id in products.items()]
+    catalog = {"data": {"categoryDetailList": [{"category": {"id": 1}, "productList": product_list}]}}
+    snapshot = {"web_api_cache": {"plugin_catalogs": {"product": catalog}}}
+    (tmp_path / "web_api_inventory_full_snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("model", "rriotid", "import_id"),
+    [
+        # The built-in ids come from the EU cloud: 185 for the a199 and 103 for the a87.
+        ("roborock.vacuum.a199", "3PWf17rt73QjM3F1DaZelu", 199),
+        ("roborock.vacuum.a87", "5gUei3OIJIXVD3eD85Balg", 110),
+        # A hardcoded 110 for the a87 used to win over the import.
+        ("roborock.vacuum.a87", "5gUei3OIJIXVD3eD85Balg", 103),
+        # The import also wins over a numeric id in home data.
+        ("roborock.vacuum.a307", "4242", 263),
+    ],
+)
+def test_cloud_import_product_id_wins_over_built_in_id(
+    tmp_path: Path, model: str, rriotid: str, import_id: int
+) -> None:
+    # Product ids differ by cloud region, so the account's own import decides.
+    _write_cloud_products(tmp_path, {model: import_id})
+    device = dict(_DEVICE, model=model, product_id=rriotid)
+
+    data = _products_v5(tmp_path, [device])
+
+    [product] = data["categoryDetailList"][0]["productList"]
+    assert product["id"] == import_id
+
+
+def test_model_missing_from_cloud_import_gets_built_in_id(tmp_path: Path) -> None:
+    _write_cloud_products(tmp_path, {"roborock.vacuum.a226": 199})
+    device = dict(_DEVICE, model="roborock.vacuum.a307", product_id="4J89YHjAc2uUG9W0HLxKPP")
+
+    data = _products_v5(tmp_path, [device])
+
+    [product] = data["categoryDetailList"][0]["productList"]
+    assert product["id"] == 263
+
+
+def test_app_gets_a307_plugin_without_cloud_import(tmp_path: Path) -> None:
+    import urllib.parse
+
+    from https_server.routes.plugin.common import APPPLUGIN_LIST
+
+    device = dict(_DEVICE, model="roborock.vacuum.a307", product_id="4J89YHjAc2uUG9W0HLxKPP")
+    [product] = _products_v5(tmp_path, [device])["categoryDetailList"][0]["productList"]
+    # The app requests its device plugin with the product id from /api/v5/product.
+    body = {"apilevel": 10046, "productids": [product["id"]], "type": 2}
+    route, payload = resolve_route(
+        rules=default_endpoint_rules(),
+        context=_make_context(tmp_path),
+        clean_path="/api/v1/appplugin",
+        query_params={},
+        body_params={"__json": [json.dumps(body)]},
+        method="POST",
+    )
+
+    assert product["id"] == 263
+    assert route == "download_code"
+    [record] = payload["data"]
+    [a307_record] = [item for item in APPPLUGIN_LIST if item["productid"] == 263]
+    assert record["productid"] == 263
+    assert record["version"] == a307_record["version"]
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(record["url"]).query)["src"] == [a307_record["url"]]
