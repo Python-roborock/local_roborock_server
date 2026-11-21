@@ -628,7 +628,13 @@ class MqttTlsProxy:
                 topic=topic,
                 payload_preview=payload_preview(payload),
             )
-        if self.runtime_credentials is not None:
+        # App, bootstrap and other vacuums' logins can publish on any rr/d topic, so only the
+        # vacuum's own login, publishing on its own topic, may update its stored device record.
+        if (
+            self.runtime_credentials is not None
+            and direction == "c2b"
+            and topic == self._get_conn_device_topic(conn_id)
+        ):
             self.runtime_credentials.record_mqtt_topic(topic=topic)
 
         messages, variant, decode_error, decode_key_source = self._decode_mqtt_payload(topic, payload)
