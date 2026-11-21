@@ -18,6 +18,7 @@ def write_release_config(
     tmp_path: Path,
     *,
     stack_fqdn: str = "api-roborock.example.com",
+    region: str = "us",
     listener_mode: str = "local_tls",
     https_port: int = 443,
     mqtt_tls_port: int = 8883,
@@ -38,6 +39,7 @@ def write_release_config(
         f"""
 [network]
 stack_fqdn = "{stack_fqdn}"
+region = "{region}"
 listener_mode = "{listener_mode}"
 https_port = {https_port}
 mqtt_tls_port = {mqtt_tls_port}

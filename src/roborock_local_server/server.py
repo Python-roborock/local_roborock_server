@@ -74,6 +74,11 @@ _REGION_COUNTRY_CODE = {
     "EU": "49",
     "RU": "7",
 }
+# The login answer names a country, and "EU" is none. The EU cloud answers
+# "DE", which fits the dialing code 49.
+_REGION_COUNTRY = {
+    "EU": "DE",
+}
 PROJECT_SUPPORT = {
     "title": "Support This Project",
     "text": (
@@ -590,12 +595,16 @@ class ReleaseSupervisor:
         normalized_email = email.casefold()
         digest = hashlib.sha256(normalized_email.encode("utf-8")).hexdigest()
         uid = (int(digest[:12], 16) % 900_000_000) + 100_000_000
-        region_upper = self.config.network.region.upper()
+        region = self.config.network.region.lower()
+        region_upper = region.upper()
         return {
             "uid": uid,
             "rruid": f"rrls-{digest[:20]}",
             "email": email,
-            "country": region_upper,
+            # The app keeps "region" as RRUser.region. The device plugin needs
+            # it in fetchCountryInfo and retries forever without it.
+            "region": region,
+            "country": _REGION_COUNTRY.get(region_upper, region_upper),
             "countrycode": self._default_country_code_for_region(region_upper),
             "nickname": "Local User",
             "hasPassword": True,
