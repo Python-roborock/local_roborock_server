@@ -51,3 +51,31 @@ def test_plugin_catalogs_resolve_string_product_ids_and_fetch_both_platforms(mon
     assert all(body["productids"] == [199] for body in app_plugin_bodies)
     assert catalogs["appplugin"]["data"][0]["url"].endswith("/type2.zip")
     assert catalogs["appplugin_ios"]["data"][0]["url"].endswith("/type1.zip")
+
+
+def test_plugin_catalogs_fetch_the_product_list_id_over_the_home_data_id(monkeypatch) -> None:
+    # The local /api/v5/product gives the a307 the id 263 of the cloud's product
+    # list, not the id 4242 in home data. The app requests its plugin with 263.
+    cloud_products = {
+        "categoryDetailList": [{"category": {"id": 1}, "productList": [{"id": 263, "model": "roborock.vacuum.a307"}]}]
+    }
+    home_data = HomeData.from_dict(
+        {
+            "id": 1,
+            "name": "Home",
+            "products": [{"id": "4242", "name": "Saros 20 Flow", "model": "roborock.vacuum.a307", "category": "robot.vacuum.cleaner"}],
+            "devices": [{"duid": "duid-1", "name": "Vacuum", "productId": "4242", "localKey": "key"}],
+        }
+    )
+    requests: list[tuple[str, dict[str, Any] | None]] = []
+
+    async def fake_request(_api, _user_data, path, *, method="get", params=None, json_body=None):
+        requests.append((path, json_body))
+        return cloud_products if path == "/api/v5/product" else []
+
+    monkeypatch.setattr(importer, "_request_cloud_api_data", fake_request)
+
+    asyncio.run(importer._fetch_plugin_catalogs(None, None, home_data))
+
+    app_plugin_bodies = [body for path, body in requests if path == "/api/v1/appplugin"]
+    assert [body["productids"] for body in app_plugin_bodies] == [[263], [263]]
