@@ -9,8 +9,9 @@ without devices:
 
 The first form asks Roborock for a login code and reads it from the terminal.
 The second form reuses a stored login, in the formats that
-import_web_inventory_from_cloud.py --source-json accepts. The script makes two
-cloud requests and writes no login data.
+import_web_inventory_from_cloud.py --source-json accepts. A raw user data file
+has no username, so it needs --email too. The script makes two cloud requests
+and writes no login data.
 """
 
 from __future__ import annotations
@@ -99,6 +100,7 @@ async def _login(args: argparse.Namespace, session: aiohttp.ClientSession) -> tu
     if args.source_json:
         username, base_url, user_data = importer._load_source_from_json_file(
             source_file=args.source_json,
+            username_override=args.email,
             base_url_override=args.base_url,
         )
         api = RoborockApiClient(username=username, base_url=base_url, session=session)
@@ -137,7 +139,10 @@ async def _main_async(args: argparse.Namespace) -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--email", help="Roborock account email for a code login.")
+    parser.add_argument(
+        "--email",
+        help="Roborock account email for a code login. With --source-json, it replaces the stored username.",
+    )
     parser.add_argument("--source-json", type=Path, help="Stored login, as for import_web_inventory_from_cloud.py.")
     parser.add_argument("--base-url", help="Cloud API base URL, for example https://euiot.roborock.com.")
     parser.add_argument(
