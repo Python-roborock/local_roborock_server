@@ -24,7 +24,7 @@ import uvicorn
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .certs import CertificateManager
-from .bundled_backend.shared.constants import DEFAULT_PRODUCT_SCHEMA
+from .bundled_backend.shared.constants import DEFAULT_PRODUCT_SCHEMA, REGION_COUNTRY
 from .bundled_backend.shared.data_helpers import utcnow_iso
 from .product_registry import resolve_product_metadata
 from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIRED_ONBOARDING_STEPS
@@ -73,11 +73,6 @@ _REGION_COUNTRY_CODE = {
     "CN": "86",
     "EU": "49",
     "RU": "7",
-}
-# The login answer names a country, and "EU" is none. The EU cloud answers
-# "DE", which fits the dialing code 49.
-_REGION_COUNTRY = {
-    "EU": "DE",
 }
 PROJECT_SUPPORT = {
     "title": "Support This Project",
@@ -604,7 +599,7 @@ class ReleaseSupervisor:
             # The app keeps "region" as RRUser.region. The device plugin needs
             # it in fetchCountryInfo and retries forever without it.
             "region": region,
-            "country": _REGION_COUNTRY.get(region_upper, region_upper),
+            "country": REGION_COUNTRY.get(region_upper, region_upper),
             "countrycode": self._default_country_code_for_region(region_upper),
             "nickname": "Local User",
             "hasPassword": True,

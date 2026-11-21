@@ -133,6 +133,12 @@ MODEL_PRODUCT_ID_OVERRIDES = {
     "roborock.vacuum.sc05": 10001,
 }
 
+# The login and user answers name a country, and "EU" is none. The EU cloud
+# answers "DE", which fits the dialing code 49.
+REGION_COUNTRY = {
+    "EU": "DE",
+}
+
 MQTT_TYPES = {
     1: "CONNECT",
     2: "CONNACK",

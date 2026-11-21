@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from shared.constants import REGION_COUNTRY
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, get_value
 
@@ -20,6 +21,11 @@ _REGION_COUNTRY_CODE = {
 
 def _default_country_code_for_region(region: str) -> str:
     return _REGION_COUNTRY_CODE.get(region.upper(), "1")
+
+
+def _default_country_for_region(region: str) -> str:
+    region_upper = region.upper()
+    return REGION_COUNTRY.get(region_upper, region_upper)
 
 
 def match_get_url_by_email(path: str) -> bool:
@@ -49,7 +55,7 @@ def build_get_url_by_email(
         {
             "url": ctx.api_url(),
             "countrycode": _default_country_code_for_region(region_upper),
-            "country": region_upper,
+            "country": _default_country_for_region(region_upper),
         }
     )
 
@@ -77,7 +83,8 @@ def build_user_info(
         mobile = username
 
     region_upper = ctx.region.upper()
-    country = str(get_value(cloud_user_data, "country", default=region_upper) or region_upper)
+    default_country = _default_country_for_region(region_upper)
+    country = str(get_value(cloud_user_data, "country", default=default_country) or default_country)
     countrycode = str(
         get_value(
             cloud_user_data,

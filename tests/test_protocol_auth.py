@@ -261,6 +261,47 @@ def test_local_pin_login_names_the_region_and_country_of_the_config(
     assert login_payload["countrycode"] == countrycode
 
 
+@pytest.mark.parametrize(("region", "country"), [("eu", "DE"), ("us", "US")])
+def test_url_and_user_info_routes_name_the_country_of_the_login_answer(
+    tmp_path: Path,
+    region: str,
+    country: str,
+) -> None:
+    supervisor, _paths = _build_supervisor(tmp_path, with_snapshot=False, region=region)
+    client = TestClient(supervisor.app)
+
+    login_response = client.post(
+        "/api/v5/auth/email/login/code",
+        data={"email": "user@example.com", "code": "123456"},
+    )
+    assert login_response.status_code == 200
+    login_payload = login_response.json()["data"]
+    assert login_payload["country"] == country
+
+    url_response = client.post("/api/v1/getUrlByEmail", data={"email": "user@example.com"})
+    assert url_response.status_code == 200
+    assert url_response.json()["data"]["country"] == country
+
+    user_info = client.get("/api/v1/userInfo", headers=_token_headers(login_payload))
+    assert user_info.status_code == 200
+    assert user_info.json()["data"]["country"] == country
+
+
+def test_user_info_prefers_the_country_of_the_cloud_snapshot(tmp_path: Path) -> None:
+    supervisor, paths = _build_supervisor(tmp_path, region="eu")
+    snapshot = json.loads(paths.cloud_snapshot_path.read_text(encoding="utf-8"))
+    snapshot["user_data"]["country"] = "AT"
+    _write_json(paths.cloud_snapshot_path, snapshot)
+    client = TestClient(supervisor.app)
+
+    user_info = client.get(
+        "/api/v1/userInfo",
+        headers={"Authorization": "local-token-123", "header_username": "local-rruid-123"},
+    )
+    assert user_info.status_code == 200
+    assert user_info.json()["data"]["country"] == "AT"
+
+
 def test_protected_routes_skip_protocol_auth_when_disabled(tmp_path: Path) -> None:
     supervisor, _paths = _build_supervisor_with_protocol_toggle(tmp_path, protocol_auth_enabled=False)
     client = TestClient(supervisor.app)
