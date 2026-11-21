@@ -129,7 +129,9 @@ def build(
                     outcome = "stored"
                 else:
                     outcome, updated_count = "write_failed", 0
-    _LOGGER.info("Device info did=%s outcome=%s updated=%d", did, outcome, updated_count)
+    # A module logger has no handler, so INFO would be dropped. The context
+    # loggers write to the server log files and stdout.
+    ctx.loggers.get("api", _LOGGER).info("Device info did=%s outcome=%s updated=%d", did, outcome, updated_count)
     # No response data is consumed by the verified firmware. Continue accepting
     # unsupported/unverifiable reports without allowing them to alter inventory.
     return _build_catchall(ctx, query_params, body_params, clean_path)

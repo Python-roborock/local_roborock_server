@@ -16,6 +16,8 @@ from shared import http_helpers
 
 # Synthetic V2 header values; the signature header is added per test.
 V2_HEADERS = {"v": "v2", "n": "q7Xk2P", "t": "1767225600"}
+# Stands in for the real_stack.api logger of the server context.
+API_LOGGER = "test_device_info.api"
 
 
 @pytest.fixture
@@ -36,7 +38,8 @@ def setup_report(tmp_path, signing_key):
     path = tmp_path / "web_api_inventory.json"
     path.write_text(json.dumps(inventory))
     ctx = SimpleNamespace(http_jsonl=tmp_path / "http.jsonl", runtime_credentials=None,
-                          device_public_key=lambda did: key.public_key() if did == "123" else None)
+                          device_public_key=lambda did: key.public_key() if did == "123" else None,
+                          loggers={"api": logging.getLogger(API_LOGGER)})
     fields = {"did": "123", "featureset": "123456789", "newfeatureset": "0000000AbCD", "pid": "roborock.vacuum.a87", "sn": "TESTSERIAL"}
     canonical = "&".join(f"{name}={value}" for name, value in fields.items()).encode()
     params = {name: [value] for name, value in fields.items()}
@@ -65,7 +68,7 @@ def _request(ctx, params, *, path="/devices/123/info", method="POST", headers=No
 
 
 def _outcome_log(caplog):
-    return "\n".join(r.getMessage() for r in caplog.records if r.name == device_info.__name__)
+    return "\n".join(r.getMessage() for r in caplog.records if r.name == API_LOGGER)
 
 
 def test_verified_upload_updates_only_metadata(setup_report):
@@ -159,9 +162,9 @@ def test_outcome_diagnostics_are_sanitized(setup_report, caplog, monkeypatch, ch
         path.write_text('{"devices": []}')
     elif change == "write_failed":
         monkeypatch.setattr(device_info, "write_inventory", lambda *args: False)
-    with caplog.at_level(logging.INFO, logger=device_info.__name__):
+    with caplog.at_level(logging.INFO, logger=API_LOGGER):
         _request(ctx, params)
-    assert f"did=123 outcome={outcome} updated=" in caplog.text
+    assert f"did=123 outcome={outcome} updated=" in _outcome_log(caplog)
     assert params["sn"][0] not in caplog.text
     assert params["signature"][0] not in caplog.text
 
@@ -198,7 +201,7 @@ def test_unverifiable_v2_upload_acknowledged_without_writes(setup_v2_report, sig
     if change == "wrong_did": params["did"] = ["456"]
     if change == "unsafe_value": params["sn"] = ["TEST SERIAL"]
     if change == "unknown_key": ctx.device_public_key = lambda did: None
-    with caplog.at_level(logging.INFO, logger=device_info.__name__):
+    with caplog.at_level(logging.INFO, logger=API_LOGGER):
         route, response = _request(ctx, params, headers=headers)
     assert route == "device_info" and response["code"] == 200
     assert path.read_bytes() == before
@@ -282,3 +285,4 @@ def test_real_http_multipart_v2_upload(tmp_path, signing_key):
                                headers={"content-type": f"multipart/form-data; boundary={boundary}", **headers})
     assert response.status_code == 200
     assert json.loads(paths.inventory_path.read_text())["devices"][0]["sn"] == "TESTSERIAL"
+    assert "Device info did=123 outcome=stored updated=1" in (paths.runtime_dir / "api_server.log").read_text()
