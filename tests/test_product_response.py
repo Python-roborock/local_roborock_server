@@ -41,11 +41,12 @@ def _make_context(tmp_path: Path, region: str = "us") -> ServerContext:
     )
 
 
-def _products_v5(tmp_path: Path, devices: list[dict[str, object]]) -> dict:
-    (tmp_path / "web_api_inventory.json").write_text(
-        json.dumps({"home": {"id": 424242, "name": "Test Home"}, "devices": devices}) + "\n",
-        encoding="utf-8",
-    )
+def _products_v5(
+    tmp_path: Path, devices: list[dict[str, object]], **shared_devices: list[dict[str, object]]
+) -> dict:
+    # The keyword names the inventory list of the shared devices, like receivedDevices=[...].
+    inventory = {"home": {"id": 424242, "name": "Test Home"}, "devices": devices, **shared_devices}
+    (tmp_path / "web_api_inventory.json").write_text(json.dumps(inventory) + "\n", encoding="utf-8")
     route, payload = resolve_route(
         rules=default_endpoint_rules(),
         context=_make_context(tmp_path),
@@ -471,6 +472,86 @@ def test_us_import_without_us_catalog_gets_the_eu_catalog_by_model(tmp_path: Pat
     device = dict(_DEVICE, model="roborock.vacuum.a307", product_id="4J89YHjAc2uUG9W0HLxKPP")
 
     [product] = _v5_product_list(tmp_path, device)
+
+    assert product["id"] == 263
+    assert _plugin_sources(tmp_path, 263) == [(263, _built_in_source("roborock.vacuum.a307"))]
+
+
+_A307 = dict(_DEVICE, model="roborock.vacuum.a307", product_id="4J89YHjAc2uUG9W0HLxKPP")
+
+
+def test_two_devices_of_one_model_get_one_product_and_its_record(tmp_path: Path) -> None:
+    devices = [_A307, dict(_A307, duid="device-b", name="Vacuum B")]
+
+    [product] = _products_v5(tmp_path, devices)["categoryDetailList"][0]["productList"]
+
+    assert (product["id"], product["rriotid"]) == (263, _A307["product_id"])
+    # Both devices get 263, but 263 names one model.
+    assert _plugin_sources(tmp_path, 263) == [(263, _built_in_source("roborock.vacuum.a307"))]
+
+
+@pytest.mark.parametrize("numeric_id", ["263", "4242"], ids=["built_in_id", "other_id"])
+def test_devices_of_one_model_with_two_home_data_ids_get_two_products(tmp_path: Path, numeric_id: str) -> None:
+    # One device has the rriotid in home data, the other a numeric id. The app
+    # finds the product of a device by rriotid, so each home data id gets its
+    # own product. Each of the product ids names only the a307.
+    devices = [_A307, dict(_A307, duid="device-b", product_id=numeric_id)]
+
+    products = _products_v5(tmp_path, devices)["categoryDetailList"][0]["productList"]
+
+    assert [(product["rriotid"], product["id"]) for product in products] == [
+        (_A307["product_id"], 263),
+        (numeric_id, int(numeric_id)),
+    ]
+    for product_id in {263, int(numeric_id)}:
+        assert _plugin_sources(tmp_path, product_id) == [(product_id, _built_in_source("roborock.vacuum.a307"))]
+
+
+@pytest.mark.parametrize("inventory_key", ["receivedDevices", "received_devices"])
+def test_shared_device_gets_the_built_in_id_and_record(tmp_path: Path, inventory_key: str) -> None:
+    # The a307 is shared with the account, and the account's own device is the a15.
+    shared_a307 = dict(_A307, duid="device-b", name="Shared Vacuum")
+
+    data = _products_v5(tmp_path, [_DEVICE], **{inventory_key: [shared_a307]})
+
+    assert _product_ids_by_model(data) == {"roborock.vacuum.a15": 23, "roborock.vacuum.a307": 263}
+    assert _plugin_sources(tmp_path, 263) == [(263, _built_in_source("roborock.vacuum.a307"))]
+
+
+# The import stores a catalog request that failed in this shape, without "data".
+_PRODUCT_CATALOG_ERROR = {
+    "path": "/api/v5/product",
+    "method": "GET",
+    "params": {},
+    "json": {},
+    "error": "Cloud request failed for /api/v5/product: {'code': 500}",
+}
+_APP_PLUGIN_CATALOG_ERROR = {
+    "path": "/api/v1/appplugin",
+    "method": "POST",
+    "json": {"type": 2, "apilevel": 10043, "productids": []},
+    "error": "no product ids available",
+}
+
+
+@pytest.mark.parametrize(
+    "catalogs",
+    [
+        {"product": _PRODUCT_CATALOG_ERROR},
+        {"appplugin": _APP_PLUGIN_CATALOG_ERROR},
+        {
+            "product": _PRODUCT_CATALOG_ERROR,
+            "appplugin": _APP_PLUGIN_CATALOG_ERROR,
+            "appplugin_ios": dict(_APP_PLUGIN_CATALOG_ERROR, json={"type": 1, "apilevel": 10043, "productids": []}),
+        },
+    ],
+    ids=["product", "appplugin", "all"],
+)
+def test_snapshot_catalog_error_gets_the_built_in_id_and_record(tmp_path: Path, catalogs: dict) -> None:
+    snapshot = {"web_api_cache": {"plugin_catalogs": catalogs}}
+    (tmp_path / "web_api_inventory_full_snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+    [product] = _v5_product_list(tmp_path, _A307)
 
     assert product["id"] == 263
     assert _plugin_sources(tmp_path, 263) == [(263, _built_in_source("roborock.vacuum.a307"))]

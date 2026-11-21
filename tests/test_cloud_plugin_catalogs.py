@@ -79,3 +79,49 @@ def test_plugin_catalogs_fetch_the_product_list_id_over_the_home_data_id(monkeyp
 
     app_plugin_bodies = [body for path, body in requests if path == "/api/v1/appplugin"]
     assert [body["productids"] for body in app_plugin_bodies] == [[263], [263]]
+
+
+def _failing_product_list(requests: list[tuple[str, dict[str, Any] | None]]):
+    async def fake_request(_api, _user_data, path, *, method="get", params=None, json_body=None):
+        requests.append((path, json_body))
+        if path == "/api/v5/product":
+            raise RuntimeError("Cloud request failed for /api/v5/product")
+        return [] if path == "/api/v1/appplugin" else {}
+
+    return fake_request
+
+
+def test_plugin_catalogs_store_errors_if_the_product_list_fails_for_string_ids(monkeypatch) -> None:
+    requests: list[tuple[str, dict[str, Any] | None]] = []
+    monkeypatch.setattr(importer, "_request_cloud_api_data", _failing_product_list(requests))
+
+    catalogs = asyncio.run(importer._fetch_plugin_catalogs(None, None, _home_data()))
+
+    # The a226 has only a string id in home data. Without the product list,
+    # the import has no product id to fetch the plugins with.
+    assert "data" not in catalogs["product"]
+    assert catalogs["product"]["error"] == "Cloud request failed for /api/v5/product"
+    assert [path for path, _ in requests if path == "/api/v1/appplugin"] == []
+    for name in ("appplugin", "appplugin_ios"):
+        assert "data" not in catalogs[name]
+        assert catalogs[name]["error"] == "no product ids available"
+
+
+def test_plugin_catalogs_fetch_the_numeric_home_data_id_if_the_product_list_fails(monkeypatch) -> None:
+    home_data = HomeData.from_dict(
+        {
+            "id": 1,
+            "name": "Home",
+            "products": [{"id": "4242", "name": "Saros 20 Flow", "model": "roborock.vacuum.a307", "category": "robot.vacuum.cleaner"}],
+            "devices": [{"duid": "duid-1", "name": "Vacuum", "productId": "4242", "localKey": "key"}],
+        }
+    )
+    requests: list[tuple[str, dict[str, Any] | None]] = []
+    monkeypatch.setattr(importer, "_request_cloud_api_data", _failing_product_list(requests))
+
+    catalogs = asyncio.run(importer._fetch_plugin_catalogs(None, None, home_data))
+
+    app_plugin_bodies = [body for path, body in requests if path == "/api/v1/appplugin"]
+    assert [body["productids"] for body in app_plugin_bodies] == [[4242], [4242]]
+    assert "error" in catalogs["product"]
+    assert catalogs["appplugin"]["data"] == []
