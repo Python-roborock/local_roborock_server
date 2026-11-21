@@ -128,6 +128,89 @@ def test_app_plugin_endpoints_return_proxied_urls(tmp_path: Path) -> None:
         assert str(item["url"]).startswith("https://api-roborock.example.com/plugin/proxy/")
 
 
+def _app_plugin_product_ids(payload: dict) -> list[int]:
+    assert payload["code"] == 200
+    return [item["productid"] for item in payload["data"]]
+
+
+def test_app_plugin_answers_only_requested_product_ids(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    # The app posts this JSON body and installs the first record it gets back.
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23], "type": 2})
+
+    assert response.status_code == 200
+    assert _app_plugin_product_ids(response.json()) == [23]
+    [record] = response.json()["data"]
+    assert record["url"].startswith("https://api-roborock.example.com/plugin/proxy/")
+
+
+def test_app_plugin_reads_product_ids_from_form_body(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    repeated = client.post("/api/v1/appplugin", data={"type": "2", "productids": ["23", "10001"]})
+    joined = client.post("/api/v1/appplugin", data={"type": "2", "productids": "23,10001"})
+
+    assert _app_plugin_product_ids(repeated.json()) == [23, 10001]
+    assert _app_plugin_product_ids(joined.json()) == [23, 10001]
+
+
+def test_app_plugin_answers_full_list_without_matching_product_ids(tmp_path: Path) -> None:
+    from https_server.routes.plugin import common as plugin_common
+
+    supervisor = _build_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+    full_list = [record["productid"] for record in plugin_common.APPPLUGIN_LIST]
+
+    no_body = client.post("/api/v1/appplugin")
+    no_ids = client.post("/api/v1/appplugin", json={"apilevel": 10046, "type": 2})
+    empty_ids = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [], "type": 2})
+    unknown_id = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [659231], "type": 2})
+
+    assert _app_plugin_product_ids(no_body.json()) == full_list
+    assert _app_plugin_product_ids(no_ids.json()) == full_list
+    assert _app_plugin_product_ids(empty_ids.json()) == full_list
+    assert _app_plugin_product_ids(unknown_id.json()) == full_list
+
+
+def test_app_plugin_filters_cloud_snapshot_catalog(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    snapshot = {
+        "web_api_cache": {
+            "plugin_catalogs": {
+                "appplugin": {
+                    "data": [
+                        {
+                            "version": 8888,
+                            "url": "https://rrpkg-us.roborock.com/iot/plugin/cloud-first.zip",
+                            "pluginLevel": 3001,
+                            "productid": 110,
+                            "apilevel": 10043,
+                        },
+                        {
+                            "version": 7777,
+                            "url": "https://rrpkg-us.roborock.com/iot/plugin/cloud-second.zip",
+                            "pluginLevel": 3002,
+                            "productid": 4242,
+                            "apilevel": 10043,
+                        },
+                    ]
+                },
+            }
+        }
+    }
+    supervisor.paths.cloud_snapshot_path.write_text(json.dumps(snapshot) + "\n", encoding="utf-8")
+    client = TestClient(supervisor.app)
+
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [4242], "type": 2})
+
+    [record] = response.json()["data"]
+    assert record["version"] == 7777
+    assert _source_from_proxied_url(record["url"]) == "https://rrpkg-us.roborock.com/iot/plugin/cloud-second.zip"
+
+
 def test_plugin_category_zip_uses_expected_source_and_cache(tmp_path: Path, monkeypatch) -> None:
     from https_server.routes.plugin import common as plugin_common
 
