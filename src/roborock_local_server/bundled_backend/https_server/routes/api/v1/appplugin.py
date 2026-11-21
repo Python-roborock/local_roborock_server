@@ -31,9 +31,11 @@ def _request_app_type(body_params: dict[str, list[str]]) -> int | None:
     return None
 
 
-def _requested_product_ids(body_params: dict[str, list[str]]) -> set[int]:
+def _requested_product_ids(body_params: dict[str, list[str]]) -> set[int] | None:
     # The app posts JSON like {"apilevel": 10046, "productids": [263], "type": 2}.
-    # Form bodies may repeat the field or join the ids with commas.
+    # Form bodies may repeat the field or join the ids with commas. None means
+    # that the request sent no ids. An empty set means that it sent only ids
+    # that are not valid product ids.
     values: list[Any] = []
     for raw in body_params.get("__json") or []:
         try:
@@ -45,7 +47,10 @@ def _requested_product_ids(body_params: dict[str, list[str]]) -> set[int]:
             values.extend(requested if isinstance(requested, list) else [requested])
     for raw in body_params.get("productids") or []:
         values.extend(str(raw).strip("[] ").split(","))
-    product_ids = {as_int(value, 0) for value in values if value is not None}
+    values = [value for value in values if value is not None and str(value).strip()]
+    if not values:
+        return None
+    product_ids = {as_int(value, 0) for value in values}
     product_ids.discard(0)
     return product_ids
 
@@ -66,8 +71,12 @@ def build(
         # one. Imports from before the iOS catalog existed fall back to Android.
         snapshot_records = snapshot_plugin_records(ctx, "appplugin_ios") or snapshot_records
     product_ids = _requested_product_ids(body_params)
-    # The app installs the first record without checking its productid, so a
-    # device must only get the records for the product ids it asked for.
+    if product_ids is None:
+        return ok(proxied_plugin_records(ctx, snapshot_records or APPPLUGIN_LIST))
+    # When the app opens a device, it installs the first record without
+    # checking its productid. So a device must only get the records for the
+    # product ids it asked for. If no record matches, the answer is an empty
+    # list.
     matching = [record for record in snapshot_records if _product_id(record) in product_ids]
     # A device added after the snapshot import has no snapshot record, so the
     # ids that the snapshot lacks come from the built-in list. The built-in list
@@ -76,4 +85,4 @@ def build(
     # above has the same limitation if the snapshot has no iOS catalog.
     missing_ids = product_ids - {_product_id(record) for record in snapshot_records}
     matching += [record for record in APPPLUGIN_LIST if _product_id(record) in missing_ids]
-    return ok(proxied_plugin_records(ctx, matching or snapshot_records or APPPLUGIN_LIST))
+    return ok(proxied_plugin_records(ctx, matching))

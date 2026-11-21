@@ -157,22 +157,63 @@ def test_app_plugin_reads_product_ids_from_form_body(tmp_path: Path) -> None:
     assert _app_plugin_product_ids(joined.json()) == [23, 10001]
 
 
-def test_app_plugin_answers_full_list_without_matching_product_ids(tmp_path: Path) -> None:
+def _write_android_app_plugin_snapshot(supervisor: ReleaseSupervisor, records: list[dict]) -> None:
+    _write_app_plugin_snapshot(supervisor, {"appplugin": {"data": records}})
+
+
+_SNAPSHOT_APP_PLUGIN_RECORD = {
+    "version": 7777,
+    "url": "https://rrpkg-us.roborock.com/iot/plugin/cloud-only.zip",
+    "pluginLevel": 3001,
+    "productid": 4242,
+    "apilevel": 10043,
+}
+
+# Run each case once with the built-in list and once with a cloud snapshot catalog.
+_APP_PLUGIN_CATALOGS = pytest.mark.parametrize(
+    "snapshot_records",
+    [None, [_SNAPSHOT_APP_PLUGIN_RECORD]],
+    ids=["built_in", "snapshot"],
+)
+
+
+@_APP_PLUGIN_CATALOGS
+def test_app_plugin_answers_full_list_without_product_ids(tmp_path: Path, snapshot_records: list[dict] | None) -> None:
     from https_server.routes.plugin import common as plugin_common
 
     supervisor = _build_supervisor(tmp_path)
+    if snapshot_records is not None:
+        _write_android_app_plugin_snapshot(supervisor, snapshot_records)
     client = TestClient(supervisor.app)
-    full_list = [record["productid"] for record in plugin_common.APPPLUGIN_LIST]
+    full_list = [record["productid"] for record in snapshot_records or plugin_common.APPPLUGIN_LIST]
 
     no_body = client.post("/api/v1/appplugin")
     no_ids = client.post("/api/v1/appplugin", json={"apilevel": 10046, "type": 2})
     empty_ids = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [], "type": 2})
-    unknown_id = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [659231], "type": 2})
 
     assert _app_plugin_product_ids(no_body.json()) == full_list
     assert _app_plugin_product_ids(no_ids.json()) == full_list
     assert _app_plugin_product_ids(empty_ids.json()) == full_list
-    assert _app_plugin_product_ids(unknown_id.json()) == full_list
+
+
+@_APP_PLUGIN_CATALOGS
+def test_app_plugin_answers_no_plugin_for_unmatched_product_ids(
+    tmp_path: Path, snapshot_records: list[dict] | None
+) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    if snapshot_records is not None:
+        _write_android_app_plugin_snapshot(supervisor, snapshot_records)
+    client = TestClient(supervisor.app)
+
+    # The app would install the first record of a full list, which is the plugin of another model.
+    unknown_id = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [659231], "type": 2})
+    # Ids that are no valid product ids match nothing either.
+    invalid_ids = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": ["abc", 0], "type": 2})
+    invalid_form_id = client.post("/api/v1/appplugin", data={"productids": "abc"})
+
+    assert _app_plugin_product_ids(unknown_id.json()) == []
+    assert _app_plugin_product_ids(invalid_ids.json()) == []
+    assert _app_plugin_product_ids(invalid_form_id.json()) == []
 
 
 def test_app_plugin_filters_cloud_snapshot_catalog(tmp_path: Path) -> None:
@@ -211,25 +252,10 @@ def test_app_plugin_filters_cloud_snapshot_catalog(tmp_path: Path) -> None:
     assert _source_from_proxied_url(record["url"]) == "https://rrpkg-us.roborock.com/iot/plugin/cloud-second.zip"
 
 
-def _write_android_app_plugin_snapshot(supervisor: ReleaseSupervisor, records: list[dict]) -> None:
-    _write_app_plugin_snapshot(supervisor, {"appplugin": {"data": records}})
-
-
 def test_app_plugin_falls_back_to_built_in_list_for_ids_missing_from_snapshot(tmp_path: Path) -> None:
     supervisor = _build_supervisor(tmp_path)
     # A device added after the snapshot import has no record in the snapshot.
-    _write_android_app_plugin_snapshot(
-        supervisor,
-        [
-            {
-                "version": 7777,
-                "url": "https://rrpkg-us.roborock.com/iot/plugin/cloud-only.zip",
-                "pluginLevel": 3001,
-                "productid": 4242,
-                "apilevel": 10043,
-            }
-        ],
-    )
+    _write_android_app_plugin_snapshot(supervisor, [_SNAPSHOT_APP_PLUGIN_RECORD])
     client = TestClient(supervisor.app)
 
     missing = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23], "type": 2})
