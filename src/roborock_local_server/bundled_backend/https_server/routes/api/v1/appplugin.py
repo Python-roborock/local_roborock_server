@@ -5,11 +5,10 @@ from typing import Any
 
 from shared.context import ServerContext
 from shared.data_helpers import as_int
-from shared.device_plugin_catalog import BUILTIN_APPPLUGIN_RECORDS_BY_MODEL
 
 from ...auth.service import ok
 from ...plugin.common import (
-    APPPLUGIN_LIST,
+    built_in_catalog,
     proxied_plugin_records,
     snapshot_plugin_records,
 )
@@ -69,21 +68,20 @@ def _built_in_records(ctx: ServerContext, product_ids: set[int]) -> list[dict[st
     # Product ids differ by cloud region, so the built-in record is looked up
     # by the model that /api/v5/product gives the id to. An id that no device
     # has, or that names two models, gets no record.
-    served_models = served_models_by_product_id(ctx)
+    catalog = built_in_catalog(ctx)
+    served_models = served_models_by_product_id(ctx, catalog)
     records = []
     for product_id in sorted(product_ids):
         models = served_models.get(product_id, set())
         if len(models) != 1:
             continue
         [model] = models
-        record = BUILTIN_APPPLUGIN_RECORDS_BY_MODEL.get(model)
+        record = catalog.records_by_model.get(model)
         if record is None:
             continue
-        # The built-in records come from the EU cloud. For another region, the
-        # device gets the EU record of the same model, with the id that the app
-        # requested. That record is not verified for the other region, but it
-        # is the plugin of the same model. Without it, the device would get no
-        # plugin.
+        # The answer carries the id that the app requested. For a region
+        # without its own catalog, the record comes from the EU catalog; see
+        # catalog_for_region.
         records.append(dict(record, productid=product_id))
     return records
 
@@ -101,7 +99,7 @@ def build(
         snapshot_records = snapshot_plugin_records(ctx, "appplugin_ios") or snapshot_records
     product_ids = _requested_product_ids(body_params)
     if product_ids is None:
-        return ok(proxied_plugin_records(ctx, snapshot_records or APPPLUGIN_LIST))
+        return ok(proxied_plugin_records(ctx, snapshot_records or built_in_catalog(ctx).appplugin_records))
     # When the app opens a device, it installs the first record without
     # checking its productid. So a device must only get the records for the
     # product ids it asked for. If no record matches, the answer is an empty

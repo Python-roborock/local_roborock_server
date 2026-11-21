@@ -4,26 +4,26 @@ from typing import Any
 
 from shared.context import ServerContext
 from shared.data_helpers import default_product_name, model_product_ids
-from shared.device_plugin_catalog import product_fields, resolve_product_ids
+from shared.device_plugin_catalog import DevicePluginCatalog, product_fields, resolve_product_ids
 
-from ..plugin.common import snapshot_plugin_catalog_data
+from ..plugin.common import built_in_catalog, snapshot_plugin_catalog_data
 
 from ..user.homes.service import home_payload
 
 
-def _served_products(ctx: ServerContext) -> list[tuple[dict[str, Any], int]]:
+def _served_products(ctx: ServerContext, catalog: DevicePluginCatalog) -> list[tuple[dict[str, Any], int]]:
     """Pair each home data product with the numeric product id of /api/v5/product."""
     products_value = home_payload(ctx).get("products")
     products = products_value if isinstance(products_value, list) else []
     products = [product for product in products if isinstance(product, dict)]
     cloud_product_ids = model_product_ids(snapshot_plugin_catalog_data(ctx, "product"))
-    return list(zip(products, resolve_product_ids(products, cloud_product_ids)))
+    return list(zip(products, resolve_product_ids(products, cloud_product_ids, catalog)))
 
 
-def served_models_by_product_id(ctx: ServerContext) -> dict[int, set[str]]:
+def served_models_by_product_id(ctx: ServerContext, catalog: DevicePluginCatalog) -> dict[int, set[str]]:
     """Map each product id that /api/v5/product answers to the models that get it."""
     models: dict[int, set[str]] = {}
-    for product, product_id in _served_products(ctx):
+    for product, product_id in _served_products(ctx, catalog):
         model, _, _ = product_fields(product)
         models.setdefault(product_id, set()).add(model.strip().lower())
     return models
@@ -31,7 +31,7 @@ def served_models_by_product_id(ctx: ServerContext) -> dict[int, set[str]]:
 
 def build_product_response(ctx: ServerContext) -> dict[str, Any]:
     categories: dict[str, dict[str, Any]] = {}
-    for product, product_id in _served_products(ctx):
+    for product, product_id in _served_products(ctx, built_in_catalog(ctx)):
         model, raw_product_id, category_name = product_fields(product)
         if category_name not in categories:
             category_id = len(categories) + 1

@@ -20,12 +20,12 @@ class _PairedRuntimeCredentials:
         return lambda *args, **kwargs: None
 
 
-def _make_context(tmp_path: Path) -> ServerContext:
+def _make_context(tmp_path: Path, region: str = "us") -> ServerContext:
     return ServerContext(
         api_host="api.example.com",
         mqtt_host="mqtt.example.com",
         wood_host="wood.example.com",
-        region="us",
+        region=region,
         protocol_login_email="user@example.com",
         localkey="key123",
         duid="duid-1",
@@ -188,7 +188,11 @@ def test_numeric_inventory_product_id_wins_over_built_in_id(tmp_path: Path) -> N
 
 
 def _write_cloud_products(
-    tmp_path: Path, products: dict[str, int], app_plugin_records: list[dict[str, object]] | None = None
+    tmp_path: Path,
+    products: dict[str, int],
+    app_plugin_records: list[dict[str, object]] | None = None,
+    *,
+    base_url: str | None = None,
 ) -> None:
     # The import stores the cloud's /api/v5/product answer in the snapshot, and
     # the /api/v1/appplugin answer for the account's product ids.
@@ -198,7 +202,9 @@ def _write_cloud_products(
     }
     if app_plugin_records is not None:
         catalogs["appplugin"] = {"data": app_plugin_records}
-    snapshot = {"web_api_cache": {"plugin_catalogs": catalogs}}
+    snapshot: dict[str, object] = {"web_api_cache": {"plugin_catalogs": catalogs}}
+    if base_url is not None:
+        snapshot["meta"] = {"base_url": base_url}
     (tmp_path / "web_api_inventory_full_snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
 
 
@@ -228,8 +234,7 @@ def test_cloud_import_product_id_wins_over_built_in_id(
 
 
 def test_model_missing_from_cloud_import_gets_built_in_id_and_record(tmp_path: Path) -> None:
-    # The import comes from the EU cloud, like the built-in list.
-    _write_cloud_products(tmp_path, {"roborock.vacuum.a226": 199})
+    _write_cloud_products(tmp_path, {"roborock.vacuum.a226": 199}, base_url="https://euiot.roborock.com")
     device = dict(_DEVICE, model="roborock.vacuum.a307", product_id="4J89YHjAc2uUG9W0HLxKPP")
 
     data = _products_v5(tmp_path, [device])
@@ -302,9 +307,9 @@ def _product_ids_by_model(data: dict) -> dict[str, int]:
 
 
 def _built_in_source(model: str) -> str:
-    from shared.device_plugin_catalog import BUILTIN_APPPLUGIN_RECORDS_BY_MODEL
+    from shared.device_plugin_catalog import catalog_for_region
 
-    return BUILTIN_APPPLUGIN_RECORDS_BY_MODEL[model]["url"]
+    return catalog_for_region("eu").records_by_model[model]["url"]
 
 
 def _plugin_sources(tmp_path: Path, product_id: int) -> list[tuple[int, str]]:
@@ -338,7 +343,7 @@ def test_built_in_id_that_the_import_gives_another_model_is_skipped(tmp_path: Pa
 def test_devices_after_a_us_import_get_the_built_in_record_of_their_model(tmp_path: Path) -> None:
     from shared.data_helpers import stable_int
 
-    _write_cloud_products(tmp_path, {"roborock.vacuum.a199": 199})
+    _write_cloud_products(tmp_path, {"roborock.vacuum.a199": 199}, base_url="https://usiot.roborock.com")
     hashed_id = stable_int(_A226["product_id"]) % 1_000_000
 
     product_ids = _product_ids_by_model(_products_v5(tmp_path, [_A199, _A226]))
@@ -358,8 +363,8 @@ def test_snapshot_record_wins_over_the_built_in_record_of_the_model(tmp_path: Pa
 
 
 def test_a87_with_the_us_import_id_110_gets_the_a87_record(tmp_path: Path) -> None:
-    # In the EU cloud, and so in the built-in list, 110 is the roborock.wm.a91 washer.
-    _write_cloud_products(tmp_path, {"roborock.vacuum.a87": 110})
+    # In the EU cloud, and so in the EU catalog, 110 is the roborock.wm.a91 washer.
+    _write_cloud_products(tmp_path, {"roborock.vacuum.a87": 110}, base_url="https://usiot.roborock.com")
     [product] = _v5_product_list(tmp_path, _A87)
 
     assert product["id"] == 110
@@ -367,7 +372,7 @@ def test_a87_with_the_us_import_id_110_gets_the_a87_record(tmp_path: Path) -> No
 
 
 def test_a87_with_the_numeric_inventory_id_110_gets_the_a87_record(tmp_path: Path) -> None:
-    from shared.device_plugin_catalog import BUILTIN_APPPLUGIN_RECORDS_BY_MODEL
+    from shared.device_plugin_catalog import catalog_for_region
 
     # An older import stored the US id 110 of the a87 in home data. There is
     # no snapshot.
@@ -376,7 +381,7 @@ def test_a87_with_the_numeric_inventory_id_110_gets_the_a87_record(tmp_path: Pat
     assert product["id"] == 110
     assert _plugin_sources(tmp_path, 110) == [(110, _built_in_source("roborock.vacuum.a87"))]
     # The answer is a copy, so the built-in record keeps its own id.
-    assert BUILTIN_APPPLUGIN_RECORDS_BY_MODEL["roborock.vacuum.a87"]["productid"] == 103
+    assert catalog_for_region("eu").records_by_model["roborock.vacuum.a87"]["productid"] == 103
 
 
 def test_built_in_id_that_another_model_holds_in_home_data_is_skipped(tmp_path: Path) -> None:
@@ -410,3 +415,62 @@ def test_app_gets_no_built_in_plugin_for_an_id_without_inventory_device(tmp_path
 
     assert product["id"] == 23
     assert _app_plugin_records(tmp_path, 263) == []
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "expected"),
+    [
+        ({"meta": {"base_url": "https://usiot.roborock.com"}, "user_data": {"region": "eu"}}, "us"),
+        ({"meta": {"base_url": "https://euiot.roborock.com"}}, "eu"),
+        ({"meta": {"base_url": None}, "user_data": {"region": "cn"}}, "cn"),
+        ({"user_data": {"rriot": {"r": {"r": "EU"}}}}, "eu"),
+        # An import of an unknown region, and no import at all, take network.region.
+        ({"meta": {"base_url": "https://example.com"}}, "ru"),
+        (None, "ru"),
+    ],
+    ids=["base_url_wins", "base_url", "user_data_region", "rriot_region", "unknown_import_region", "no_import"],
+)
+def test_server_cloud_region(tmp_path: Path, snapshot: dict | None, expected: str) -> None:
+    from https_server.routes.plugin.common import server_cloud_region
+
+    if snapshot is not None:
+        (tmp_path / "web_api_inventory_full_snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+    assert server_cloud_region(_make_context(tmp_path, region="ru")) == expected
+
+
+_US_A307_ZIP = "https://rrpkg-us.roborock.com/iot/plugin/us-a307.zip"
+
+
+def test_us_server_takes_ids_and_records_from_the_us_catalog(tmp_path: Path, monkeypatch) -> None:
+    from shared import device_plugin_catalog
+
+    us_catalog = device_plugin_catalog.catalog_from_data(
+        "us",
+        {
+            "products": {"roborock.vacuum.a307": {"id": 9263}},
+            "appplugin": [{"version": 1, "url": _US_A307_ZIP, "productid": 9263}],
+        },
+    )
+    monkeypatch.setitem(device_plugin_catalog.CATALOGS, "us", us_catalog)
+    # Without an import, network.region decides, and it is us here.
+    device = dict(_DEVICE, model="roborock.vacuum.a307", product_id="4J89YHjAc2uUG9W0HLxKPP")
+
+    [product] = _v5_product_list(tmp_path, device)
+
+    assert product["id"] == 9263
+    assert _plugin_sources(tmp_path, 9263) == [(9263, _US_A307_ZIP)]
+
+
+def test_us_import_without_us_catalog_gets_the_eu_catalog_by_model(tmp_path: Path) -> None:
+    from shared import device_plugin_catalog
+
+    assert "us" not in device_plugin_catalog.CATALOGS
+    # The US import lacks the a307.
+    _write_cloud_products(tmp_path, {"roborock.vacuum.a199": 199}, base_url="https://usiot.roborock.com")
+    device = dict(_DEVICE, model="roborock.vacuum.a307", product_id="4J89YHjAc2uUG9W0HLxKPP")
+
+    [product] = _v5_product_list(tmp_path, device)
+
+    assert product["id"] == 263
+    assert _plugin_sources(tmp_path, 263) == [(263, _built_in_source("roborock.vacuum.a307"))]

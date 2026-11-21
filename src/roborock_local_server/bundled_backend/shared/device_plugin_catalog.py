@@ -1,9 +1,9 @@
-"""Built-in numeric product ids and Android device plugin records.
+"""Built-in numeric product ids and Android device plugin records, per cloud region.
 
-The data comes from the Roborock EU cloud: GET /api/v5/product gives the
-numeric product id of each model, and POST /api/v1/appplugin gives the Android
-plugin record of each product id. scripts/refresh_device_plugin_catalog.py
-rebuilds device_plugin_catalog.json with any cloud login.
+The data comes from the Roborock cloud of a region: GET /api/v5/product gives
+the numeric product id of each model, and POST /api/v1/appplugin gives the
+Android plugin record of each product id. scripts/refresh_device_plugin_catalog.py
+writes device_plugin_catalog_<region>.json with any cloud login of that region.
 
 The server falls back to this data. The product ids and plugin records of a
 cloud import keep precedence, because product ids differ by cloud region.
@@ -13,33 +13,66 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .data_helpers import as_int, stable_int
 
-DEVICE_PLUGIN_CATALOG_PATH = Path(__file__).with_name("device_plugin_catalog.json")
+CATALOG_DIR = Path(__file__).parent
+CATALOG_FILE_PREFIX = "device_plugin_catalog_"
+# Regions without their own catalog file use this one.
+FALLBACK_REGION = "eu"
 
-_CATALOG: dict[str, Any] = json.loads(DEVICE_PLUGIN_CATALOG_PATH.read_text(encoding="utf-8"))
 
-# Model -> numeric product id. /api/v5/product answers it as the product "id",
-# and the app requests the device plugin with it.
-BUILTIN_PRODUCT_IDS: dict[str, int] = {
-    model: int(entry["id"]) for model, entry in _CATALOG["products"].items()
-}
+@dataclass(frozen=True)
+class DevicePluginCatalog:
+    region: str
+    # Model -> numeric product id. /api/v5/product answers it as the product
+    # "id", and the app requests the device plugin with it.
+    product_ids: dict[str, int]
+    # Android (type 2) records in the shape of the /api/v1/appplugin answer.
+    appplugin_records: list[dict[str, Any]]
+    # Model -> its Android record. /api/v1/appplugin looks the record up by the
+    # model that /api/v5/product gives the requested id to.
+    records_by_model: dict[str, dict[str, Any]]
 
-# Android (type 2) records in the shape of the /api/v1/appplugin answer.
-BUILTIN_APPPLUGIN_RECORDS: list[dict[str, Any]] = [dict(record) for record in _CATALOG["appplugin"]]
 
-_RECORDS_BY_PRODUCT_ID = {as_int(record.get("productid"), 0): record for record in BUILTIN_APPPLUGIN_RECORDS}
+def catalog_from_data(region: str, data: Mapping[str, Any]) -> DevicePluginCatalog:
+    product_ids = {model: int(entry["id"]) for model, entry in data["products"].items()}
+    records = [dict(record) for record in data["appplugin"]]
+    records_by_id = {as_int(record.get("productid"), 0): record for record in records}
+    return DevicePluginCatalog(
+        region=region,
+        product_ids=product_ids,
+        appplugin_records=records,
+        records_by_model={
+            model: records_by_id[product_id] for model, product_id in product_ids.items() if product_id in records_by_id
+        },
+    )
 
-# Model -> its Android record. /api/v1/appplugin looks the record up by the
-# model that /api/v5/product gives the requested id to.
-BUILTIN_APPPLUGIN_RECORDS_BY_MODEL: dict[str, dict[str, Any]] = {
-    model: _RECORDS_BY_PRODUCT_ID[product_id]
-    for model, product_id in BUILTIN_PRODUCT_IDS.items()
-    if product_id in _RECORDS_BY_PRODUCT_ID
-}
+
+def _load_catalogs() -> dict[str, DevicePluginCatalog]:
+    catalogs: dict[str, DevicePluginCatalog] = {}
+    for path in sorted(CATALOG_DIR.glob(f"{CATALOG_FILE_PREFIX}*.json")):
+        region = path.stem.removeprefix(CATALOG_FILE_PREFIX)
+        catalogs[region] = catalog_from_data(region, json.loads(path.read_text(encoding="utf-8")))
+    return catalogs
+
+
+# Region -> catalog, for each catalog file in this directory.
+CATALOGS: dict[str, DevicePluginCatalog] = _load_catalogs()
+
+
+def catalog_for_region(region: str | None) -> DevicePluginCatalog:
+    """Return the catalog of a cloud region, or the EU catalog if the region has none."""
+    # Each region hosts its own plugin files. For the a87 and the a15, the old
+    # non-EU list and the EU catalog have the same versions (6058, 5208) but
+    # different files, and the sc05 differs (90 against 108). So a region
+    # without its own catalog gets the EU record of the same model. That record
+    # is not verified for the region, but without the catalog the device would
+    # get no plugin.
+    return CATALOGS.get(str(region or "").strip().lower()) or CATALOGS[FALLBACK_REGION]
 
 
 def product_fields(product: Mapping[str, Any]) -> tuple[str, str, str]:
@@ -51,7 +84,9 @@ def product_fields(product: Mapping[str, Any]) -> tuple[str, str, str]:
     )
 
 
-def resolve_product_ids(products: Sequence[Mapping[str, Any]], import_ids: Mapping[str, int]) -> list[int]:
+def resolve_product_ids(
+    products: Sequence[Mapping[str, Any]], import_ids: Mapping[str, int], catalog: DevicePluginCatalog
+) -> list[int]:
     """Return the numeric product id that /api/v5/product gives each home data product.
 
     The app requests the device plugin with this id. A snapshot record matches
@@ -71,12 +106,13 @@ def resolve_product_ids(products: Sequence[Mapping[str, Any]], import_ids: Mappi
             holders.setdefault(product_id, set()).add(key)
     product_ids: list[int] = []
     for key, fixed_id, (_, raw_id, category) in zip(model_keys, fixed_ids, fields):
-        built_in_id = BUILTIN_PRODUCT_IDS.get(key)
+        built_in_id = catalog.product_ids.get(key)
         if fixed_id:
             product_ids.append(fixed_id)
-        # The built-in ids come from the EU cloud. Another model can hold the
-        # same id in the import or in home data, like the a199 holds 199 in
-        # the US cloud. Then the id would name two models.
+        # Product ids differ by cloud region. Another model can hold the
+        # built-in id in the import or in home data, like the a199 holds 199
+        # in the US cloud and the a226 in the EU cloud. Then the id would name
+        # two models.
         elif built_in_id and holders.get(built_in_id, set()) <= {key}:
             product_ids.append(built_in_id)
         else:

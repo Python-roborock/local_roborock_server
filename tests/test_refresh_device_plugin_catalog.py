@@ -5,8 +5,15 @@ import types
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import scripts.refresh_device_plugin_catalog as refresh
-from scripts.refresh_device_plugin_catalog import build_catalog, fetch_cloud_answers
+from scripts.refresh_device_plugin_catalog import (
+    build_catalog,
+    catalog_path,
+    catalog_region,
+    fetch_cloud_answers,
+)
 
 CLOUD_PRODUCTS = {
     "categoryDetailList": [
@@ -42,6 +49,7 @@ def test_refresh_requests_all_product_ids_and_sorts_the_catalog() -> None:
         products,
         records,
         base_url="https://euiot.roborock.com",
+        region="eu",
         fetched_at_utc="2026-11-21T00:00:00+00:00",
     )
 
@@ -59,6 +67,10 @@ def test_refresh_requests_all_product_ids_and_sorts_the_catalog() -> None:
     }
     assert [record["productid"] for record in catalog["appplugin"]] == [23, 263]
     assert catalog["source"]["base_url"] == "https://euiot.roborock.com"
+    assert catalog["source"]["region"] == "eu"
+    # The catalog in the checkout has the same source keys as a new one.
+    eu_catalog = json.loads(catalog_path("eu").read_text(encoding="utf-8"))
+    assert list(eu_catalog["source"]) == list(catalog["source"])
     assert catalog["source"]["fetched_at_utc"] == "2026-11-21T00:00:00+00:00"
 
 
@@ -80,3 +92,33 @@ def test_stored_login_of_raw_user_data_takes_the_email_as_username(tmp_path: Pat
 
     assert clients == [("user@example.com", "https://euiot.roborock.com")]
     assert user_data == {"uid": 1, "rruid": "rr-user"}
+
+
+@pytest.mark.parametrize(
+    ("base_url", "region", "expected"),
+    [
+        ("https://euiot.roborock.com", None, "eu"),
+        ("https://usiot.roborock.com", None, "us"),
+        ("https://cniot.roborock.com", None, "cn"),
+        ("https://ruiot.roborock.com", None, "ru"),
+        ("https://usiot.roborock.com", "us", "us"),
+        ("https://newiot.roborock.com", "sg", "sg"),
+    ],
+)
+def test_catalog_region_comes_from_the_cloud_host(base_url: str, region: str | None, expected: str) -> None:
+    assert catalog_region(base_url, region) == expected
+
+
+def test_catalog_region_of_an_unknown_host_needs_the_region_option() -> None:
+    with pytest.raises(RuntimeError, match="Pass --region"):
+        catalog_region("https://newiot.roborock.com")
+    with pytest.raises(RuntimeError, match="does not match"):
+        catalog_region("https://euiot.roborock.com", "us")
+
+
+def test_catalog_path_is_the_file_that_the_server_loads() -> None:
+    from shared import device_plugin_catalog
+
+    assert catalog_path("us").name == "device_plugin_catalog_us.json"
+    assert catalog_path("eu") == device_plugin_catalog.CATALOG_DIR / "device_plugin_catalog_eu.json"
+    assert catalog_path("eu").exists()

@@ -636,7 +636,7 @@ def _cloud_product_catalog(products: dict[str, int]) -> dict:
 def test_app_plugin_answers_built_in_record_of_the_model_that_gets_the_id(
     tmp_path: Path, model: str, import_id: int
 ) -> None:
-    from shared.device_plugin_catalog import BUILTIN_APPPLUGIN_RECORDS_BY_MODEL
+    from shared.device_plugin_catalog import catalog_for_region
 
     # The import of another region gives the id to another model than the
     # built-in list. The device was added after the import, so the snapshot
@@ -654,7 +654,9 @@ def test_app_plugin_answers_built_in_record_of_the_model_that_gets_the_id(
 
     response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [import_id], "type": 2})
 
-    assert _app_plugin_sources(response.json()) == [(import_id, BUILTIN_APPPLUGIN_RECORDS_BY_MODEL[model]["url"])]
+    # No catalog of the import's region exists, so the record comes from the EU catalog.
+    eu_record = catalog_for_region("eu").records_by_model[model]
+    assert _app_plugin_sources(response.json()) == [(import_id, eu_record["url"])]
 
 
 def test_app_plugin_answers_built_in_record_if_import_ids_agree(tmp_path: Path) -> None:
@@ -681,15 +683,19 @@ def test_app_plugin_answers_built_in_record_if_import_ids_agree(tmp_path: Path) 
 
 def test_built_in_plugin_records_match_built_in_products() -> None:
     from https_server.routes.plugin.common import is_allowed_plugin_source
-    from shared import device_plugin_catalog as catalog
+    from shared import device_plugin_catalog
 
-    product_ids = list(catalog.BUILTIN_PRODUCT_IDS.values())
-    record_ids = [record["productid"] for record in catalog.BUILTIN_APPPLUGIN_RECORDS]
+    assert "eu" in device_plugin_catalog.CATALOGS
+    for region, catalog in device_plugin_catalog.CATALOGS.items():
+        product_ids = list(catalog.product_ids.values())
+        record_ids = [record["productid"] for record in catalog.appplugin_records]
 
-    # The app installs the first record for its product id, so each id needs
-    # one model and at most one record.
-    assert len(product_ids) == len(set(product_ids))
-    assert len(record_ids) == len(set(record_ids))
-    assert set(record_ids) <= set(product_ids)
-    for record in catalog.BUILTIN_APPPLUGIN_RECORDS:
-        assert is_allowed_plugin_source(record["url"])
+        # The app installs the first record for its product id, so each id
+        # needs one model and at most one record.
+        assert len(product_ids) == len(set(product_ids))
+        assert len(record_ids) == len(set(record_ids))
+        assert set(record_ids) <= set(product_ids)
+        for record in catalog.appplugin_records:
+            assert is_allowed_plugin_source(record["url"])
+        path = device_plugin_catalog.CATALOG_DIR / f"device_plugin_catalog_{region}.json"
+        assert json.loads(path.read_text(encoding="utf-8"))["source"]["region"] == region
