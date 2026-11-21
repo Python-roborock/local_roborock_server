@@ -79,9 +79,8 @@ def _built_in_records(ctx: ServerContext, product_ids: set[int]) -> list[dict[st
         record = catalog.records_by_model.get(model)
         if record is None:
             continue
-        # The answer carries the id that the app requested. For a region
-        # without its own catalog, the record comes from the EU catalog; see
-        # catalog_for_region.
+        # The answer carries the id that the app requested. The record can
+        # come from the catalog of another region; see catalog_for_region.
         records.append(dict(record, productid=product_id))
     return records
 

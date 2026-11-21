@@ -477,6 +477,77 @@ def test_us_import_without_us_catalog_gets_the_eu_catalog_by_model(tmp_path: Pat
     assert _plugin_sources(tmp_path, 263) == [(263, _built_in_source("roborock.vacuum.a307"))]
 
 
+def _region_zip(region: str, model: str) -> str:
+    return f"https://rrpkg-{region}.roborock.com/iot/plugin/{region}-{model}.zip"
+
+
+def _add_region_catalog(monkeypatch, region: str, product_ids: dict[str, int], without_record: tuple = ()) -> None:
+    from shared import device_plugin_catalog
+
+    catalog = device_plugin_catalog.catalog_from_data(
+        region,
+        {
+            "products": {model: {"id": product_id} for model, product_id in product_ids.items()},
+            "appplugin": [
+                {"version": 1, "url": _region_zip(region, model), "productid": product_id}
+                for model, product_id in product_ids.items()
+                if model not in without_record
+            ],
+        },
+    )
+    monkeypatch.setitem(device_plugin_catalog.CATALOGS, region, catalog)
+
+
+def test_model_missing_from_the_region_catalog_gets_the_eu_record(tmp_path: Path, monkeypatch) -> None:
+    # Without an import, network.region decides, and it is us here.
+    _add_region_catalog(monkeypatch, "us", {"roborock.vacuum.a307": 9263})
+
+    [product] = _v5_product_list(tmp_path, _A87)
+
+    assert product["id"] == 103
+    assert _plugin_sources(tmp_path, 103) == [(103, _built_in_source("roborock.vacuum.a87"))]
+
+
+def test_model_missing_from_the_region_and_eu_catalogs_gets_the_record_of_another_region(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # After the region and EU, the other catalogs follow by region name.
+    model = "roborock.vacuum.x9"
+    _add_region_catalog(monkeypatch, "us", {"roborock.vacuum.a307": 9263})
+    _add_region_catalog(monkeypatch, "ru", {model: 7009})
+    _add_region_catalog(monkeypatch, "cn", {model: 8009})
+    device = dict(_DEVICE, model=model, product_id="rriot-x9")
+
+    [product] = _v5_product_list(tmp_path, device)
+
+    assert product["id"] == 8009
+    assert _plugin_sources(tmp_path, 8009) == [(8009, _region_zip("cn", model))]
+
+
+def test_record_of_another_region_wins_over_an_id_without_record(tmp_path: Path, monkeypatch) -> None:
+    _add_region_catalog(monkeypatch, "us", {"roborock.vacuum.a87": 9087}, without_record=("roborock.vacuum.a87",))
+
+    [product] = _v5_product_list(tmp_path, _A87)
+
+    assert product["id"] == 103
+    assert _plugin_sources(tmp_path, 103) == [(103, _built_in_source("roborock.vacuum.a87"))]
+
+
+def test_id_that_the_region_catalog_gives_another_model_is_skipped(tmp_path: Path, monkeypatch) -> None:
+    # In the US cloud, 199 is the a199. The US catalog lacks the a226, whose EU
+    # id is also 199.
+    _add_region_catalog(monkeypatch, "us", {"roborock.vacuum.a199": 199})
+
+    products = _products_v5(tmp_path, [_A199, _A226])["categoryDetailList"][0]["productList"]
+    product_ids = {product["model"]: product["id"] for product in products}
+
+    hashed_id = product_ids["roborock.vacuum.a226"]
+    assert product_ids["roborock.vacuum.a199"] == 199
+    assert hashed_id != 199
+    assert _plugin_sources(tmp_path, 199) == [(199, _region_zip("us", "roborock.vacuum.a199"))]
+    assert _plugin_sources(tmp_path, hashed_id) == [(hashed_id, _built_in_source("roborock.vacuum.a226"))]
+
+
 _A307 = dict(_DEVICE, model="roborock.vacuum.a307", product_id="4J89YHjAc2uUG9W0HLxKPP")
 
 

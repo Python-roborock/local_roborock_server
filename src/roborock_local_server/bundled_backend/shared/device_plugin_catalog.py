@@ -7,6 +7,7 @@ writes device_plugin_catalog_<region>.json with any cloud login of that region.
 
 The server falls back to this data. The product ids and plugin records of a
 cloud import keep precedence, because product ids differ by cloud region.
+catalog_for_region merges the catalogs of all regions per model.
 """
 
 from __future__ import annotations
@@ -21,12 +22,15 @@ from .data_helpers import as_int, stable_int
 
 CATALOG_DIR = Path(__file__).parent
 CATALOG_FILE_PREFIX = "device_plugin_catalog_"
-# Regions without their own catalog file use this one.
+# A model that the catalog of the server's region lacks takes its record from
+# this catalog first.
 FALLBACK_REGION = "eu"
 
 
 @dataclass(frozen=True)
 class DevicePluginCatalog:
+    # The region of the catalog file. For a merged catalog, the region of the
+    # catalog whose list answers a request without product ids.
     region: str
     # Model -> numeric product id. /api/v5/product answers it as the product
     # "id", and the app requests the device plugin with it.
@@ -65,14 +69,51 @@ CATALOGS: dict[str, DevicePluginCatalog] = _load_catalogs()
 
 
 def catalog_for_region(region: str | None) -> DevicePluginCatalog:
-    """Return the catalog of a cloud region, or the EU catalog if the region has none."""
+    """Return the built-in catalog for a server of a cloud region.
+
+    It merges the catalogs of all regions per model. A model takes its record
+    and its id from the first catalog that has a record for it: the catalog of
+    the region, then the EU catalog, then the other catalogs by region name.
+    A model without any record takes its id the same way. A request without
+    product ids gets the list of the region's catalog, else the EU list.
+    """
     # Each region hosts its own plugin files. For the a87 and the a15, the old
     # non-EU list and the EU catalog have the same versions (6058, 5208) but
-    # different files, and the sc05 differs (90 against 108). So a region
-    # without its own catalog gets the EU record of the same model. That record
-    # is not verified for the region, but without the catalog the device would
-    # get no plugin.
-    return CATALOGS.get(str(region or "").strip().lower()) or CATALOGS[FALLBACK_REGION]
+    # different files, and the sc05 differs (90 against 108). So a record from
+    # the catalog of another region is not verified for the server's region,
+    # but without it the device would get no plugin.
+    names = [str(region or "").strip().lower(), FALLBACK_REGION, *sorted(CATALOGS)]
+    catalogs = [CATALOGS[name] for name in dict.fromkeys(names) if name in CATALOGS]
+    sources: dict[str, DevicePluginCatalog] = {}
+    for catalog in catalogs:
+        for model in catalog.records_by_model:
+            sources.setdefault(model, catalog)
+    for catalog in catalogs:
+        for model in catalog.product_ids:
+            sources.setdefault(model, catalog)
+    product_ids: dict[str, int] = {}
+    taken_ids: set[int] = set()
+    records_by_model: dict[str, dict[str, Any]] = {}
+    for catalog in catalogs:
+        for model, product_id in catalog.product_ids.items():
+            if sources[model] is not catalog:
+                continue
+            if model in catalog.records_by_model:
+                records_by_model[model] = catalog.records_by_model[model]
+            # Product ids differ by cloud region. In the EU catalog, 199 is the
+            # a226, and in the US cloud it is the a199. A model whose id an
+            # earlier catalog gives to another model gets no id here.
+            # resolve_product_ids then gives it a hashed id, and
+            # /api/v1/appplugin still finds its record by model.
+            if product_id not in taken_ids:
+                product_ids[model] = product_id
+                taken_ids.add(product_id)
+    return DevicePluginCatalog(
+        region=catalogs[0].region,
+        product_ids=product_ids,
+        appplugin_records=catalogs[0].appplugin_records,
+        records_by_model=records_by_model,
+    )
 
 
 def product_fields(product: Mapping[str, Any]) -> tuple[str, str, str]:
