@@ -247,3 +247,44 @@ def test_download_plugin_zip_still_rejects_oversized_payload(monkeypatch) -> Non
 
     with pytest.raises(RuntimeError, match="plugin too large"):
         asyncio.run(plugin_common.download_plugin_zip("https://files.roborock.com/plugin.zip"))
+
+
+def _write_app_plugin_snapshot(supervisor: ReleaseSupervisor, catalogs: dict) -> None:
+    snapshot = {"web_api_cache": {"plugin_catalogs": catalogs}}
+    supervisor.paths.cloud_snapshot_path.write_text(json.dumps(snapshot) + "\n", encoding="utf-8")
+
+
+def _app_plugin_catalog(url: str) -> dict:
+    return {"data": [{"version": 6846, "url": url, "pluginLevel": 3002, "productid": 199, "apilevel": 10030}]}
+
+
+ANDROID_ZIP = "https://app-files.roborock.com/iot/plugin/android.zip"
+IOS_ZIP = "https://app-files.roborock.com/iot/plugin/ios.zip"
+
+
+@pytest.mark.parametrize(("app_type", "expected"), [(1, IOS_ZIP), (2, ANDROID_ZIP)])
+def test_app_plugin_answers_per_platform_type(tmp_path: Path, app_type: int, expected: str) -> None:
+    # The cloud serves a different zip for the same plugin version to iOS (type 1)
+    # and Android (type 2); the iOS app cannot load the Android one.
+    supervisor = _build_supervisor(tmp_path)
+    _write_app_plugin_snapshot(
+        supervisor,
+        {"appplugin": _app_plugin_catalog(ANDROID_ZIP), "appplugin_ios": _app_plugin_catalog(IOS_ZIP)},
+    )
+    client = TestClient(supervisor.app)
+
+    response = client.post("/api/v1/appplugin", json={"type": app_type, "apilevel": "40740", "productids": [199]})
+
+    [record] = response.json()["data"]
+    assert _source_from_proxied_url(record["url"]) == expected
+
+
+def test_app_plugin_ios_falls_back_to_android_catalog_from_older_imports(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    _write_app_plugin_snapshot(supervisor, {"appplugin": _app_plugin_catalog(ANDROID_ZIP)})
+    client = TestClient(supervisor.app)
+
+    response = client.post("/api/v1/appplugin", json={"type": 1, "productids": [199]})
+
+    [record] = response.json()["data"]
+    assert _source_from_proxied_url(record["url"]) == ANDROID_ZIP
