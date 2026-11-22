@@ -250,3 +250,60 @@ def test_get_prop_get_status_counts_as_a_status_answer() -> None:
     assert not is_status_answer({"request_method": "get_prop", "request_params": ["get_consumable"]})
     assert not is_status_answer({"request_method": "get_prop"})
     assert not is_status_answer({"request_method": "get_room_mapping"})
+
+
+def _request(security: dict) -> str:
+    return json.dumps({"dps": {"101": json.dumps({"id": 1, "method": "get_map_v1", "security": security})}})
+
+
+@pytest.mark.parametrize("endpoint", ["w5Mp+215", "ab/Cd+Ef", "testep01"])
+def test_note_request_accepts_base64_endpoints_and_either_key_order(tmp_path: Path, endpoint: str) -> None:
+    store = _store(tmp_path)
+    store.note_request(DUID, _request({"endpoint": endpoint, "nonce": "00ff"}))
+    assert store._nonces[DUID] == {endpoint: "00ff"}
+
+    other = _store(tmp_path / "second")
+    other.note_request(DUID, _request({"nonce": "00ff", "endpoint": endpoint}))
+    assert other._nonces[DUID] == {endpoint: "00ff"}
+
+
+def test_note_request_ignores_a_non_hex_nonce_and_malformed_security(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.note_request(DUID, _request({"endpoint": "testep01", "nonce": "zz"}))
+    store.note_request(DUID, _request({"endpoint": "", "nonce": "00ff"}))
+    store.note_request(DUID, '{"security": "oops"}')
+    assert store._nonces == {}
+
+
+def test_map_reply_with_a_base64_endpoint_is_decrypted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from roborock.protocol import Utils
+
+    from roborock_local_server.bundled_backend.shared import device_snapshot_store as module
+
+    nonce = bytes(range(16))
+    header = b"tst/+001" + b"\x00" * 16
+    monkeypatch.setattr(module, "_parse_map", lambda data: (None, None))
+    store = _store(tmp_path)
+    store.note_request(DUID, _request({"nonce": nonce.hex(), "endpoint": "tst/+001"}))
+    store.record_map(DUID, header + Utils.encrypt_cbc(gzip.compress(b"map"), nonce))
+
+    assert base64.b64decode(store.get(DUID, include_map=True)["map"]) == b"map"
+
+
+def test_a_robot_rebuilt_from_the_log_is_offline_since_it_last_spoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = _seed_log(tmp_path, monkeypatch)
+    store = _store(tmp_path / "state")
+    store.seed_from_mqtt_jsonl(log, lambda did: DUID)
+
+    assert store.get(DUID)["offline_at"] == "2026-10-22T00:33:57+00:00"
+    store.mark_seen(DUID)
+    assert store.get(DUID)["offline_at"] is None
+
+
+def test_flush_writes_pending_changes_and_a_new_store_reads_them(tmp_path: Path) -> None:
+    store = DeviceSnapshotStore(tmp_path, flush_interval_s=3600.0, map_interval_s=0.0)
+    store.record_dps(DUID, json.dumps({"dps": {"122": 9}}))
+    store.record_dps(DUID, json.dumps({"dps": {"122": 8}}))
+    store.flush()
+
+    assert DeviceSnapshotStore(tmp_path).get(DUID)["status"]["battery"] == 8
