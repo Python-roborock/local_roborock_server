@@ -94,3 +94,19 @@ def test_cached_inventory_follows_a_file_that_appears_later(tmp_path):
     assert cache.read() == {}
     inventory_io.atomic_write_inventory(tmp_path / inventory_io.WEB_API_INVENTORY_FILE, {"x": 1})
     assert cache.read() == {"x": 1}
+
+
+def test_cached_inventory_notices_a_same_size_replacement_with_the_same_mtime(tmp_path):
+    import os
+
+    path = tmp_path / inventory_io.WEB_API_INVENTORY_FILE
+    ctx = SimpleNamespace(http_jsonl=tmp_path / "http.jsonl")
+    inventory_io.atomic_write_inventory(path, {"x": 1})
+    stamp = path.stat().st_mtime_ns
+    cache = inventory_io.CachedInventory(ctx)
+    assert cache.read() == {"x": 1}
+    inventory_io.atomic_write_inventory(path, {"x": 2})
+    os.utime(path, ns=(stamp, stamp))
+    if path.stat().st_ino == 0:
+        pytest.skip("this filesystem reports no file id")
+    assert cache.read() == {"x": 2}

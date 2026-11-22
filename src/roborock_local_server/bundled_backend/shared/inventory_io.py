@@ -76,21 +76,21 @@ def load_inventory(ctx: ServerContext) -> dict[str, Any]:
 
 
 class CachedInventory:
-    """Re-reads the inventory file only when its size or modification time changed.
+    """Re-reads the inventory file only when its size, modification time or file id changed.
 
     The returned dict is shared: callers must treat it as read-only.
     """
 
     def __init__(self, ctx: ServerContext) -> None:
         self._ctx = ctx
-        self._signature: tuple[int, int] | None = None
+        self._signature: tuple[int, int, int] | None = None
         self._inventory: dict[str, Any] = {}
 
     def read(self) -> dict[str, Any]:
         path = self._ctx.http_jsonl.parent / WEB_API_INVENTORY_FILE
         try:
             stat = path.stat()
-            signature: tuple[int, int] | None = (stat.st_mtime_ns, stat.st_size)
+            signature: tuple[int, int, int] | None = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
         except OSError:
             signature = None
         if signature is None or signature != self._signature:
