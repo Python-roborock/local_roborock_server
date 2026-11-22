@@ -2,6 +2,8 @@ import asyncio
 import json
 
 import pytest
+from test_firmware_catalog import MODEL, OLD_MD5, OLD_URL, robot  # noqa: F401  (the fixture)
+from test_firmware_catalog import _supervisor as catalog_supervisor
 from test_ota_install import PACKAGE_INFO, Robot
 from test_ota_package_dry_run import MD5, PACKAGE, URL, FakeCloud
 from test_ota_upgrade_button import UpdatableCloud
@@ -225,3 +227,14 @@ def test_the_hardware_folder_of_a_package_address() -> None:
 def test_only_robots_in_the_inventory_are_owned(tmp_path, monkeypatch) -> None:
     supervisor = button_supervisor(tmp_path, monkeypatch, enable=True)
     assert supervisor.ota_installer.owns("robot") and not supervisor.ota_installer.owns("someone-elses")
+
+
+def test_a_downgrade_is_refused_when_the_hardware_of_the_current_package_is_unknown(tmp_path, monkeypatch, robot) -> None:
+    supervisor, _ = catalog_supervisor(tmp_path, monkeypatch, reported="02.35.52", extra="allow_downgrade = true\n")
+    catalog = supervisor.ota_installer.catalog
+    catalog.add(MODEL, "02.33.48", source="robot_reported", url=OLD_URL, md5=OLD_MD5)
+    catalog.add(MODEL, "02.35.52", source="cloud_offer")  # no package address for the running version anywhere
+    supervisor.cloud_manager.urls = {"02.33.48": OLD_URL}
+    started = asyncio.run(supervisor.ota_installer.start_version("robot", "02.33.48", True, "02.33.48"))
+    assert started["started"] is False and "hardware cannot be checked" in started["reason"]
+    assert supervisor.ota_installer._running == {} and robot.downloads == []

@@ -248,6 +248,8 @@ class OtaInstaller:
         except Exception:  # noqa: BLE001
             own = ""
         own = own or str((self.catalog.entry(model, reported) or {}).get("url") or "")
+        if not own:
+            raise PackageRefused(f"The package address of the {reported} the robot runs is not known, so its hardware cannot be checked")
         if package_family(own) and package_family(url) != package_family(own):
             raise PackageRefused(f"The package of {version} is for different hardware than the one the robot runs now")
         return url
