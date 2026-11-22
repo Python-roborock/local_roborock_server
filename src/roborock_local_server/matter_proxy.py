@@ -11,11 +11,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from typing import Any
+from urllib.parse import parse_qs
 
 import aiohttp
 from fastapi import Request
 from fastapi.responses import Response
+from yarl import URL
 
 logger = logging.getLogger("real_stack.api")
 
@@ -32,7 +35,8 @@ _DROPPED_PREFIXES = ("x-forwarded-", "cf-", "x-envoy-", "x-amzn-", "sec-")
 TIMEOUT_SECONDS = 20
 MAX_QUERY_LENGTH = 1024
 MAX_QUERY_PARAMS = 16
-MAX_HEADERS = 32
+RATE_LIMIT_REQUESTS = 10
+RATE_LIMIT_WINDOW_SECONDS = 60
 MAX_HEADER_VALUE = 2048
 _QUERY_KEY = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
 _DID_KEYS = ("did", "duid", "d", "device_id", "deviceId", "device_did", "deviceDid")
@@ -54,15 +58,39 @@ def forwardable_headers(headers: Any) -> dict[str, str]:
     for name, value in headers.items():
         lowered = name.lower()
         if lowered in _DROPPED or lowered.startswith(_DROPPED_PREFIXES) or len(value) > MAX_HEADER_VALUE:
+            logger.debug("Matter key request: header %r not forwarded", name)
             continue
         kept[name] = value
     return kept
 
 
-def query_is_acceptable(query_params: dict[str, list[str]], query: str) -> bool:
-    """Plain key=value pairs of bounded size; the query is signed, so it is passed on byte for byte."""
-    keys = [key for key in query_params if key != "__host"]
-    return len(query) <= MAX_QUERY_LENGTH and len(keys) <= MAX_QUERY_PARAMS and all(_QUERY_KEY.match(k) for k in keys)
+def parse_query(query: str) -> dict[str, list[str]]:
+    return parse_qs(query, keep_blank_values=True)
+
+
+def query_is_acceptable(query: str) -> bool:
+    """Plain key=value pairs of bounded size; the raw query is signed, so it is passed on unchanged."""
+    if len(query) > MAX_QUERY_LENGTH:
+        return False
+    keys = [part.split("=", 1)[0] for part in query.split("&") if part]
+    return len(keys) <= MAX_QUERY_PARAMS and all(_QUERY_KEY.match(key) for key in keys)
+
+
+class RateLimiter:
+    def __init__(self, limit: int = RATE_LIMIT_REQUESTS, window: float = RATE_LIMIT_WINDOW_SECONDS) -> None:
+        self._limit, self._window = limit, window
+        self._hits: dict[str, list[float]] = {}
+
+    def allow(self, client: str) -> bool:
+        now = time.monotonic()
+        recent = [t for t in self._hits.get(client, []) if now - t < self._window]
+        allowed = len(recent) < self._limit
+        if allowed:
+            recent.append(now)
+        self._hits[client] = recent
+        if len(self._hits) > 1024:
+            self._hits = {k: v for k, v in self._hits.items() if v and now - v[-1] < self._window}
+        return allowed
 
 
 def known_device(vacuums: list[dict[str, Any]], query_params: dict[str, list[str]], client_ip: str) -> bool:
@@ -102,7 +130,7 @@ async def forward(request: Request, region: str) -> Response:
     )
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=TIMEOUT_SECONDS)) as session:
-            async with session.get(url, headers=headers) as upstream:
+            async with session.get(URL(url, encoded=True), headers=headers) as upstream:
                 body = await upstream.read()
                 content_type = upstream.headers.get("Content-Type", "application/octet-stream")
                 status = upstream.status

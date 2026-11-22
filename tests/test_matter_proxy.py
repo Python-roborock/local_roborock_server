@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 
 import pytest
 from aiohttp import web
@@ -131,11 +132,50 @@ def test_hop_proxy_and_cookie_headers_are_dropped() -> None:
 
 
 def test_the_query_must_be_plain_and_small() -> None:
-    ok = {"did": ["1"], "signature": ["x"]}
-    assert matter_proxy.query_is_acceptable(ok, "did=1&signature=x")
-    assert not matter_proxy.query_is_acceptable({"a b": ["1"]}, "a b=1")
-    assert not matter_proxy.query_is_acceptable({f"k{i}": ["1"] for i in range(17)}, "k=1")
-    assert not matter_proxy.query_is_acceptable(ok, "x" * 2000)
+    assert matter_proxy.query_is_acceptable("did=1&signature=x%3D")
+    assert matter_proxy.query_is_acceptable("")
+    assert not matter_proxy.query_is_acceptable("a b=1")
+    assert not matter_proxy.query_is_acceptable("&".join(f"k{i}=1" for i in range(17)))
+    assert not matter_proxy.query_is_acceptable("x" * 2000)
+
+
+def test_a_client_supplied_host_key_counts_like_any_other() -> None:
+    assert matter_proxy.query_is_acceptable("__host=evil&did=1")
+    assert not matter_proxy.query_is_acceptable("&".join(["__host=1"] + [f"k{i}=1" for i in range(16)]))
+
+
+def test_the_raw_query_reaches_the_upstream_unchanged(monkeypatch) -> None:
+    seen = {}
+
+    async def handler(request):
+        seen["raw"] = request.rel_url.raw_query_string
+        return web.Response(body=b"ok")
+
+    query = "did=a%zz&sig=%41%7e+x%2Fy"
+    response = asyncio.run(_forward_to(handler, monkeypatch, query=query))
+    assert response.status_code == 200 and seen["raw"] == query
+
+
+def test_an_unusable_header_is_logged_at_debug() -> None:
+    messages: list[str] = []
+    handler = logging.Handler(level=logging.DEBUG)
+    handler.emit = lambda record: messages.append(record.getMessage())  # type: ignore[method-assign]
+    logger = matter_proxy.logger
+    previous = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    try:
+        assert matter_proxy.forwardable_headers({"Authorization": "x" * 5000}) == {}
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+    assert any("Authorization" in message for message in messages)
+
+
+def test_the_rate_limit_is_per_client() -> None:
+    limiter = matter_proxy.RateLimiter(limit=3, window=60)
+    assert [limiter.allow("a") for _ in range(4)] == [True, True, True, False]
+    assert limiter.allow("b")
 
 
 def test_a_request_must_name_or_come_from_a_known_robot() -> None:
@@ -204,3 +244,10 @@ def test_when_disabled_nothing_is_forwarded(tmp_path, monkeypatch) -> None:
     assert called == []
     assert response.content != b"KEYBYTES"
     assert "matter_key_proxy" not in supervisor.context.http_jsonl.read_text(encoding="utf-8")
+
+
+def test_the_route_answers_429_after_too_many_requests(tmp_path, monkeypatch) -> None:
+    supervisor = _supervisor(tmp_path, monkeypatch, True)
+    client = TestClient(supervisor.app)
+    codes = [client.get(PATH + "?did=ghost").status_code for _ in range(12)]
+    assert codes[:10] == [403] * 10 and codes[10:] == [429, 429]

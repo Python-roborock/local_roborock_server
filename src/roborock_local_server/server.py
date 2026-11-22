@@ -1274,11 +1274,14 @@ class ReleaseSupervisor:
 
         if self.config.matter.key_proxy and matter_proxy.matches(clean_path, request.method):
             matter_proxy.redact_log_entry(entry)
-            if not matter_proxy.query_is_acceptable(query_params, request.url.query):
-                proxied: Response = Response(content=b"", status_code=400)
-            elif not matter_proxy.known_device(
-                self.runtime_state.vacuum_snapshot(), query_params, request.client.host if request.client else ""
-            ):
+            matter_query = matter_proxy.parse_query(request.url.query)
+            limiter = self.__dict__.setdefault("_matter_limiter", matter_proxy.RateLimiter())
+            client_ip = request.client.host if request.client else ""
+            if not limiter.allow(client_ip):
+                proxied: Response = Response(content=b"", status_code=429)
+            elif not matter_proxy.query_is_acceptable(request.url.query):
+                proxied = Response(content=b"", status_code=400)
+            elif not matter_proxy.known_device(self.runtime_state.vacuum_snapshot(), matter_query, client_ip):
                 proxied = Response(content=b"", status_code=403)
             else:
                 proxied = await matter_proxy.forward(request, self.config.network.region)
