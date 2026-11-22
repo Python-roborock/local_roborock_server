@@ -168,7 +168,10 @@ def server_timezone(ctx: Any) -> str:
     """The server's zone: network.timezone, else the region's; works with or without data_helpers.default_timezone."""
     region_default = getattr(data_helpers, "default_timezone", None)
     if region_default is not None:
-        return str(region_default(ctx))
+        try:
+            return str(region_default(ctx))
+        except AttributeError:  # a context without timezone or region
+            pass
     return str(getattr(ctx, "timezone", "") or "").strip() or _LAST_RESORT_ZONE
 
 

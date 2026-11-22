@@ -353,3 +353,11 @@ def test_server_timezone_without_the_region_helper_falls_back_to_new_york(monkey
 def test_server_timezone_uses_the_region_helper_when_present(monkeypatch):
     monkeypatch.setattr(sr.data_helpers, "default_timezone", lambda ctx: "Europe/Berlin", raising=False)
     assert sr.server_timezone(SimpleNamespace(timezone="", region="eu")) == "Europe/Berlin"
+
+
+def test_server_timezone_survives_a_context_the_region_helper_cannot_read(monkeypatch):
+    def region_default(ctx):
+        return ctx.timezone
+
+    monkeypatch.setattr(sr.data_helpers, "default_timezone", region_default, raising=False)
+    assert sr.server_timezone(SimpleNamespace()) == NEW_YORK
