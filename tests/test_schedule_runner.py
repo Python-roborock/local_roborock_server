@@ -318,3 +318,23 @@ def test_day_and_month_names_mean_the_same_as_numbers(named, numbered):
 def test_unknown_day_or_month_names_are_rejected(expression):
     with pytest.raises(sr.CronError):
         sr.parse_cron(expression)
+
+
+@pytest.mark.parametrize(
+    ("expression", "weekdays"),
+    [
+        ("0 8 * * MON-SUN", {0, 1, 2, 3, 4, 5, 6}),
+        ("0 8 * * FRI-SUN", {5, 6, 0}),
+        ("0 8 * * 6-0", {6, 0}),
+        ("0 8 * * SAT-MON", {6, 0, 1}),
+        ("0 8 * * 1-7", {0, 1, 2, 3, 4, 5, 6}),
+        ("0 8 * * 7", {0}),
+    ],
+)
+def test_weekday_ranges_that_reach_or_wrap_past_sunday(expression, weekdays):
+    assert sr.parse_cron(expression).days_of_week == frozenset(weekdays)
+
+
+def test_a_day_of_month_step_starting_with_star_is_unrestricted_like_vixie_cron():
+    spec = sr.parse_cron("0 8 */2 * MON")
+    assert spec.dom_restricted is False and spec.dow_restricted is True

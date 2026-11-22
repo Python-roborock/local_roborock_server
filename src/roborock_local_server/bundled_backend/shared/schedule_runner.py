@@ -101,6 +101,15 @@ def _parse_field(
                 start, end = number(first), number(last)
             except ValueError as exc:
                 raise CronError(f"bad {name} range {part!r}") from exc
+            if names is _WEEKDAY_NAMES and last.strip().upper() == "SUN":
+                end = high  # a range ending on SUN runs to the end of the week (MON-SUN, FRI-SUN)
+            if names is _WEEKDAY_NAMES and start > end and 0 <= end and start <= high:
+                # A day range that wraps past Saturday (6-0, SAT-MON).
+                if start < low or end > high:
+                    raise CronError(f"{name} value out of range in {text!r}")
+                wrapped = [*range(start, high + 1), *range(low, end + 1)]
+                values.update(wrapped[::step])
+                continue
         else:
             try:
                 start = number(part)
@@ -110,7 +119,8 @@ def _parse_field(
         if start < low or end > high or start > end:
             raise CronError(f"{name} value out of range in {text!r}")
         values.update(range(start, end + 1, step))
-    return frozenset(values), True
+    # As in Vixie cron, a field that starts with * (such as */2) counts as unrestricted.
+    return frozenset(values), not text.startswith("*")
 
 
 def parse_cron(expression: str) -> CronSpec:
