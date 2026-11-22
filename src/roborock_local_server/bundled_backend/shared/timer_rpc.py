@@ -310,6 +310,7 @@ class TimerRpcInterceptor:
         if pending is None or pending.expires <= time.monotonic():
             return None
         pending.answered[0] = True
+        self._pending.pop((duid, body.get("id")), None)
         # A robot that rejects get_timer still has the store's timers to show; no error reaches the app then.
         theirs = body.get("result") if body.get("error") is None and isinstance(body.get("result"), list) else []
         if body.get("error") is not None and not pending.entries:

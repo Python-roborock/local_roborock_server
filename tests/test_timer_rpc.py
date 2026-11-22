@@ -516,6 +516,14 @@ def test_a_robot_error_reply_with_nothing_in_the_store_is_passed_through(ctx):
     assert interceptor.merge_response(DUID, _robot_error_frame(64)) is None
 
 
+def test_a_pending_get_timer_is_cleared_once_the_robot_has_answered(ctx):
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    interceptor(DUID, _encode_request("get_timer", [], request_id=65))
+    assert interceptor.merge_response(DUID, _encode_robot_reply(65, [])) is not None
+    assert interceptor._pending == {}
+    assert interceptor.merge_response(DUID, _encode_robot_reply(65, [])) is None
+
+
 def test_one_job_with_an_unreadable_cron_does_not_hide_the_other_timers(ctx):
     schedule_store.upsert_job(ctx, DUID, job_id="bad", cron="0 0 * * ABC", enabled=True)
     assert timer_rpc.device_cron("0 0 * * ABC") is None
