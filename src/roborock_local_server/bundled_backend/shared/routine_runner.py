@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import dataclass
 import json
 import logging
@@ -24,7 +25,7 @@ def _ensure_local_python_roborock_on_path() -> None:
 _ensure_local_python_roborock_on_path()
 
 from roborock.data import RRiot, Reference, RoborockInCleaning, StatusV2
-from roborock.exceptions import RoborockUnsupportedFeature
+from roborock.exceptions import RoborockException, RoborockUnsupportedFeature
 from roborock.mqtt.roborock_session import create_mqtt_session
 from roborock.protocol import create_mqtt_decoder, create_mqtt_encoder, create_mqtt_params
 from roborock.protocols.v1_protocol import RequestMessage, create_security_data, decode_rpc_response
@@ -39,6 +40,7 @@ __all__ = [
     "RoutineRunner",
     "RoutineStep",
     "commands_for_step",
+    "native_step_command",
     "parse_scene_steps",
     "scene_device_id",
 ]
@@ -82,7 +84,8 @@ class RoutineExecutionError(RuntimeError):
 
 @dataclass(frozen=True)
 class RoutineCommand:
-    command: RoborockCommand
+    # A RoborockCommand, or a scene step method (do_scenes_*) sent as-is.
+    command: RoborockCommand | str
     params: dict[str, Any] | list[Any] | None = None
 
 
@@ -435,6 +438,33 @@ def _is_retryable_action_locked_error(exc: Exception) -> bool:
     return "action locked" in message or "invalid status" in message
 
 
+def _command_name(command: RoborockCommand | str) -> str:
+    return command.value if isinstance(command, RoborockCommand) else str(command)
+
+
+def _is_step_start_command(command: RoborockCommand | str) -> bool:
+    return command in _STEP_START_COMMANDS or command in _SUPPORTED_METHODS
+
+
+def native_step_command(step: RoutineStep) -> RoutineCommand:
+    """The step as the official app stored it, to send to the device unchanged.
+
+    The firmware runs do_scenes_* itself, including per-room customize settings
+    (new_segments) that the translated commands cannot express. Zone ranges the
+    server hydrated into the scene are removed: the device knows each zone by
+    its tid/zid from set_scenes_zones, and the app never sends ranges here.
+    """
+    params = copy.deepcopy(step.params)
+    if step.method == "do_scenes_zones" and isinstance(params, dict):
+        for entry in params.get("data") or []:
+            if not isinstance(entry, dict):
+                continue
+            for zone in entry.get("zones") or []:
+                if isinstance(zone, dict):
+                    zone.pop("range", None)
+    return RoutineCommand(step.method, params)
+
+
 def _response_dps(message: RoborockMessage) -> dict[str, Any] | None:
     if message.payload is None:
         return None
@@ -555,7 +585,7 @@ class _RoutineMqttClient:
 
     async def send_command(
         self,
-        command: RoborockCommand,
+        command: RoborockCommand | str,
         params: dict[str, Any] | list[Any] | None = None,
     ) -> Any:
         if self._session is None:
@@ -575,7 +605,7 @@ class _RoutineMqttClient:
             return await asyncio.wait_for(future, timeout=_COMMAND_TIMEOUT_SECONDS)
         except TimeoutError as exc:
             raise RoutineExecutionError(
-                f"Command {command.value} timed out after {_COMMAND_TIMEOUT_SECONDS}s"
+                f"Command {_command_name(command)} timed out after {_COMMAND_TIMEOUT_SECONDS}s"
             ) from exc
         finally:
             self._pending.pop(request.request_id, None)
@@ -749,6 +779,8 @@ class RoutineRunner:
     def __init__(self, context: ServerContext) -> None:
         self._context = context
         self._tasks_by_device: dict[str, _ActiveRoutine] = {}
+        # Devices that answered a native do_scenes_* step with "unknown method".
+        self._native_steps_unsupported: set[str] = set()
         self._logger = (
             context.loggers.get("api")
             or context.loggers.get("unknown")
@@ -961,13 +993,13 @@ class RoutineRunner:
                     "Skipping unsupported routine command step=%s method=%s command=%s: %s",
                     step.step_id,
                     step.method,
-                    routine_command.command.value,
+                    _command_name(routine_command.command),
                     exc,
                 )
                 return
             except Exception as exc:  # noqa: BLE001
                 if (
-                    routine_command.command in _STEP_START_COMMANDS
+                    _is_step_start_command(routine_command.command)
                     and attempts < _ACTION_LOCK_RETRY_ATTEMPTS
                     and _is_retryable_action_locked_error(exc)
                 ):
@@ -976,7 +1008,7 @@ class RoutineRunner:
                         "waiting %.0fs and retrying (%s/%s)",
                         step.step_id,
                         step.method,
-                        routine_command.command.value,
+                        _command_name(routine_command.command),
                         _ACTION_LOCK_RETRY_DELAY_SECONDS,
                         attempts,
                         _ACTION_LOCK_RETRY_ATTEMPTS,
@@ -986,6 +1018,51 @@ class RoutineRunner:
                     )
                     continue
                 raise
+
+    async def _start_step_natively(
+        self,
+        *,
+        client: _RoutineMqttClient,
+        logger: logging.LoggerAdapter,
+        step: RoutineStep,
+        device_id: str,
+    ) -> bool:
+        """Send the stored step to the device as-is; False means translate it instead."""
+        if device_id in self._native_steps_unsupported:
+            return False
+        routine_command = native_step_command(step)
+        logger.info(
+            "Routine step=%s method=%s native params=%s",
+            step.step_id,
+            step.method,
+            routine_command.params,
+        )
+        try:
+            await self._send_step_command(
+                client=client,
+                logger=logger,
+                step=step,
+                routine_command=routine_command,
+            )
+        except RoborockUnsupportedFeature as exc:
+            self._native_steps_unsupported.add(device_id)
+            logger.warning(
+                "Device %s does not run %s natively (%s); translating routine steps from now on",
+                device_id,
+                step.method,
+                exc,
+            )
+            return False
+        except RoborockException as exc:
+            logger.warning(
+                "Native %s rejected for step=%s (%s: %s); translating this step",
+                step.method,
+                step.step_id,
+                type(exc).__name__,
+                exc,
+            )
+            return False
+        return True
 
     async def _run_scene(self, *, scene: dict[str, Any], steps: list[RoutineStep]) -> None:
         device_id = scene_device_id(scene)
@@ -1011,14 +1088,20 @@ class RoutineRunner:
         try:
             await self._sync_scene_tids(client=client, scene=scene, device_id=device_id, logger=logger)
             for step_index, step in enumerate(steps):
-                commands = commands_for_step(step)
                 waits_for_step_complete = RoborockDataProtocol.TASK_COMPLETE.value in step.finish_dp_ids
+                started_natively = await self._start_step_natively(
+                    client=client,
+                    logger=logger,
+                    step=step,
+                    device_id=device_id,
+                )
+                commands = [] if started_natively else commands_for_step(step)
                 for routine_command in commands:
                     logger.info(
                         "Routine step=%s method=%s command=%s params=%s",
                         step.step_id,
                         step.method,
-                        routine_command.command.value,
+                        _command_name(routine_command.command),
                         routine_command.params,
                     )
                     await self._send_step_command(

@@ -95,6 +95,16 @@ def _scene_with_zone_tid(
     }
 
 
+def _force_translated_steps(monkeypatch) -> None:
+    """Pin the runner to the translated command path these tests cover."""
+
+    async def no_native(self: RoutineRunner, **_: object) -> bool:
+        _ = self
+        return False
+
+    monkeypatch.setattr(RoutineRunner, "_start_step_natively", no_native)
+
+
 def test_repeating_scene_execute_requests_cancel(tmp_path: Path, monkeypatch) -> None:
     async def exercise() -> None:
         runner = RoutineRunner(_test_context(tmp_path))
@@ -246,6 +256,7 @@ def test_run_scene_syncs_scene_tids_before_step_commands(tmp_path: Path, monkeyp
                 return None
 
         monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+        _force_translated_steps(monkeypatch)
 
         runner = RoutineRunner(_test_context(tmp_path))
         await runner._run_scene(scene=current_scene, steps=parse_scene_steps(current_scene))
@@ -296,6 +307,7 @@ def test_run_scene_sends_repeat_times_as_object_before_app_start(
                 return None
 
         monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+        _force_translated_steps(monkeypatch)
 
         runner = RoutineRunner(_test_context(tmp_path))
         await runner._run_scene(scene=scene, steps=parse_scene_steps(scene))
@@ -419,6 +431,7 @@ def test_run_scene_retries_step_start_when_device_is_action_locked(tmp_path: Pat
                 settle_calls.append(float(initial_delay_seconds))
 
         monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+        _force_translated_steps(monkeypatch)
 
         runner = RoutineRunner(_test_context(tmp_path))
         await runner._run_scene(scene=scene, steps=parse_scene_steps(scene))
@@ -789,6 +802,7 @@ def test_run_scene_with_unset_mop_mode_reaches_app_start(tmp_path: Path, monkeyp
                 return None
 
         monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+        _force_translated_steps(monkeypatch)
 
         runner = RoutineRunner(_test_context(tmp_path))
         await runner._run_scene(scene=scene, steps=parse_scene_steps(scene))
@@ -838,6 +852,7 @@ def test_run_scene_skips_unsupported_setting_and_still_starts(
                 return None
 
         monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+        _force_translated_steps(monkeypatch)
 
         runner = RoutineRunner(_test_context(tmp_path))
         await runner._run_scene(scene=scene, steps=parse_scene_steps(scene))
@@ -871,9 +886,193 @@ def test_run_scene_aborts_when_start_command_is_unsupported(tmp_path: Path, monk
                 return None
 
         monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", FakeRoutineClient)
+        _force_translated_steps(monkeypatch)
 
         runner = RoutineRunner(_test_context(tmp_path))
         with pytest.raises(RoborockUnsupportedFeature):
             await runner._run_scene(scene=scene, steps=parse_scene_steps(scene))
 
     asyncio.run(exercise())
+
+
+# ---------------------------------------------------------------------------
+# native do_scenes_* step tests
+# ---------------------------------------------------------------------------
+
+
+def _customize_segment_scene(device_id: str) -> dict[str, object]:
+    step_params = {
+        "data": [
+            {
+                "tid": "1795105757294",
+                "segs": [{"sid": 1}],
+                "map_flag": 0,
+                "fan_power": 106,
+                "water_box_mode": 204,
+                "mop_mode": 302,
+                "mop_template_id": 302,
+                "repeat": 1,
+                "clean_order_mode": 1,
+                "new_segments": [
+                    {
+                        "id": 1,
+                        "repeat": 1,
+                        "need_wash": 1,
+                        "wash_mode": 2,
+                        "fan_power": 105,
+                        "water_box_mode": 245,
+                        "mop_mode": 303,
+                        "seq_type": 0,
+                    }
+                ],
+                "auto_dry": 1,
+                "auto_dustCollection": 1,
+                "region_num": 1,
+                "seq_type": 0,
+            }
+        ],
+        "source": 101,
+    }
+    item = {
+        "id": 1,
+        "type": "CMD",
+        "name": "Kitchen",
+        "finishDpIds": [130],
+        "param": json.dumps({"id": 1, "method": "do_scenes_segments", "params": step_params}),
+    }
+    return {
+        "id": 1,
+        "name": "Kitchen mop",
+        "device_id": device_id,
+        "param": json.dumps({"action": {"type": "S", "items": [item, dict(item, id=2)]}}),
+    }
+
+
+class _RecordingClient:
+    """Fake _RoutineMqttClient: records commands, answers with a scripted error per method."""
+
+    sent: list[tuple[object, object]] = []
+    errors: dict[str, Exception] = {}
+
+    def __init__(self, context, device, logger) -> None:
+        _ = context, device, logger
+
+    async def connect(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    async def send_command(self, command, params=None):
+        type(self).sent.append((command, params))
+        name = command.value if isinstance(command, RoborockCommand) else command
+        error = type(self).errors.get(name)
+        if error is not None:
+            raise error
+        return ["ok"]
+
+    async def wait_for_step_complete(self) -> None:
+        return None
+
+    async def wait_for_dock_settle(self, *, initial_delay_seconds: float = 15.0) -> None:
+        _ = initial_delay_seconds
+
+
+def _recording_client(monkeypatch, errors: dict[str, Exception] | None = None) -> type[_RecordingClient]:
+    client = type("RecordingClient", (_RecordingClient,), {"sent": [], "errors": dict(errors or {})})
+    monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", client)
+    return client
+
+
+def test_run_scene_sends_customize_step_natively(tmp_path: Path, monkeypatch) -> None:
+    """Per-room customize settings (new_segments) reach the device unchanged."""
+    client = _recording_client(monkeypatch)
+    scene = _customize_segment_scene("6HL2zfniaoYYV01CkVuhkO")
+    steps = parse_scene_steps(scene)
+
+    asyncio.run(RoutineRunner(_test_context(tmp_path))._run_scene(scene=scene, steps=steps))
+
+    assert client.sent[0][0] == RoborockCommand.REUNION_SCENES
+    assert client.sent[1:] == [("do_scenes_segments", steps[0].params), ("do_scenes_segments", steps[1].params)]
+    assert client.sent[1][1]["data"][0]["new_segments"][0]["fan_power"] == 105
+
+
+def test_native_zone_step_drops_hydrated_ranges(tmp_path: Path, monkeypatch) -> None:
+    client = _recording_client(monkeypatch)
+    scene = _scene_with_zone_tid(
+        scene_id=7,
+        device_id="6HL2zfniaoYYV01CkVuhkO",
+        name="Zone",
+        tid="1795108470001",
+        zid=1,
+        range_coords=[23100, 21400, 24600, 22900],
+    )
+    steps = parse_scene_steps(scene)
+
+    asyncio.run(RoutineRunner(_test_context(tmp_path))._run_scene(scene=scene, steps=steps))
+
+    assert client.sent[1] == (
+        "do_scenes_zones",
+        {"data": [{"tid": "1795108470001", "zones": [{"zid": 1, "repeat": 1}], "fan_power": 108, "repeat": 1}]},
+    )
+    # The stored step keeps its range for the translated fallback.
+    assert steps[0].params["data"][0]["zones"][0]["range"] == [23100, 21400, 24600, 22900]
+
+
+def test_unknown_native_method_falls_back_and_is_remembered(tmp_path: Path, monkeypatch) -> None:
+    client = _recording_client(
+        monkeypatch,
+        {"do_scenes_segments": RoborockUnsupportedFeature("The method called is not recognized by the device.")},
+    )
+    scene = _customize_segment_scene("6HL2zfniaoYYV01CkVuhkO")
+    runner = RoutineRunner(_test_context(tmp_path))
+
+    asyncio.run(runner._run_scene(scene=scene, steps=parse_scene_steps(scene)))
+    native_attempts = [c for c, _ in client.sent if c == "do_scenes_segments"]
+    segment_cleans = [p for c, p in client.sent if c == RoborockCommand.APP_SEGMENT_CLEAN]
+    assert len(native_attempts) == 1
+    assert segment_cleans == [[{"segments": [1], "repeat": 1}]] * 2
+
+    client.sent.clear()
+    asyncio.run(runner._run_scene(scene=scene, steps=parse_scene_steps(scene)))
+    assert all(c != "do_scenes_segments" for c, _ in client.sent)
+
+
+def test_rejected_native_step_falls_back_for_that_step_only(tmp_path: Path, monkeypatch) -> None:
+    client = _recording_client(
+        monkeypatch,
+        {"do_scenes_segments": RoborockException({"code": -10005, "message": "param error"})},
+    )
+    scene = _customize_segment_scene("6HL2zfniaoYYV01CkVuhkO")
+
+    asyncio.run(RoutineRunner(_test_context(tmp_path))._run_scene(scene=scene, steps=parse_scene_steps(scene)))
+
+    native_attempts = [c for c, _ in client.sent if c == "do_scenes_segments"]
+    segment_cleans = [p for c, p in client.sent if c == RoborockCommand.APP_SEGMENT_CLEAN]
+    assert len(native_attempts) == 2
+    assert len(segment_cleans) == 2
+
+
+def test_native_step_is_retried_when_action_locked(tmp_path: Path, monkeypatch) -> None:
+    attempts = 0
+
+    class LockedOnce(_RecordingClient):
+        sent: list[tuple[object, object]] = []
+        errors: dict[str, Exception] = {}
+
+        async def send_command(self, command, params=None):
+            nonlocal attempts
+            if command == "do_scenes_segments":
+                attempts += 1
+                if attempts == 1:
+                    type(self).sent.append((command, params))
+                    raise RoborockException({"code": -10003, "message": "action locked"})
+            return await super().send_command(command, params)
+
+    monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", LockedOnce)
+    scene = _customize_segment_scene("6HL2zfniaoYYV01CkVuhkO")
+
+    asyncio.run(RoutineRunner(_test_context(tmp_path))._run_scene(scene=scene, steps=parse_scene_steps(scene)))
+
+    assert [c for c, _ in LockedOnce.sent if c == "do_scenes_segments"] == ["do_scenes_segments"] * 3
+    assert all(c != RoborockCommand.APP_SEGMENT_CLEAN for c, _ in LockedOnce.sent)
