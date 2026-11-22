@@ -286,10 +286,14 @@ async def _fetch_info(
 async def _voice_info_response(
     ctx: ServerContext, runtime_dir: Path, upstream_path: str
 ) -> tuple[str, Response]:
-    cache_file = _cache_dir(runtime_dir) / f"info-{_digest(upstream_path)[:24]}.json"
+    region = ctx.region.strip().lower()
+    cache_file = (
+        _cache_dir(runtime_dir)
+        / f"info-{_digest(f'{region}:{upstream_path}')[:24]}.json"
+    )
     try:
         host, info = await _single_flight(
-            f"info:{ctx.region}:{cache_file}",
+            f"info:{region}:{cache_file}",
             lambda: _fetch_info(ctx, cache_file, upstream_path),
         )
     except VoicePkgError:

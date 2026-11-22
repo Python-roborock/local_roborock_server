@@ -431,3 +431,29 @@ def test_package_cache_is_bounded_by_total_bytes(tmp_path: Path, monkeypatch) ->
     voice_pkg._evict_old_packages(tmp_path)
 
     assert sorted(p.name for p in tmp_path.iterdir()) == ["2.pkg", "3.pkg"]
+
+
+def test_info_cache_is_kept_per_region(tmp_path: Path, monkeypatch) -> None:
+    from https_server.routes.plugin import voice_pkg
+
+    class Ctx:
+        def __init__(self, region: str) -> None:
+            self.region = region
+
+        def api_url(self) -> str:
+            return "https://api-roborock.example.com"
+
+    import asyncio
+
+    path = "/app/beryllite/voice-pkg/info"
+    _fake_fetch(
+        monkeypatch, {"https://us-app.roborock.com" + path: json.dumps(INFO).encode()}
+    )
+    asyncio.run(voice_pkg._voice_info_response(Ctx("us"), tmp_path, path))
+    _fake_fetch(monkeypatch, {})
+    try:
+        asyncio.run(voice_pkg._voice_info_response(Ctx("eu"), tmp_path, path))
+    except voice_pkg.VoicePkgError:
+        pass
+    else:
+        raise AssertionError("an eu request must not be answered from the us cache")
