@@ -307,3 +307,60 @@ def test_flush_writes_pending_changes_and_a_new_store_reads_them(tmp_path: Path)
     store.flush()
 
     assert DeviceSnapshotStore(tmp_path).get(DUID)["status"]["battery"] == 8
+
+
+def test_an_entry_loaded_from_disk_is_offline_until_the_robot_speaks(tmp_path: Path) -> None:
+    first = _store(tmp_path)
+    first.mark_seen(DUID)
+    first.flush()
+
+    reopened = _store(tmp_path)
+    assert reopened.get(DUID)["offline_at"] == reopened.get(DUID)["last_seen_at"]
+    reopened.mark_seen(DUID)
+    assert reopened.get(DUID)["offline_at"] is None
+
+
+def test_seed_skips_mowers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = _seed_log(tmp_path, monkeypatch)
+    store = _store(tmp_path / "state")
+
+    store.seed_from_mqtt_jsonl(log, lambda did: DUID, lambda duid: True)
+
+    entry = store.get(DUID)
+    assert entry["last_seen_at"]
+    assert entry["status"] == {}
+
+
+def test_a_failed_write_keeps_the_change_dirty_for_the_next_flush(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = DeviceSnapshotStore(tmp_path, flush_interval_s=3600.0, map_interval_s=0.0)
+    monkeypatch.setattr(DeviceSnapshotStore, "_write", staticmethod(lambda path, content: False))
+    store.record_dps(DUID, json.dumps({"dps": {"122": 9}}))
+    store.flush()
+    assert DUID in store._dirty
+
+    monkeypatch.undo()
+    store.flush()
+    assert DeviceSnapshotStore(tmp_path).get(DUID)["status"]["battery"] == 9
+
+
+def test_concurrent_flushes_never_leave_older_content_on_disk(tmp_path: Path) -> None:
+    import threading
+
+    store = DeviceSnapshotStore(tmp_path, flush_interval_s=3600.0, map_interval_s=0.0)
+    stop = threading.Event()
+
+    def flusher() -> None:
+        while not stop.is_set():
+            store.flush()
+
+    threads = [threading.Thread(target=flusher) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for battery in range(1, 60):
+        store.record_dps(DUID, json.dumps({"dps": {"122": battery}}))
+    stop.set()
+    for thread in threads:
+        thread.join()
+    store.flush()
+
+    assert DeviceSnapshotStore(tmp_path).get(DUID)["status"]["battery"] == 59
