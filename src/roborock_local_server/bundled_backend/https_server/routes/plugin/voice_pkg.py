@@ -17,7 +17,7 @@ from typing import Any, TypeVar
 from urllib.parse import urlparse
 
 import aiohttp
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from shared.context import ServerContext
 
 VOICE_INFO_ROUTE_NAME = "voice_pkg_info"
@@ -208,6 +208,20 @@ def _write_atomic(path: Path, data: bytes) -> None:
     temp.replace(path)
 
 
+def _touch(path: Path) -> bool:
+    """Marks a cached file as just used; False when it is missing or was evicted."""
+    try:
+        os.utime(path)
+    except OSError:
+        return False
+    return True
+
+
+def _write_and_evict(path: Path, data: bytes) -> None:
+    _write_atomic(path, data)
+    _evict_old_packages(path.parent)
+
+
 def _evict_old_packages(cache_dir: Path) -> None:
     """Keeps the newest packages within the file and byte caps and drops stale temp files."""
     now = time.time()
@@ -274,8 +288,10 @@ async def _fetch_info(
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{host}: {exc}")
             continue
-        _write_atomic(
-            cache_file, json.dumps({"host": host, "info": info}).encode("utf-8")
+        await asyncio.to_thread(
+            _write_atomic,
+            cache_file,
+            json.dumps({"host": host, "info": info}).encode("utf-8"),
         )
         return host, info
     raise VoicePkgError(
@@ -309,7 +325,7 @@ async def _voice_info_response(
             lambda: _fetch_info(ctx, cache_file, upstream_path),
         )
     except VoicePkgError:
-        cached = _read_cached_info(cache_file)
+        cached = await asyncio.to_thread(_read_cached_info, cache_file)
         if cached is None:
             raise
         host, info = cached
@@ -329,15 +345,9 @@ async def _voice_file_response(
     source_url = f"https://{host}{path}"
     cache_file = _cache_dir(runtime_dir) / f"{_digest(source_url)}.pkg"
     headers = {"Cache-Control": "public, max-age=86400"}
-    try:
-        cached = cache_file.read_bytes()
-    except OSError:
-        cached = None  # missing or evicted while we looked: treat as a miss
-    if cached is not None:
-        with contextlib.suppress(OSError):
-            os.utime(cache_file)
-        return source_url, Response(
-            cached,
+    if await asyncio.to_thread(_touch, cache_file):
+        return source_url, FileResponse(
+            cache_file,
             media_type="application/octet-stream",
             headers={**headers, "X-RR-Voice-Cache": "hit"},
         )
@@ -346,8 +356,7 @@ async def _voice_file_response(
         data = await fetch_voice_bytes(
             source_url, max_bytes=VOICE_PKG_MAX_BYTES, timeout_s=120
         )
-        _write_atomic(cache_file, data)
-        _evict_old_packages(cache_file.parent)
+        await asyncio.to_thread(_write_and_evict, cache_file, data)
         return data
 
     try:

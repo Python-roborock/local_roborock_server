@@ -389,10 +389,11 @@ def test_v2_to_v5_model_strings_use_the_debug_path() -> None:
     assert voice_info_path_for_model("roborock.vacuum.zzzv2") == ""
 
 
-def test_cache_hit_that_vanishes_before_the_read_is_a_miss(
+def test_cache_hit_that_vanishes_before_it_is_served_is_a_miss(
     tmp_path: Path, monkeypatch
 ) -> None:
     import asyncio
+    import os
 
     from https_server.routes.plugin import voice_pkg
 
@@ -400,14 +401,19 @@ def test_cache_hit_that_vanishes_before_the_read_is_a_miss(
     _fake_fetch(monkeypatch, {source: b"fresh"})
     cache_dir = tmp_path / "voice_pkg_cache"
     cache_dir.mkdir()
-    real = Path.read_bytes
+    path = cache_dir / (
+        voice_pkg._digest("https://us-app.roborock.com/a/voice-pkg/package/en.pkg")
+        + ".pkg"
+    )
+    path.write_bytes(b"old")
+    real = os.utime
 
-    def vanishing(self: Path) -> bytes:
-        if self.suffix == ".pkg":
-            raise FileNotFoundError(str(self))
-        return real(self)
+    def vanishing(target, *args, **kwargs):
+        if str(target).endswith(".pkg"):
+            raise FileNotFoundError(str(target))
+        return real(target, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", vanishing)
+    monkeypatch.setattr(voice_pkg.os, "utime", vanishing)
     _, response = asyncio.run(
         voice_pkg._voice_file_response(
             tmp_path, "us-app.roborock.com", "/a/voice-pkg/package/en.pkg"
