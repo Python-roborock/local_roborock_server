@@ -401,7 +401,18 @@ class OtaInstaller:
         while firmware_versions.reported_version(store, duid) != version and time.monotonic() < deadline:
             await asyncio.sleep(REPORT_POLL_SECONDS)
 
-    async def _install(
+    async def _install(self, device: dict[str, str], package: dict[str, Any], *args: Any, **kwargs: Any) -> None:
+        """Runs the install; whatever goes wrong outside the watched part still ends as FAILED, never as a stale status."""
+        duid = device["duid"]
+        try:
+            await self._install_run(device, package, *args, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Firmware install on %s failed unexpectedly: %s", duid, exc)
+            reason = f"The install stopped unexpectedly: {exc}"
+            self.results[duid] = {"ran": False, "reason": reason}
+            self._set_live(duid, "FAILED", err_msg=reason, err_code=1)
+
+    async def _install_run(
         self, device: dict[str, str], package: dict[str, Any], version: str, model: str = "", previous: str = "",
         keep: set[str] | None = None,
     ) -> None:
@@ -417,9 +428,12 @@ class OtaInstaller:
         except Exception as exc:  # noqa: BLE001
             result = {"ran": False, "reason": str(exc)}
         finally:
-            await client.close()
             if isinstance(package.get("data"), Path):
                 release_package(package["data"].name)
+            try:
+                await client.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Closing the robot connection failed: %s", exc)
         failure = self._failure(result)
         if not failure:
             await self._wait_for_version(duid, version)

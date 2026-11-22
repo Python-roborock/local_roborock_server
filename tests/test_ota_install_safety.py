@@ -291,3 +291,27 @@ def test_a_redirect_loop_is_refused() -> None:
     session = _Session([_Reply(302, loop) for _ in range(10)])
     with pytest.raises(ota_dry_run.PackageRefused, match="too many"):
         asyncio.run(ota_dry_run._open(session, "GET", loop))
+
+
+def test_a_failure_outside_the_watched_part_still_ends_as_failed(tmp_path, monkeypatch) -> None:
+    supervisor, robot = _prepare(tmp_path, monkeypatch, ["idle", "downloading", "installing", None, "idle"])
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(supervisor.ota_installer, "_write_record", broken)
+    live = _run_install(supervisor)
+    assert live["status"] == "FAILED" and "disk full" in live["errMsg"]
+    assert not supervisor.ota_installer._busy()
+
+
+def test_a_close_that_raises_does_not_hide_the_result_and_releases_the_package(tmp_path, monkeypatch) -> None:
+    supervisor, robot = _prepare(tmp_path, monkeypatch, ["idle", "downloading", "installing", None, "idle"])
+
+    class ClosingBadly(_client_for(robot)):
+        async def close(self):
+            raise ConnectionError("already gone")
+
+    monkeypatch.setattr(ota_install, "_RoutineMqttClient", ClosingBadly)
+    assert _run_install(supervisor)["status"] == "IDLE"
+    assert ota_dry_run._PINNED == {}
