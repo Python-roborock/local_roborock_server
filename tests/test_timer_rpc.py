@@ -524,6 +524,49 @@ def test_a_pending_get_timer_is_cleared_once_the_robot_has_answered(ctx):
     assert interceptor.merge_response(DUID, _encode_robot_reply(65, [])) is None
 
 
+ROBOT_TIMER = ["legacy-1", "on", ["0 9 * * *", ["start_clean", {}]]]
+
+
+def _edit_legacy_timer(job_id="legacy-1"):
+    return [[job_id, ["30 7 * * 1,2", ["start_clean", {"fan_power": 102}]]]]
+
+
+def test_editing_a_timer_the_robot_listed_goes_to_the_robot(ctx):
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    interceptor(DUID, _encode_request("get_timer", [], request_id=66))
+    interceptor.merge_response(DUID, _encode_robot_reply(66, [ROBOT_TIMER]))
+
+    assert interceptor(DUID, _encode_request("set_timer", _edit_legacy_timer())) is None
+    assert all(str(j["id"]) != "legacy-1" for j in schedule_store.list_jobs(ctx, DUID))
+
+
+def test_a_new_timer_is_still_stored_after_the_robot_listed_others(ctx):
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    interceptor(DUID, _encode_request("get_timer", [], request_id=67))
+    interceptor.merge_response(DUID, _encode_robot_reply(67, [ROBOT_TIMER]))
+
+    assert interceptor(DUID, _encode_request("set_timer", _edit_legacy_timer("brand-new"))) is not None
+    assert any(str(j["id"]) == "brand-new" for j in schedule_store.list_jobs(ctx, DUID))
+
+
+def test_a_timer_the_store_owns_is_edited_in_the_store_even_if_the_robot_lists_it(ctx):
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    interceptor(DUID, _encode_request("get_timer", [], request_id=68))
+    interceptor.merge_response(DUID, _encode_robot_reply(68, [["3549431", "on", ["0 9 * * *", ["start_clean", {}]]]]))
+
+    assert interceptor(DUID, _encode_request("set_timer", _edit_legacy_timer("3549431"))) is not None
+
+
+def test_the_robots_timer_list_is_forgotten_when_its_next_reply_drops_a_timer(ctx):
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    interceptor(DUID, _encode_request("get_timer", [], request_id=69))
+    interceptor.merge_response(DUID, _encode_robot_reply(69, [ROBOT_TIMER]))
+    interceptor(DUID, _encode_request("get_timer", [], request_id=70))
+    interceptor.merge_response(DUID, _encode_robot_reply(70, []))
+
+    assert interceptor(DUID, _encode_request("set_timer", _edit_legacy_timer())) is not None
+
+
 def test_one_job_with_an_unreadable_cron_does_not_hide_the_other_timers(ctx):
     schedule_store.upsert_job(ctx, DUID, job_id="bad", cron="0 0 * * ABC", enabled=True)
     assert timer_rpc.device_cron("0 0 * * ABC") is None
