@@ -1104,4 +1104,7 @@ class MqttTlsProxy:
         if trace_thread is not None and trace_thread.is_alive():
             self._trace_queue.put(None)
             trace_thread.join(timeout=2.0)
+        # Updates traced while the worker drained its queue came after the caller's own flush.
+        if self.snapshot_store is not None:
+            self.snapshot_store.flush()
         self.logger.info("TLS MQTT proxy stopped")

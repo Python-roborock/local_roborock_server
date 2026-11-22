@@ -1760,6 +1760,24 @@ def test_b01_pushes_mark_the_robot_seen_but_do_not_fill_the_v1_status(tmp_path) 
     assert store.get("DUID1")["status"]["battery"] == 5
 
 
+def test_stop_flushes_updates_traced_while_the_worker_drains(tmp_path) -> None:
+    from roborock_local_server.bundled_backend.shared.device_snapshot_store import DeviceSnapshotStore
+
+    proxy, store = _snapshot_proxy(tmp_path)
+    store._flush_interval_s = 3600.0
+    store._last_flush = time.monotonic()
+    proxy._set_conn_device_topic("7", ROBOT_TOPIC)
+    proxy._trace_packet = lambda conn_id, direction, packet: proxy._observe_snapshot(  # type: ignore[method-assign]
+        conn_id, direction, ROBOT_TOPIC, 102, PUSH, packet
+    )
+    proxy._ensure_trace_worker()
+    proxy._trace_queue.put(("7", "c2b", b"queued"))
+
+    proxy.stop()
+
+    assert DeviceSnapshotStore(tmp_path).get("DUID1")["status"]["battery"] == 5
+
+
 def test_mower_pushes_do_not_fill_the_vacuum_status_fields(tmp_path) -> None:
     proxy, store = _snapshot_proxy(tmp_path)
     proxy.runtime_credentials = type(
