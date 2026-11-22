@@ -370,6 +370,14 @@ def test_the_same_version_written_differently_is_not_a_downgrade_or_another_vers
     assert "already runs" in asyncio.run(installer.start_version("robot", "02.35.52"))["reason"]
 
 
+def test_the_version_list_marks_the_running_version_whatever_its_spelling(tmp_path, monkeypatch) -> None:
+    supervisor, _ = catalog_supervisor(tmp_path, monkeypatch, reported="2.35.52", extra="allow_downgrade = true\n")
+    installer = supervisor.ota_installer
+    installer.catalog.add(MODEL, "02.35.52", source="cloud_offer", url=OLD_URL, md5=OLD_MD5)
+    rows = {row["version"]: row for row in installer.version_info("robot")["availableVersions"]}
+    assert rows["02.35.52"]["current"] is True and rows["02.35.52"]["installable"] is False
+
+
 def test_an_unparseable_version_needs_confirmation(tmp_path, monkeypatch) -> None:
     supervisor, _ = catalog_supervisor(tmp_path, monkeypatch, reported="custom-build", extra="allow_downgrade = true\n")
     installer = supervisor.ota_installer

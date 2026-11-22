@@ -214,7 +214,7 @@ class OtaInstaller:
         entry = self.catalog.entry(model, version)
         if entry is None:
             return {"started": False, "reason": f"{version} is not in the firmware catalog for {model}"}
-        if self._is_downgrade(version, reported) and not (confirm and confirm_version == version):
+        if self._is_downgrade(version, reported) and not (confirm and firmware_versions.same(confirm_version, version)):
             return {
                 "started": False, "needs_confirmation": True, "version": version,
                 "reason": f"{version} is older than the {reported} the robot runs; resend with confirm_downgrade true and version {version}",
@@ -264,14 +264,14 @@ class OtaInstaller:
         previous = str((self.catalog.robot(duid) or {}).get("previous_version") or "")
         info: dict[str, Any] = {"downgradeAllowed": allowed, "availableVersions": [
             {
-                "version": entry["version"], "current": entry["version"] == reported,
-                "installable": allowed and bool(entry.get("md5")) and entry["version"] != reported,
+                "version": entry["version"], "current": firmware_versions.same(entry["version"], reported),
+                "installable": allowed and bool(entry.get("md5")) and not firmware_versions.same(entry["version"], reported),
                 "firstSeen": entry.get("first_seen"), "size": entry.get("size"),
                 "released": entry.get("released"),
             }
             for entry in (self.catalog.versions(model) if model else [])
         ]}
-        if previous and previous != reported:
+        if previous and not firmware_versions.same(previous, reported):
             info["previousVersion"] = previous
         return info
 
@@ -289,7 +289,7 @@ class OtaInstaller:
         model = self.model_of(duid, vacuum)
         package: dict[str, Any] | None = None
         try:
-            before = await self._learn(duid, model, reported, SOURCE_ROBOT) if model and reported and reported != version else None
+            before = await self._learn(duid, model, reported, SOURCE_ROBOT) if model and reported and not firmware_versions.same(reported, version) else None
             keep = {f"{before['md5']}.pkg"} if self._keep_packages and before and before.get("md5") else set()
             package = await resolve(keep)
             data = package.get("data")
@@ -460,7 +460,7 @@ class OtaInstaller:
         else:
             self._set_live(duid, "FAILED", err_msg=failure, err_code=1)
         changed = bool(reported) and bool(previous) and not firmware_versions.same(reported or "", previous)
-        if model and previous and previous != version and result.get("ran") and (succeeded or changed):
+        if model and previous and not firmware_versions.same(previous, version) and result.get("ran") and (succeeded or changed):
             self.catalog.remember_install(duid, model, previous, version)
         if succeeded:
             # With keep_previous_package the packages before and after this install stay for a quick reinstall.
