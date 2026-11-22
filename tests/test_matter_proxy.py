@@ -251,3 +251,11 @@ def test_the_route_answers_429_after_too_many_requests(tmp_path, monkeypatch) ->
     client = TestClient(supervisor.app)
     codes = [client.get(PATH + "?did=ghost").status_code for _ in range(12)]
     assert codes[:10] == [403] * 10 and codes[10:] == [429, 429]
+
+
+def test_the_route_records_an_event_without_creating_a_robot_for_a_refused_id(tmp_path, monkeypatch) -> None:
+    supervisor = _supervisor(tmp_path, monkeypatch, True)
+    TestClient(supervisor.app).get(PATH + "?did=ghost&signature=QUERYSECRET")
+    events = [e for e in supervisor.runtime_state.recent_events() if e.get("route") == "matter_key_proxy"]
+    assert len(events) == 1 and events[0]["raw_path"] == PATH and events[0]["did"] is None
+    assert supervisor.runtime_state.vacuum_snapshot() == []
