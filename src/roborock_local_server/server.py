@@ -701,6 +701,9 @@ class ReleaseSupervisor:
             elif self._OTA_STATUS.match(clean_path):
                 route_name = "ota_firmware_status"
                 read = ("/ota/firmware/upgrade/status", {"duids": first("duids")})
+            elif (by_path := self._OTA_STATUS_PATH.match(clean_path)) is not None:
+                route_name = "ota_firmware_status"
+                read = (f"/ota/firmware/{by_path.group(1)}/upgrade/status", {})
         if read is not None:
             try:
                 result = await self.cloud_manager.iot_get(read[0], read[1])
@@ -1363,6 +1366,7 @@ class ReleaseSupervisor:
                     body_params=body_params,
                     headers=request.headers,
                     raw_body=raw_body,
+                    # Only the four read-only firmware GETs: the app resends them with one signature within milliseconds.
                     allow_replay=request.method == "GET" and self._is_firmware_read(clean_path),
                 )
             if not authenticated:

@@ -36,6 +36,7 @@ BUSY_REASON = "Another firmware install is already starting or running"
 # After the reboot the robot reports its version on its own; wait this long for the target version to show.
 REPORT_WAIT_SECONDS = 180
 REPORT_POLL_SECONDS = 3
+_RUNNING_STATES = ("START", "DOWNLOADING", "INSTALLING", "WAIT_INSTALL")
 
 
 class OtaInstaller:
@@ -48,6 +49,7 @@ class OtaInstaller:
         # What the official app reads while an install runs: the cloud knows nothing of a local install, so
         # the app's status polls are answered from here. The app treats IDLE as success and an error as failure.
         self._live: dict[str, dict[str, Any]] = {}
+        self._live_loaded = False
         self._catalog: FirmwareCatalog | None = None
         self._lookups: dict[tuple[str, str], asyncio.Task[Any]] = {}
         self.scan = FirmwareScan()
@@ -304,9 +306,41 @@ class OtaInstaller:
     LIVE_SECONDS = 1800
 
     def _set_live(self, duid: str, status: str, progress: str = "", err_msg: str = "", err_code: int = 0) -> None:
+        self._load_live()
         self._live[duid] = {
-            "status": status, "progress": progress, "errCode": err_code, "errMsg": err_msg, "at": time.monotonic(),
+            "status": status, "progress": progress, "errCode": err_code, "errMsg": err_msg, "at": time.monotonic(), "wall": time.time(),
         }
+        self._save_live()
+
+    @property
+    def _live_path(self) -> Path:
+        return self._supervisor.paths.runtime_dir / "ota_live.json"
+
+    def _save_live(self) -> None:
+        try:
+            self._live_path.parent.mkdir(parents=True, exist_ok=True)
+            partial = self._live_path.with_name(self._live_path.name + ".tmp")
+            partial.write_text(json.dumps(self._live), encoding="utf-8")
+            partial.replace(self._live_path)
+        except OSError as exc:
+            logger.warning("Could not save the firmware install status: %s", exc)
+
+    def _load_live(self) -> None:
+        """Restores the status of the last installs after a restart. One that was still running is marked failed, since
+        the app reads a missing status as done and this server no longer watches the robot."""
+        if self._live_loaded:
+            return
+        self._live_loaded = True
+        try:
+            saved = json.loads(self._live_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        for duid, entry in (saved.items() if isinstance(saved, dict) else ()):
+            if not isinstance(entry, dict) or not isinstance(entry.get("wall"), (int, float)):
+                continue
+            if entry.get("status") in _RUNNING_STATES:
+                entry = {**entry, "status": "FAILED", "errCode": 1, "errMsg": "The server restarted during the install; check the robot's firmware version"}
+            self._live.setdefault(duid, {**entry, "at": time.monotonic() - max(0.0, time.time() - entry["wall"])})
 
     def _robot_state(self, duid: str, state: Any, progress: Any) -> None:
         """Mirrors the robot's own OTA state. A robot that is idle or silent keeps its last status; IDLE and FAILED
@@ -315,6 +349,7 @@ class OtaInstaller:
         if status is None:
             return
         text = "" if progress is None else str(progress)
+        self._load_live()
         previous = self._live.get(duid)
         if status == "INSTALLING":
             # The robot reports no progress of its own while installing (its query answers 0 even though its
@@ -340,10 +375,11 @@ class OtaInstaller:
 
     def live_status(self, duid: str) -> dict[str, Any] | None:
         """The status for the app's poll, or None when no local install ran in the last half hour."""
+        self._load_live()
         entry = self._live.get(duid)
         if entry is None or time.monotonic() - entry["at"] > self.LIVE_SECONDS:
             return None
-        return {key: value for key, value in entry.items() if key != "at"}
+        return {key: value for key, value in entry.items() if key not in ("at", "wall")}
 
     @staticmethod
     def _failure(result: dict[str, Any]) -> str:
