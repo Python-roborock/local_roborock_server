@@ -11,17 +11,34 @@ restoration, daily reset, and recovery. The server provides the underlying APIs.
 | Operation | Behavior in this branch |
 | --- | --- |
 | GET `/user/devices/{duid}/jobs` | Stored jobs with calculated UTC `nextFireTime` for enabled, valid jobs |
-| POST to the collection | Persist a new job with a unique numeric ID |
-| PUT/PATCH `/user/devices/{duid}/jobs/{id}` | Verify native enablement when supplied, then save; preserve omitted fields and unknown model fields |
-| DELETE an item | Remove the stored job and its occurrence record |
+| POST to the collection | Persist a new job with a unique numeric ID; `result` is that ID as a string |
+| PUT/PATCH `/user/devices/{duid}/jobs/{id}` | Verify native enablement when supplied, then save; preserve omitted fields and unknown model fields; `result` is `"done"` |
+| DELETE an item | Remove the stored job and its occurrence record; `result` is `"done"` |
 | `get/set/upd/del_server_timer` | Forward unchanged to the robot, which owns these timer entries |
-| Legacy `get/set/upd/del_timer` | Local compatibility view for jobs without a native timer name |
+| Legacy `get/set/upd/del_timer` | `set_timer` and the `upd_timer`/`del_timer` of a stored job are answered from the store. `get_timer` goes to the robot and the store's jobs are added to its reply. Anything about a timer the store does not hold, and patrol timers, go to the robot |
 | Native scheduled execution | Verify the robot timer is on, then send `server_scheduled_start` with the complete settings entry |
 
 A job's numeric `id` is different from the robot timer's string ID in
 `param.params[0].name`. Imported or previously unsynchronized jobs can disagree with the native timer.
 The server now reconciles enablement and still checks both before execution.
 Native jobs are not duplicated in the legacy `get_timer` view; clients must read the jobs API to list native-linked jobs.
+
+The write calls (POST, PUT, DELETE) answer with a plain string in `result` because the
+app's `IotApi` declares them as `ApiReturn<String>`; only GET returns the job list. The
+exact strings the Roborock cloud sends are not captured here, so this shape is not
+verified against the real service.
+
+`set_timer` is accepted in the official app's layout, `[[id, [cron, ["start_clean", {...}]]]]`
+with no status element (such a timer starts enabled), as well as the layouts that carry
+`"on"`/`"off"`. A patrol timer (`app_start_patrol`) is forwarded to the robot, because the
+server cannot start a patrol. If the store cannot save a `set_timer` or `upd_timer`, the
+client gets an error and the request is not forwarded to the robot.
+
+Robots do not all list their native timers the same way. Most answer `get_server_timer`
+with `[name, "on"|"off", ...]`. An S6 MaxV (`roborock.vacuum.a10`, 02.62.46) answers
+`["Y <name> 1 1 <cron> app_start", 0]` for an on timer and `["Y ...", "off", 0]` for an off
+one, and its `upd_server_timer` needs that whole string, not the bare name. Both layouts are
+read, and the whole string is sent back when the robot listed it that way.
 
 Time updates accept the existing-job JSON PUT used by Homebridge, without
 requiring `id` or `nextFireTime` in the body. If `param` is supplied, it replaces
@@ -41,7 +58,10 @@ an `ok` is not used as proof of the final state. No client-specific HTTP write i
 required after a native toggle.
 
 A background read also runs at startup and approximately every 30 seconds to
-recover missed traffic, reconnects, and changes made directly over the LAN.
+recover missed traffic, reconnects, and changes made directly over the LAN. It reuses
+one connection per robot and only reads robots that have a native-linked job. A robot
+that cannot be read is tried again after 30 seconds, then 1, 2, 4 and up to 10 minutes;
+a forwarded native write still triggers a read at once.
 Successful reconciliation changes only `enabled` on existing, uniquely matched
 jobs. It preserves IDs, cron/timezone, settings, unknown fields, and occurrence
 claims. The dashboard's normal refresh shows the updated saved state. Other
@@ -80,6 +100,23 @@ inventory lock does not coordinate multiple containers or external file editors.
 Cloud re-import replaces schedule definitions, so back up local edits before
 refreshing. Occurrence claims are retained across that refresh.
 
+## Missed runs
+
+The scheduler only starts a job for an occurrence that falls inside the last tick, plus up
+to 60 seconds of lateness. There is no catch-up:
+
+- The first tick after startup only sets a baseline. A job due while the server was stopped,
+  restarting, or suspended is lost, and so is one due during an event-loop stall longer than
+  60 seconds.
+- An occurrence is consumed as soon as it is claimed, before anything is sent. If the robot
+  is offline or does not answer, if its linked native timer is off, missing or ambiguous, if
+  another routine or schedule is running on that robot, or if the 60 second dispatch window
+  has passed by the time the robot has answered, that occurrence is skipped and is not
+  retried later.
+- A recurring job stays enabled and runs at its next occurrence.
+- A one-time job (`repeated` false) is disabled when its occurrence is claimed, whether or not
+  the clean then started. It does not run again, even after a failure.
+
 A fresh native timer read must find exactly one matching `on` entry. Off, missing,
 ambiguous, malformed, or unreachable timer state prevents a start. After that
 network wait, dispatch rechecks the stored job and its deadline, so a concurrent
@@ -100,7 +137,7 @@ path; they do not establish native timer support on other firmware.
   first occurrence of an ambiguous fall-back time. Automated tests cover this
   policy; matching cloud behavior has not been established.
 - One-time jobs are consumed when evaluated as due, including when dispatch
-  subsequently fails. Expired imported one-time jobs and extended downtime need
+  subsequently fails (see Missed runs). Expired imported one-time jobs and extended downtime need
   further investigation: a five-field cron has no year and can match again in a
   later year. Begin hardware testing with recurring jobs.
 - Test create/edit/delete through the actual app, disabled/missing native timers,
