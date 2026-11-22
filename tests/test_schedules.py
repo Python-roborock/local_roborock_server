@@ -191,6 +191,11 @@ def _jobs_client(tmp_path: Path, device_id: str, schedules: list[dict[str, objec
     return TestClient(supervisor.app), paths
 
 
+def _stored_job(paths, device_id: str, job_id) -> dict[str, object]:
+    jobs = json.loads(paths.inventory_path.read_text(encoding="utf-8"))["schedules"][device_id]
+    return next(job for job in jobs if str(job["id"]) == str(job_id))
+
+
 def _signed_json(paths, path: str, body: dict[str, object]) -> tuple[bytes, dict[str, str]]:
     raw = json.dumps(body, separators=(",", ":")).encode()
     user = ProtocolAuthStore(paths.cloud_snapshot_path).availability().user
@@ -226,7 +231,9 @@ def test_jobs_can_be_created_updated_and_deleted_over_http(tmp_path: Path) -> No
     created = client.post(collection, content=body, headers=headers)
     assert created.status_code == 200
     assert created.json()["success"] is True
-    new_id = created.json()["result"]["id"]
+    # IotApi declares the write calls as ApiReturn<String>, so the result is a plain string.
+    assert isinstance(created.json()["result"], str)
+    new_id = int(created.json()["result"])
 
     listed = client.get(collection, headers=_hawk_headers(paths.cloud_snapshot_path, collection)).json()["result"]
     assert {job["id"] for job in listed} == {3549431, new_id}
@@ -236,13 +243,15 @@ def test_jobs_can_be_created_updated_and_deleted_over_http(tmp_path: Path) -> No
     body, headers = _signed_json(paths, item, {"cron": "15 9 ? * 1,3,5", "enabled": False})
     updated = client.put(item, content=body, headers=headers)
     assert updated.status_code == 200
-    result = updated.json()["result"]
+    assert updated.json()["result"] == "done"
+    result = _stored_job(paths, device_id, 3549431)
     assert (result["cron"], result["enabled"]) == ("15 9 ? * 1,3,5", False)
     # Vac/mop settings are untouched by a cron/enabled edit.
     assert result["param"]["params"][0]["mop_mode"] == 300
 
     deleted = client.delete(item, headers=_hawk_headers(paths.cloud_snapshot_path, item))
     assert deleted.status_code == 200 and deleted.json()["success"] is True
+    assert deleted.json()["result"] == "done"
     user = ProtocolAuthStore(paths.cloud_snapshot_path).availability().user
     assert user is not None
     second_list = {"Authorization": build_hawk_authorization(user=user, path=collection, nonce="second-list")}
@@ -333,7 +342,8 @@ def test_direct_http_enablement_updates_robot_then_store_for_any_client(tmp_path
         raw, headers = _signed_json(paths, item, {"enabled": enabled})
         result = client.put(item, content=raw, headers=headers).json()
         assert result["success"] is True
-        assert result["result"] == {**original, "enabled": enabled}
+        assert result["result"] == "done"
+        assert _stored_job(paths, "robot-test", 42001) == {**original, "enabled": enabled}
         assert native_robot.timers[0][1] == ("on" if enabled else "off")
         assert native_robot.calls[-2:] == [
             ("upd_server_timer", [["1800000000001", "on" if enabled else "off"]]),
@@ -388,7 +398,8 @@ def test_put_replaces_param_exactly_when_app_removes_optional_fields(tmp_path):
     param["params"][0]["segments"] = "0"
     item = "/user/devices/robot-test/jobs/42001"
     raw, headers = _signed_json(paths, item, {"param": param, "modelOption": {"mode": 5}})
-    result = client.put(item, content=raw, headers=headers).json()["result"]
+    assert client.put(item, content=raw, headers=headers).json()["result"] == "done"
+    result = _stored_job(paths, "robot-test", 42001)
     assert result["param"] == param
     assert result["modelOption"] == {"mode": 5}
     assert result["cron"] == original["cron"]
@@ -413,7 +424,7 @@ def test_creates_in_same_millisecond_get_distinct_ids_and_explicit_collision_is_
     ids = []
     for _ in range(2):
         raw, headers = _signed_json(paths, collection, {"cron": "0 9 * * *"})
-        ids.append(client.post(collection, content=raw, headers=headers).json()["result"]["id"])
+        ids.append(int(client.post(collection, content=raw, headers=headers).json()["result"]))
     assert len(set(ids)) == 2
     raw, headers = _signed_json(paths, collection, {"id": ids[0], "cron": "0 10 * * *"})
     result = client.post(collection, content=raw, headers=headers).json()
@@ -430,3 +441,23 @@ def test_http_schedule_write_failure_is_not_acknowledged_as_success(tmp_path, mo
     result = client.put(item, content=raw, headers=headers).json()
     assert result["success"] is False and result["code"] == 500
     assert paths.inventory_path.read_bytes() == before
+
+
+def test_write_calls_answer_with_a_string_result_like_iotapi_declares(tmp_path: Path) -> None:
+    device_id = "6HL2zfniaoYYV01CkVuhkO"
+    client, paths = _jobs_client(tmp_path, device_id, [])
+    collection = f"/user/devices/{device_id}/jobs"
+    body, headers = _signed_json(paths, collection, {"cron": "30 7 * * 1,2", "enabled": True})
+    created = client.post(collection, content=body, headers=headers).json()
+    assert isinstance(created["result"], str) and created["result"].isdigit()
+
+    item = f"{collection}/{created['result']}"
+    body, headers = _signed_json(paths, item, {"enabled": False})
+    updated = client.put(item, content=body, headers=headers).json()
+    deleted = client.delete(item, headers=_hawk_headers(paths.cloud_snapshot_path, item)).json()
+    assert updated["success"] is True and updated["result"] == "done"
+    assert deleted["success"] is True and deleted["result"] == "done"
+
+    body, headers = _signed_json(paths, collection, {"cron": "not a cron"})
+    refused = client.post(collection, content=body, headers=headers).json()
+    assert refused["success"] is False and refused["result"] is None

@@ -15,6 +15,8 @@ from shared.native_schedule_sync import TimerSyncError, sync_timer
 
 from .service import device_jobs_payload
 
+# IotApi declares POST/PUT/DELETE as ApiReturn<String>: a JSON object in `result` fails to parse in the app.
+WRITE_DONE = "done"
 _COLLECTION_RE = re.compile(r"/user/devices/([^/]+)/jobs")
 _ITEM_RE = re.compile(r"/user/devices/([^/]+)/jobs/([^/]+)")
 
@@ -99,7 +101,7 @@ def build_create(
         return _error(409, str(exc))
     except OSError:
         return _error(500, "unable to persist schedule")
-    return wrap_response(created)
+    return wrap_response(str(created["id"]))
 
 
 def match_update(path: str, method: str = "GET") -> bool:
@@ -141,7 +143,8 @@ def _prepare_update(ctx, duid, job_id, body_params):
 
 def _save_update(ctx, duid, values):
     try:
-        return wrap_response(upsert_job(ctx, duid, **values))
+        upsert_job(ctx, duid, **values)
+        return wrap_response(WRITE_DONE)
     except ValueError as exc:
         return _error(409, str(exc))
     except OSError:
@@ -211,4 +214,4 @@ def build_delete(
             return _error(404, "schedule not found")
     except OSError:
         return _error(500, "unable to persist schedule")
-    return wrap_response({"id": job_id})
+    return wrap_response(WRITE_DONE)
