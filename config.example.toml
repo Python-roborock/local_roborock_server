@@ -76,5 +76,6 @@ realm = "api-roborock.example.com"
 ttl = 86400
 
 # Forwards a robot's Matter key request to Roborock's cloud (see docs/matter.md).
+# When true, the robot's id, its signature and its request headers are sent to Roborock, along with this server's IP.
 [matter]
 key_proxy = false

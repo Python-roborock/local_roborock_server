@@ -16,8 +16,7 @@ to the camera (see [Camera](camera.md)).
    `vac.example.com`. Without it the robot cannot connect, and its Matter status goes from `KeyDownloading` to
    `KeyDownloadFailure` within seconds without a single request reaching the server.
 2. **Make sure the certificate covers that name.** A wildcard for the base domain does.
-3. **Let the server forward the request to Roborock.** It is off by default, because it passes the robot's own
-   request, with its own headers, to Roborock:
+3. **Let the server forward the request to Roborock.** It is off by default, because it sends data to Roborock:
 
 ```toml
 [matter]
@@ -25,9 +24,32 @@ key_proxy = true
 ```
 
 or `ROBOROCK_SERVER_MATTER_KEY_PROXY=true`, which wins when it is set. The request goes to the regional cloud host
-(`https://<region>iot.roborock.com/fwapi/matter/key`, region from `network.region`) and the answer goes back to the
-robot unchanged. The server logs the header and query names it forwarded and the answer's status and size, never the
-values and never the key.
+(`https://<region>iot.roborock.com/fwapi/matter/key`, with `network.region` one of `us`, `eu`, `cn` or `ru`) and the
+answer goes back to the robot unchanged.
+
+### What is sent to Roborock
+
+The robot's own request, as it arrived: its query string (which may name the robot by `did` or `duid` and carry
+its signature) and its headers, minus hop-by-hop and proxy headers (`Host`, `Connection`, `Cookie`,
+`X-Forwarded-*`, `Forwarded`, `Via` and similar). Roborock also sees this server's public IP address. Nothing from
+the app account, the admin password or other robots is added.
+
+### What is checked first
+
+The route is open to anything that can reach the server, so it only forwards a request when it names a paired robot
+(a `did` or `duid` in the query that this server knows) or, when it names none, when it comes from the address of a
+robot that has connected to this server. Anything else gets 403, and a malformed or oversized query gets 400. The
+destination host and path are fixed, so this is never a general proxy. The address check is the weaker of the two:
+a request without a robot id from a machine at a robot's address passes it.
+
+### What is logged
+
+The shared request log (`http_jsonl`) normally stores every header and query value. For this route it keeps only the
+header and query names, the path without its query string, the response status and size, and the robot id if the
+request carried one. The console log has the same names and the answer's status and size. The key itself is never
+logged. Two things outside this route still see the robot's signed query: the device key cache, which stores signed
+queries for key recovery as for any robot request, and the request log of a server that has the proxy switched off,
+which treats the request like any other unknown path.
 
 Without the proxy, the robot's request reaches the catch-all route and the robot reports `KeyCorrupt`, because it got
 something that is not a key.
