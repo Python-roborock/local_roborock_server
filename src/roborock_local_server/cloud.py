@@ -244,7 +244,9 @@ class CloudImportManager:
         with self._snapshot_lock:
             snapshot = self._read_snapshot()
             current = snapshot.get("user_data")
-            if not isinstance(current, dict) or current.get("token") != user_data.token:
+            if not isinstance(current, dict) or not current.get("token"):
+                raise ValueError("The stored cloud login is missing or unreadable. Request a code and sign in again.")
+            if current.get("token") != user_data.token:
                 raise ValueError("A new sign-in finished while the refresh ran. Run the refresh again.")
             web_cache = snapshot.get("web_api_cache")
             if not isinstance(web_cache, dict):

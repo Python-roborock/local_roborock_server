@@ -414,6 +414,21 @@ def test_refresh_plugin_catalogs_does_not_revert_a_sign_in_that_finished_meanwhi
     assert stored["meta"]["source"] == "new"
 
 
+def test_refresh_plugin_catalogs_reports_a_snapshot_that_vanished_meanwhile(tmp_path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    _write_snapshot(manager)
+
+    async def slow_catalogs(api, user_data, home_data):
+        manager.snapshot_path.write_text("{ not json", encoding="utf-8")
+        return _NEW_CATALOGS
+
+    _patch_plugin_fetch(monkeypatch, _NEW_CATALOGS)
+    monkeypatch.setattr(cloud_module, "_fetch_plugin_catalogs", slow_catalogs)
+
+    with pytest.raises(ValueError, match="missing or unreadable"):
+        asyncio.run(manager.refresh_plugin_catalogs())
+
+
 def test_refresh_plugin_catalogs_keeps_other_snapshot_changes_made_meanwhile(tmp_path, monkeypatch) -> None:
     manager = _make_manager(tmp_path)
     _write_snapshot(manager)
