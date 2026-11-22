@@ -26,7 +26,7 @@ class FakeRobot:
         if method == "miIO.ota":
             if self.fetch:
                 path = "/" + params["app_url"].split("/", 3)[3]
-                self.fetched = self.dry_run.file_response(path, "GET", {"user-agent": "robot/1"}, "10.0.0.5")
+                self.fetched = self.dry_run.file_response(path, "GET", {"user-agent": "robot/1"}, "192.0.2.5")
             return ["ok"]
         raise AssertionError(method)
 

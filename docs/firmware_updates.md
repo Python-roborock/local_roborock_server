@@ -68,7 +68,8 @@ With it on, pressing Update in the official app (`POST /ota/device/<duid>/upgrad
 
 Package addresses are only accepted on Roborock's package hosts (`rrpkg-us.roborock.com`, `files.roborock.com`,
 `app-files.roborock.com`, `cn-app.roborock.com`, `us-app.roborock.com` and the `cdn.*.fds.api.mi-img.com` hosts of
-the app's regions) over https; any other address is refused. The package cache is shared by all robots, and a package
+the app's regions) over https; any other address is refused. The address must use the default port, carry no user name, and have its checksum in
+the path (not a query string). Redirects are followed by hand and every target must pass the same check. The package cache is shared by all robots, and a package
 a robot is downloading or installing is never removed by another robot's clean-up.
 
 The `latest-stable` upgrade call is still refused, and the Update button only installs the version the cloud offers.
@@ -113,7 +114,11 @@ cloud is therefore asked for THIS robot's package of the version every time, and
 - the cloud gives this robot no package of that version,
 - the checksum differs from the catalog's (another variant or region), or
 - the package's hardware folder (the `a245` of `.../rriotpkg/a245/...`) differs from the one of the package the robot
-  runs now, when both addresses have one.
+  runs now, when both addresses have one, or
+- the address of the package the robot runs now is not known at all (nothing to compare with).
+
+Versions are compared by their numbers, so `2.35.52` and `02.35.52` are the same version everywhere (the downgrade
+decision, the "already runs" check and the success check).
 
 Going to an older version also needs a confirmation in the request, so a stray call cannot downgrade a robot.
 
@@ -188,7 +193,8 @@ app treats an error from that poll as a failed update, and polls it whenever the
 quiet for 90 seconds, which the reboot does. While an install runs, the server therefore answers that poll itself
 with the robot's real state: `DOWNLOADING`, `INSTALLING` or `WAIT_INSTALL` with the progress, `IDLE` only once the
 robot has rebooted and is idle again (the app reads `IDLE` as success), and `FAILED` with the reason when the install
-did not finish. The answer is kept for 30 minutes and saved to `runtime/ota_live.json`, so it survives a restart of
+did not finish. The answer is kept for 30 minutes (an install that was still running when its status stopped updating then reads as
+`FAILED`, never as done) and saved to `runtime/ota_live.json`, so it survives a restart of
 the server. An install that was still running at the restart is then answered as `FAILED` ("The server restarted
 during the install"), because the server no longer watches the robot and the app would read a missing status as
 success. The robot may still finish the update on its own; check the version it reports. The path-form poll
