@@ -567,6 +567,26 @@ def test_the_robots_timer_list_is_forgotten_when_its_next_reply_drops_a_timer(ct
     assert interceptor(DUID, _encode_request("set_timer", _edit_legacy_timer())) is not None
 
 
+def test_positional_start_clean_action_carries_fan_power_and_segments(ctx):
+    params = [["pos-1", ["0 9 * * *", ["start_clean", 104, "16,17"]]]]
+    assert timer_rpc.handle_timer_request(ctx, DUID, "set_timer", params) == ["ok"]
+    entry = _job(ctx, "pos-1")["param"]["params"][0]
+    assert (entry["fan_power"], entry["segments"]) == (104, "16,17")
+
+
+def test_positional_start_clean_without_segments_keeps_the_default_rooms(ctx):
+    timer_rpc.handle_timer_request(ctx, DUID, "set_timer", [["pos-2", ["0 9 * * *", ["start_clean", 102]]]])
+    entry = _job(ctx, "pos-2")["param"]["params"][0]
+    assert (entry["fan_power"], entry["segments"]) == (102, "0")
+
+
+@pytest.mark.parametrize("action", [["start_clean", 102, "0", 0], ["start_clean", [1]], ["start_clean", None]])
+def test_positional_start_clean_the_store_cannot_place_goes_to_the_robot(ctx, action):
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    assert interceptor(DUID, _encode_request("set_timer", [["pos-3", ["0 9 * * *", action]]])) is None
+    assert all(str(j["id"]) != "pos-3" for j in schedule_store.list_jobs(ctx, DUID))
+
+
 def test_one_job_with_an_unreadable_cron_does_not_hide_the_other_timers(ctx):
     schedule_store.upsert_job(ctx, DUID, job_id="bad", cron="0 0 * * ABC", enabled=True)
     assert timer_rpc.device_cron("0 0 * * ABC") is None

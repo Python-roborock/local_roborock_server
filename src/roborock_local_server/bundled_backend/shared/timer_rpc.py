@@ -124,9 +124,23 @@ def _parse_set_timer(params: Any) -> _SetTimer:
     action = detail[1] if len(detail) > 1 else None
     action_name = str(action[0]) if isinstance(action, list) and action else ""
     settings = action[1] if isinstance(action, list) and len(action) > 1 and isinstance(action[1], dict) else {}
+    if action_name == "start_clean" and len(action) > 1 and not isinstance(action[1], dict):
+        settings = _positional_settings(action)
     # A timer written without a status starts on, as the official app's own timers do.
     enabled = True if status is None else str(status).lower() == "on"
     return _SetTimer(job_id, enabled, str(detail[0]), settings, action_name)
+
+
+def _positional_settings(action: list[Any]) -> dict[str, Any]:
+    # Robots without order-segment clean get ["start_clean", fan_power, segments(, map_id)] from the app.
+    fan_power, rest = action[1], action[2:]
+    if len(rest) > 1 or isinstance(fan_power, (bool, list, dict)) or fan_power is None:
+        # A map id (multi-map timers) or an unknown shape: the store cannot place it, so the robot answers.
+        raise ForwardToRobot("positional start_clean the store cannot place")
+    settings: dict[str, Any] = {"fan_power": fan_power}
+    if rest:
+        settings["segments"] = rest[0]
+    return settings
 
 
 def _id_and_status(params: Any) -> tuple[str, str]:
