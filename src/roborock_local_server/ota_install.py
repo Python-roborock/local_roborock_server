@@ -180,8 +180,7 @@ class OtaInstaller:
 
     async def start_version(self, duid: str, version: str = "", confirm: bool = False, confirm_version: str = "") -> dict[str, Any]:
         """Installs a catalog version other than the robot's current one (older ones included), by default the one
-        it ran before its last install. Proven on one Qrevo Curv 2 Flow only, so it needs its own opt-in; an older
-        version also needs the request to confirm it by name ([confirm] and [confirm_version] equal to the target)."""
+        it ran before its last install. Opt-in; an older version also needs [confirm] and [confirm_version] naming it."""
         if not self.other_versions_allowed:
             return {"started": False, "reason": "Installing another firmware version is off ([ota] enable_install and allow_downgrade)"}
         if self._busy():
@@ -328,8 +327,7 @@ class OtaInstaller:
             logger.warning("Could not save the firmware install status: %s", exc)
 
     def _load_live(self) -> None:
-        """Restores the status of the last installs after a restart. One that was still running is marked failed, since
-        the app reads a missing status as done and this server no longer watches the robot."""
+        """Restores the saved statuses after a restart; one still running becomes FAILED, as nothing watches it now."""
         if self._live_loaded:
             return
         self._live_loaded = True
@@ -338,11 +336,15 @@ class OtaInstaller:
         except (OSError, ValueError):
             return
         for duid, entry in (saved.items() if isinstance(saved, dict) else ()):
-            if not isinstance(entry, dict) or not isinstance(entry.get("wall"), (int, float)):
+            if not isinstance(entry, dict) or not isinstance(entry.get("wall"), (int, float)) or not isinstance(entry.get("status"), str):
                 continue
-            if entry.get("status") in _RUNNING_STATES:
-                entry = {**entry, "status": "FAILED", "errCode": 1, "errMsg": "The server restarted during the install; check the robot's firmware version"}
-            self._live.setdefault(duid, {**entry, "at": time.monotonic() - max(0.0, time.time() - entry["wall"])})
+            kept = {
+                "status": entry["status"], "progress": str(entry.get("progress") or ""), "errCode": int(entry.get("errCode") or 0),
+                "errMsg": str(entry.get("errMsg") or ""), "wall": entry["wall"],
+            }
+            if kept["status"] in _RUNNING_STATES:
+                kept.update(status="FAILED", errCode=1, errMsg="The server restarted during the install; check the robot's firmware version")
+            self._live.setdefault(duid, {**kept, "at": time.monotonic() - max(0.0, time.time() - entry["wall"])})
 
     def _robot_state(self, duid: str, state: Any, progress: Any) -> None:
         """Mirrors the robot's own OTA state. A robot that is idle or silent keeps its last status; IDLE and FAILED
@@ -357,7 +359,7 @@ class OtaInstaller:
             # The robot reports no progress of its own while installing (its query answers 0 even though its
             # messages said 100 at the end of the download), so keep the download's last number.
             text = "100"
-        elif previous is not None and previous["status"] == status and previous["progress"] not in ("", "0"):
+        elif previous is not None and previous.get("status") == status and previous.get("progress") not in (None, "", "0"):
             # The robot sometimes does not answer the progress query, or answers 0; keep the last real number
             # so the app's percentage does not fall back to 0 and climb again.
             if text in ("", "0"):
@@ -379,8 +381,13 @@ class OtaInstaller:
         """The status for the app's poll, or None when no local install ran in the last half hour."""
         self._load_live()
         entry = self._live.get(duid)
-        if entry is None or time.monotonic() - entry["at"] > self.LIVE_SECONDS:
+        if entry is None:
             return None
+        if time.monotonic() - entry["at"] > self.LIVE_SECONDS:
+            if entry["status"] not in _RUNNING_STATES:
+                return None
+            # The app reads a missing status as done, so an install that went silent must not look finished.
+            return {"status": "FAILED", "progress": entry["progress"], "errCode": 1, "errMsg": "The install status stopped updating; check the robot's firmware version"}
         return {key: value for key, value in entry.items() if key not in ("at", "wall")}
 
     @staticmethod
