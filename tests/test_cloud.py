@@ -379,7 +379,9 @@ def test_refresh_plugin_catalogs_keeps_stored_entries_that_failed_this_time(tmp_
     assert result["appplugin_ios"]["plugins"][0]["url"] == "https://files.roborock.com/ios.zip"
     assert "error" not in result["appplugin_ios"]
     stored = json.loads(manager.snapshot_path.read_text(encoding="utf-8"))["web_api_cache"]["plugin_catalogs"]
-    assert stored["appplugin_ios"] == stored_ios
+    assert stored["appplugin_ios"] == {"fetched_at_utc": "old", **stored_ios}
+    assert result["appplugin_ios"]["fetched_at_utc"] == "old"
+    assert "fetched_at_utc" not in result["appplugin"]
     assert stored["appplugin"]["data"][0]["version"] == 7006
 
 

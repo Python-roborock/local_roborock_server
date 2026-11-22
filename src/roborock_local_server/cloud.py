@@ -48,6 +48,8 @@ def summarize_plugin_catalogs(catalogs: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(catalog, dict):
             continue
         entry: dict[str, Any] = {"params": catalog.get("params") or catalog.get("json") or {}}
+        if catalog.get("fetched_at_utc"):
+            entry["fetched_at_utc"] = catalog["fetched_at_utc"]
         if "error" in catalog:
             entry["error"] = catalog["error"]
         data = catalog.get("data")
@@ -87,6 +89,8 @@ def _merge_plugin_catalogs(stored: dict[str, Any], fresh: dict[str, Any]) -> tup
         failed = isinstance(entry, dict) and "error" in entry
         if failed and isinstance(previous, dict) and "error" not in previous:
             kept.append(name)
+            # Stamp the kept entry with its real age so the new top-level stamp does not make it look fresh.
+            merged[name] = {"fetched_at_utc": stored.get("fetched_at_utc"), **previous}
             continue
         merged[name] = entry
     return merged, kept
