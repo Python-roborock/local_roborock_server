@@ -15,7 +15,7 @@ Per robot, in `device_snapshots/` under the data directory (it survives a restar
 
 It is fed from the MQTT proxy: status pushes (`dps` 120, 121 and 122), the answers to `get_status` and
 `get_room_mapping`, and the `get_map_v1` reply, which is decrypted with the nonce of the request that asked for
-it. Mower pushes are skipped, since their `dps` 121 and 122 are not state and battery, and B01 robots (Q7, Q10) are not read at all: they only get the last-seen and offline times. On startup the store is seeded from the existing MQTT log, so a freshly updated server does not begin empty.
+it. Mower pushes are skipped, since their `dps` 121 and 122 are not state and battery, and B01 robots (Q7, Q10) are not read for state: they only get the last-seen and offline times, because their `dps` keys mean something else. On startup the store is seeded from the existing MQTT log, so a freshly updated server does not begin empty.
 
 ## Reading it
 

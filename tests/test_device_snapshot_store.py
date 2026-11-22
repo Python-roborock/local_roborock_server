@@ -331,6 +331,20 @@ def test_seed_skips_mowers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert entry["status"] == {}
 
 
+def test_seed_ignores_the_state_of_b01_robots(tmp_path: Path) -> None:
+    robot = "rr/d/i/did-test-1/abc"
+    status = {"protocol_value": 102, "version": "B01", "payload_utf8": '{"dps":{"121":8,"122":50}}'}
+    log = tmp_path / "decoded.jsonl"
+    log.write_text(_log_line("2026-10-22T00:33:57+00:00", "c2b", robot, status), encoding="utf-8")
+    store = _store(tmp_path / "state")
+
+    store.seed_from_mqtt_jsonl(log, lambda did: DUID)
+
+    entry = store.get(DUID)
+    assert entry["last_seen_at"] == "2026-10-22T00:33:57+00:00"
+    assert entry["status"] == {}
+
+
 def test_a_failed_write_keeps_the_change_dirty_for_the_next_flush(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = DeviceSnapshotStore(tmp_path, flush_interval_s=3600.0, map_interval_s=0.0)
     monkeypatch.setattr(DeviceSnapshotStore, "_write", staticmethod(lambda path, content: False))
