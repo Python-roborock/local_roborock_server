@@ -364,6 +364,108 @@ def test_refresh_plugin_catalogs_reports_a_rejected_login(tmp_path, monkeypatch)
         asyncio.run(manager.refresh_plugin_catalogs())
 
 
+def test_refresh_plugin_catalogs_keeps_stored_entries_that_failed_this_time(tmp_path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    stored_ios = {"path": "/ios", "json": {"type": 1}, "data": [{"productid": 110, "version": 1, "url": "https://files.roborock.com/ios.zip"}]}
+    _write_snapshot(manager, web_api_cache={"plugin_catalogs": {"fetched_at_utc": "old", "appplugin_ios": stored_ios}})
+    partial = dict(_NEW_CATALOGS, appplugin_ios={"path": "/ios", "error": "No product ids available"})
+    _patch_plugin_fetch(monkeypatch, partial)
+
+    result = asyncio.run(manager.refresh_plugin_catalogs())
+
+    assert result["kept_previous"] == ["appplugin_ios"]
+    assert result["appplugin_ios"]["plugins"][0]["url"] == "https://files.roborock.com/ios.zip"
+    assert "error" not in result["appplugin_ios"]
+    stored = json.loads(manager.snapshot_path.read_text(encoding="utf-8"))["web_api_cache"]["plugin_catalogs"]
+    assert stored["appplugin_ios"] == stored_ios
+    assert stored["appplugin"]["data"][0]["version"] == 7006
+
+
+def test_refresh_plugin_catalogs_stores_an_error_entry_when_nothing_good_was_stored(tmp_path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    _write_snapshot(manager)
+    partial = dict(_NEW_CATALOGS, appplugin_ios={"path": "/ios", "error": "No product ids available"})
+    _patch_plugin_fetch(monkeypatch, partial)
+
+    result = asyncio.run(manager.refresh_plugin_catalogs())
+
+    assert "kept_previous" not in result
+    assert result["appplugin_ios"]["error"] == "No product ids available"
+
+
+def test_refresh_plugin_catalogs_does_not_revert_a_sign_in_that_finished_meanwhile(tmp_path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    _write_snapshot(manager)
+
+    async def slow_catalogs(api, user_data, home_data):
+        # A sign-in lands while the cloud request is in flight.
+        _write_snapshot(manager, user_data=dict(_STORED_USER_DATA, token="new-token"), meta={"username": "user@example.com", "source": "new"})
+        return _NEW_CATALOGS
+
+    _patch_plugin_fetch(monkeypatch, _NEW_CATALOGS)
+    monkeypatch.setattr(cloud_module, "_fetch_plugin_catalogs", slow_catalogs)
+
+    with pytest.raises(ValueError, match="new sign-in finished"):
+        asyncio.run(manager.refresh_plugin_catalogs())
+    stored = json.loads(manager.snapshot_path.read_text(encoding="utf-8"))
+    assert stored["user_data"]["token"] == "new-token"
+    assert stored["meta"]["source"] == "new"
+
+
+def test_refresh_plugin_catalogs_keeps_other_snapshot_changes_made_meanwhile(tmp_path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    _write_snapshot(manager)
+
+    async def slow_catalogs(api, user_data, home_data):
+        _write_snapshot(manager, web_api_cache={"rooms": [9], "plugin_catalogs": {"fetched_at_utc": "old"}})
+        return _NEW_CATALOGS
+
+    _patch_plugin_fetch(monkeypatch, _NEW_CATALOGS)
+    monkeypatch.setattr(cloud_module, "_fetch_plugin_catalogs", slow_catalogs)
+
+    asyncio.run(manager.refresh_plugin_catalogs())
+
+    stored = json.loads(manager.snapshot_path.read_text(encoding="utf-8"))
+    assert stored["web_api_cache"]["rooms"] == [9]
+    assert stored["web_api_cache"]["plugin_catalogs"]["appplugin"]["data"][0]["version"] == 7006
+
+
+def test_snapshot_writes_go_through_the_atomic_writer(tmp_path, monkeypatch) -> None:
+    written: list[Path] = []
+    real = cloud_module.atomic_write_inventory
+
+    def spy(path, data):
+        written.append(path)
+        real(path, data)
+
+    monkeypatch.setattr(cloud_module, "atomic_write_inventory", spy)
+    manager = _make_manager(tmp_path)
+    _write_snapshot(manager)
+    _patch_plugin_fetch(monkeypatch, _NEW_CATALOGS)
+    asyncio.run(manager.refresh_plugin_catalogs())
+    _patch_backend_calls(monkeypatch)
+    request_result = asyncio.run(manager.request_code(email="user@example.com"))
+    asyncio.run(manager.submit_code(session_id=request_result["session_id"], code="123456"))
+
+    assert written.count(manager.snapshot_path) == 2
+    assert not list(manager.snapshot_path.parent.glob(".*.tmp"))
+
+
+def test_refresh_plugin_catalogs_leaves_the_snapshot_intact_when_the_write_fails(tmp_path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    _write_snapshot(manager)
+    before = manager.snapshot_path.read_text(encoding="utf-8")
+    _patch_plugin_fetch(monkeypatch, _NEW_CATALOGS)
+
+    def boom(path, data):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cloud_module, "atomic_write_inventory", boom)
+    with pytest.raises(OSError):
+        asyncio.run(manager.refresh_plugin_catalogs())
+    assert manager.snapshot_path.read_text(encoding="utf-8") == before
+
+
 def test_submit_code_stores_the_device_identifier(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cloud_module, "RoborockApiClient", _FakeRoborockApiClientV4)
     _patch_backend_calls(monkeypatch)
@@ -374,3 +476,4 @@ def test_submit_code_stores_the_device_identifier(tmp_path, monkeypatch) -> None
 
     stored = json.loads(manager.snapshot_path.read_text(encoding="utf-8"))
     assert stored["meta"]["device_identifier"] == _fake_client_instances[0]._device_identifier
+

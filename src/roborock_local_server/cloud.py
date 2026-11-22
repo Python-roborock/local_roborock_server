@@ -70,6 +70,20 @@ def _to_jsonable(value: Any) -> Any:
     return str(value)
 
 
+def _merge_plugin_catalogs(stored: dict[str, Any], fresh: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Catalog by catalog: a fresh entry with an error never replaces a stored one that has none."""
+    merged = dict(stored)
+    kept: list[str] = []
+    for name, entry in fresh.items():
+        previous = stored.get(name)
+        failed = isinstance(entry, dict) and "error" in entry
+        if failed and isinstance(previous, dict) and "error" not in previous:
+            kept.append(name)
+            continue
+        merged[name] = entry
+    return merged, kept
+
+
 @dataclass
 class PendingCloudSession:
     session_id: str
@@ -91,6 +105,7 @@ class CloudImportManager:
         self.ttl_seconds = ttl_seconds
         self._sessions: dict[str, PendingCloudSession] = {}
         self._lock = threading.Lock()
+        self._snapshot_lock = threading.Lock()
 
     def _cleanup_locked(self) -> None:
         now = time.time()
@@ -197,13 +212,26 @@ class CloudImportManager:
             errors = "; ".join(str(catalogs[name]["error"]) for name in failed)
             raise ValueError(f"The cloud returned no plugin catalogs ({errors}). Request a code and sign in again.")
 
-        web_cache = snapshot.get("web_api_cache")
-        if not isinstance(web_cache, dict):
-            web_cache = {}
-            snapshot["web_api_cache"] = web_cache
-        web_cache["plugin_catalogs"] = _to_jsonable(catalogs)
-        self.snapshot_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
-        return {"success": True, "step": "plugins_refreshed", **summarize_plugin_catalogs(catalogs)}
+        fresh = _to_jsonable(catalogs)
+        # The cloud wait is over; re-read under the lock so a sign-in that finished meanwhile is not reverted.
+        with self._snapshot_lock:
+            snapshot = self._read_snapshot()
+            current = snapshot.get("user_data")
+            if not isinstance(current, dict) or current.get("token") != user_data.token:
+                raise ValueError("A new sign-in finished while the refresh ran. Run the refresh again.")
+            web_cache = snapshot.get("web_api_cache")
+            if not isinstance(web_cache, dict):
+                web_cache = {}
+                snapshot["web_api_cache"] = web_cache
+            stored = web_cache.get("plugin_catalogs")
+            stored = stored if isinstance(stored, dict) else {}
+            merged, kept = _merge_plugin_catalogs(stored, fresh)
+            web_cache["plugin_catalogs"] = merged
+            atomic_write_inventory(self.snapshot_path, snapshot)
+        result = {"success": True, "step": "plugins_refreshed", **summarize_plugin_catalogs(merged)}
+        if kept:
+            result["kept_previous"] = kept
+        return result
 
     async def submit_code(self, *, session_id: str, code: str) -> dict[str, Any]:
         normalized_session_id = session_id.strip()
@@ -275,7 +303,8 @@ class CloudImportManager:
             )
 
             atomic_write_inventory(self.inventory_path, normalized_inventory)
-        self.snapshot_path.write_text(json.dumps(normalized_snapshot, indent=2) + "\n", encoding="utf-8")
+        with self._snapshot_lock:
+            atomic_write_inventory(self.snapshot_path, normalized_snapshot)
 
         with self._lock:
             self._sessions.pop(normalized_session_id, None)
