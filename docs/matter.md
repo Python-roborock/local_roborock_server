@@ -38,8 +38,11 @@ the app account, the admin password or other robots is added.
 
 The route is open to anything that can reach the server, so it only forwards a request when it names a paired robot
 (a `did` or `duid` in the query that this server knows) or, when it names none, when it comes from the address of a
-robot that has connected to this server. Anything else gets 403, and a malformed or oversized query gets 400. The
-destination host and path are fixed, so this is never a general proxy. The address check is the weaker of the two:
+robot that has connected to this server. Anything else gets 403, and a malformed or oversized query gets 400. Each
+client address may make 10 requests a minute to this route (429 beyond that, refused requests counted), so a known
+id cannot be used to make the server send requests to Roborock in bulk. The query is forwarded exactly as the robot
+sent it, without re-encoding, because the signature covers it. The destination host and path are fixed, so this is
+never a general proxy. The address check is the weaker of the two:
 a request without a robot id from a machine at a robot's address passes it.
 
 ### What is logged
