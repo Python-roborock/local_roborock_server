@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from shared.constants import MODEL_PRODUCT_ID_OVERRIDES
@@ -11,12 +12,74 @@ from ..plugin.common import snapshot_plugin_catalog_data
 from ..user.homes.service import home_payload
 from .card_spec import card_spec_for_category
 
+# Fallback for products the cloud snapshot does not list. Values as the cloud
+# sends them for a vacuum (a307): forceShow gates the scene tiles,
+# requirePlugin/pluginLevel are only read when a scene entry opens the device
+# plugin.
+_FALLBACK_SCENE_TAG: dict[str, Any] = {
+    "name": "scene_2.0",
+    "requirePlugin": True,
+    "pluginLevel": 3000,
+    "forceShow": True,
+}
+# Only vacuums get the fallback tag: the tiles also need the category card
+# spec, which we only have for vacuums, and the tag values were only seen on
+# a vacuum. Mowers, washers etc. get it only when the cloud sends it.
+_FALLBACK_SCENE_TAG_CATEGORIES = frozenset({"robot.vacuum.cleaner"})
+
+
+def _cloud_card_spec(value: Any) -> str | None:
+    """The category's cloud ``cardspec`` as the app reads it, or None if empty."""
+    if isinstance(value, str):
+        return value if value.strip() else None
+    if isinstance(value, dict) and value:
+        wrapped = value if set(value) == {"data"} else {"data": value}
+        return json.dumps(wrapped, ensure_ascii=False, separators=(",", ":"))
+    return None
+
+
+def _cloud_product_details(
+    cloud_products: Any,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, str]]:
+    """Map model -> productTags and category code -> cardspec from a cloud
+    /api/v5/product payload (the snapshot taken at import)."""
+    tags_by_model: dict[str, list[dict[str, Any]]] = {}
+    card_specs: dict[str, str] = {}
+    category_details = cloud_products.get("categoryDetailList") if isinstance(cloud_products, dict) else None
+    for category_detail in category_details or []:
+        if not isinstance(category_detail, dict):
+            continue
+        category = category_detail.get("category")
+        if isinstance(category, dict):
+            code = str(category.get("code") or "").strip()
+            card_spec = _cloud_card_spec(category.get("cardspec"))
+            if code and card_spec is not None:
+                card_specs.setdefault(code, card_spec)
+        for product in category_detail.get("productList") or []:
+            if not isinstance(product, dict):
+                continue
+            model = str(product.get("model") or "").strip().lower()
+            tags = product.get("productTags")
+            if model and isinstance(tags, list):
+                tags_by_model[model] = [dict(tag) for tag in tags if isinstance(tag, dict)]
+    return tags_by_model, card_specs
+
+
+def _fallback_product_tags(category_name: str) -> list[dict[str, Any]]:
+    if category_name in _FALLBACK_SCENE_TAG_CATEGORIES:
+        return [dict(_FALLBACK_SCENE_TAG)]
+    return []
+
 
 def build_product_response(ctx: ServerContext) -> dict[str, Any]:
     home_data = home_payload(ctx)
     products_value = home_data.get("products")
     products = products_value if isinstance(products_value, list) else []
-    cloud_product_ids = model_product_ids(snapshot_plugin_catalog_data(ctx, "product"))
+    cloud_products = snapshot_plugin_catalog_data(ctx, "product")
+    cloud_product_ids = model_product_ids(cloud_products)
+    # The cloud's own productTags and category cardspec (22 languages) win;
+    # the built-in values are only a fallback.
+    cloud_product_tags, cloud_card_specs = _cloud_product_details(cloud_products)
     categories: dict[str, dict[str, Any]] = {}
     for product in products:
         if not isinstance(product, dict):
@@ -33,7 +96,7 @@ def build_product_response(ctx: ServerContext) -> dict[str, Any]:
                 "displayName": category_name,
                 "iconUrl": "",
             }
-            card_spec = card_spec_for_category(category_name)
+            card_spec = cloud_card_specs.get(category_name) or card_spec_for_category(category_name)
             if card_spec is not None:
                 # Required for the scene tiles. Like the cloud, a JSON string
                 # with the spec wrapped in {"data": ...}.
@@ -68,17 +131,12 @@ def build_product_response(ctx: ServerContext) -> dict[str, Any]:
             "agreements": [],
             # ProductEntity.sceneProduct() looks up the "scene_2.0" tag; without
             # it the scene tiles stay hidden. The app builds productTagsMap from
-            # this list itself. Values as sent by the cloud: forceShow gates the
-            # tiles, requirePlugin/pluginLevel are only read when a scene entry
-            # opens the device plugin.
-            "productTags": [
-                {
-                    "name": "scene_2.0",
-                    "requirePlugin": True,
-                    "pluginLevel": 3000,
-                    "forceShow": True,
-                }
-            ],
+            # this list itself.
+            "productTags": (
+                cloud_product_tags[model_key]
+                if model_key in cloud_product_tags
+                else _fallback_product_tags(category_name)
+            ),
         }
         icon_url = product.get("iconUrl")
         if isinstance(icon_url, str) and icon_url:

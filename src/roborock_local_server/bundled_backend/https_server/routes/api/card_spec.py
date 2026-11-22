@@ -10,8 +10,9 @@ The vacuum spec follows the cloud's /api/v5/product answer (EU, Nov 2026) and
 the template bundled with the app (assets/cardSpec/robot.vacuum.cleaner.json).
 The state and offline codes that only the bundled template has are kept.
 
-Labels are English only. The cloud and the bundled template carry more than
-20 languages.
+This spec is only the fallback: when the cloud snapshot taken at import holds
+the category's own ``cardspec`` (all 22 languages), product_service sends that
+instead. The labels here are English only.
 """
 
 from __future__ import annotations

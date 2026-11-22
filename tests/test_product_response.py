@@ -148,6 +148,7 @@ def _labels(data_point: dict) -> dict[int, str]:
 
 
 def test_product_entry_enables_scene_tiles(tmp_path: Path) -> None:
+    # No cloud snapshot: the built-in fallback values.
     data = _products_v5(tmp_path, [_DEVICE])
 
     category_detail = data["categoryDetailList"][0]
@@ -228,3 +229,133 @@ def test_unknown_category_has_no_card_spec(tmp_path: Path) -> None:
     assert category["displayName"] == "other.category"
     assert "cardSpec" not in category
     assert "cardspec" not in category
+
+
+def _write_cloud_product_snapshot(tmp_path: Path, category_details: list[dict]) -> None:
+    snapshot = {"web_api_cache": {"plugin_catalogs": {"product": {"data": {"categoryDetailList": category_details}}}}}
+    (tmp_path / "web_api_inventory_full_snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+
+# Shape of the cloud's /api/v5/product answer: cardspec is a JSON string with
+# the spec in {"data": ...}, the labels in many languages.
+_CLOUD_VACUUM_SPEC = {
+    "state": {
+        "dps": 121,
+        "desc": {"en": "State", "de": "Status", "fr": "État"},
+        "value": [{"desc": {"en": "Charging", "de": "Wird geladen", "fr": "En charge"}, "value": [8]}],
+    },
+    "battery": {"dps": 122},
+}
+_CLOUD_VACUUM_CARD_SPEC = json.dumps({"data": _CLOUD_VACUUM_SPEC}, ensure_ascii=False)
+_CLOUD_SCENE_TAG = {"name": "scene_2.0", "requirePlugin": False, "pluginLevel": 1234, "forceShow": True}
+_CLOUD_OTHER_TAG = {"name": "other_tag", "requirePlugin": False, "pluginLevel": 0, "forceShow": False}
+
+
+def test_cloud_snapshot_product_tags_and_card_spec_win(tmp_path: Path) -> None:
+    _write_cloud_product_snapshot(
+        tmp_path,
+        [
+            {
+                "category": {"id": 7, "code": "robot.vacuum.cleaner", "cardspec": _CLOUD_VACUUM_CARD_SPEC},
+                "productList": [
+                    {"id": 101, "model": "roborock.vacuum.a15", "productTags": [_CLOUD_SCENE_TAG, _CLOUD_OTHER_TAG]}
+                ],
+            }
+        ],
+    )
+
+    data = _products_v5(tmp_path, [_DEVICE])
+
+    category_detail = data["categoryDetailList"][0]
+    [product] = category_detail["productList"]
+    # The cloud's tags are passed through unchanged, not the built-in values.
+    assert product["productTags"] == [_CLOUD_SCENE_TAG, _CLOUD_OTHER_TAG]
+    # The cloud's card spec string is passed through as is, all languages included.
+    card_spec = category_detail["category"]["cardspec"]
+    assert card_spec == _CLOUD_VACUUM_CARD_SPEC
+    charging = json.loads(card_spec)["data"]["state"]["value"][0]["desc"]
+    assert charging == {"en": "Charging", "de": "Wird geladen", "fr": "En charge"}
+
+
+def test_cloud_snapshot_without_scene_tag_is_respected(tmp_path: Path) -> None:
+    # The cloud lists the model but sends no scene_2.0 tag: none is added.
+    _write_cloud_product_snapshot(
+        tmp_path,
+        [
+            {
+                "category": {"id": 7, "code": "robot.vacuum.cleaner", "cardspec": _CLOUD_VACUUM_CARD_SPEC},
+                "productList": [{"id": 101, "model": "roborock.vacuum.a15", "productTags": []}],
+            }
+        ],
+    )
+
+    data = _products_v5(tmp_path, [_DEVICE])
+
+    [product] = data["categoryDetailList"][0]["productList"]
+    assert product["productTags"] == []
+
+
+def test_model_missing_from_cloud_snapshot_uses_fallback(tmp_path: Path) -> None:
+    # Snapshot without an entry for this model and with an empty category
+    # cardspec (some bundles default it to ''): built-in values as fallback.
+    _write_cloud_product_snapshot(
+        tmp_path,
+        [
+            {
+                "category": {"id": 7, "code": "robot.vacuum.cleaner", "cardspec": ""},
+                "productList": [{"id": 199, "model": "roborock.vacuum.a226", "productTags": [_CLOUD_OTHER_TAG]}],
+            }
+        ],
+    )
+
+    data = _products_v5(tmp_path, [_DEVICE])
+
+    category_detail = data["categoryDetailList"][0]
+    [product] = category_detail["productList"]
+    assert product["productTags"] == [
+        {"name": "scene_2.0", "requirePlugin": True, "pluginLevel": 3000, "forceShow": True}
+    ]
+    card_spec = json.loads(category_detail["category"]["cardspec"])["data"]
+    assert card_spec["state"]["dps"] == 121
+    assert _labels(card_spec["state"])[8] == "Charging"
+
+
+_MOWER = dict(
+    _DEVICE,
+    duid="device-m",
+    name="Mower",
+    model="roborock.mower.m1",
+    product_id="iot-product-m",
+    category="roborock.mower",
+)
+
+
+def test_non_vacuum_category_gets_no_fallback_scene_tag(tmp_path: Path) -> None:
+    data = _products_v5(tmp_path, [_DEVICE, _MOWER])
+
+    by_category = {entry["category"]["code"]: entry for entry in data["categoryDetailList"]}
+    [vacuum] = by_category["robot.vacuum.cleaner"]["productList"]
+    [mower] = by_category["roborock.mower"]["productList"]
+    assert [tag["name"] for tag in vacuum["productTags"]] == ["scene_2.0"]
+    assert mower["productTags"] == []
+    assert "cardspec" not in by_category["roborock.mower"]["category"]
+
+
+def test_non_vacuum_category_takes_scene_tag_and_card_spec_from_cloud(tmp_path: Path) -> None:
+    mower_spec = json.dumps({"data": {"state": {"dps": 201, "desc": {"en": "State"}, "value": []}}})
+    _write_cloud_product_snapshot(
+        tmp_path,
+        [
+            {
+                "category": {"id": 9, "code": "roborock.mower", "cardspec": mower_spec},
+                "productList": [{"id": 301, "model": "roborock.mower.m1", "productTags": [_CLOUD_SCENE_TAG]}],
+            }
+        ],
+    )
+
+    data = _products_v5(tmp_path, [_MOWER])
+
+    category_detail = data["categoryDetailList"][0]
+    [mower] = category_detail["productList"]
+    assert mower["productTags"] == [_CLOUD_SCENE_TAG]
+    assert category_detail["category"]["cardspec"] == mower_spec
