@@ -2107,6 +2107,8 @@ class ReleaseSupervisor:
             self.runtime_state.set_service("mqtt_tls_proxy", running=False, required=True, enabled=True)
             self._mqtt_proxy.stop()
             self._mqtt_proxy = None
+        if self.context.snapshot_store is not None:
+            self.context.snapshot_store.flush()
         if self._topic_bridge is not None:
             self.runtime_state.set_service(
                 "mqtt_topic_bridge",
