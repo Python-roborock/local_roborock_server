@@ -79,6 +79,24 @@ def test_tanos_and_tanose_use_the_legacy_layout() -> None:
         )
 
 
+def test_inherited_configs_use_their_parents_bucket() -> None:
+    from https_server.routes.plugin.voice_pkg import voice_info_path_for_model
+
+    expected = {
+        "a325": "pearle",
+        "a182": "vivian",
+        "a243": "vivian",
+        "a250": "vivian",
+        "a216": "viviansc",
+        "a360": "tanosslite",
+    }
+    for short, bucket in expected.items():
+        assert (
+            voice_info_path_for_model(f"roborock.vacuum.{short}")
+            == f"/app/{bucket}/voice-pkg/info"
+        )
+
+
 def test_info_is_fetched_from_the_region_host_and_urls_point_at_this_server(
     tmp_path: Path, monkeypatch
 ) -> None:
