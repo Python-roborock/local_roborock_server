@@ -305,11 +305,15 @@ async def _voice_file_response(
     source_url = f"https://{host}{path}"
     cache_file = _cache_dir(runtime_dir) / f"{_digest(source_url)}.pkg"
     headers = {"Cache-Control": "public, max-age=86400"}
-    if cache_file.exists():
+    try:
+        cached = cache_file.read_bytes()
+    except OSError:
+        cached = None  # missing or evicted while we looked: treat as a miss
+    if cached is not None:
         with contextlib.suppress(OSError):
             os.utime(cache_file)
         return source_url, Response(
-            cache_file.read_bytes(),
+            cached,
             media_type="application/octet-stream",
             headers={**headers, "X-RR-Voice-Cache": "hit"},
         )

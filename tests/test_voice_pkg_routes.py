@@ -373,3 +373,31 @@ def test_package_cache_keeps_only_the_newest_files(tmp_path: Path, monkeypatch) 
         "4.pkg",
         "info-x.json",
     ]
+
+
+def test_cache_hit_that_vanishes_before_the_read_is_a_miss(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import asyncio
+
+    from https_server.routes.plugin import voice_pkg
+
+    source = "https://us-app.roborock.com/a/voice-pkg/package/en.pkg"
+    _fake_fetch(monkeypatch, {source: b"fresh"})
+    cache_dir = tmp_path / "voice_pkg_cache"
+    cache_dir.mkdir()
+    real = Path.read_bytes
+
+    def vanishing(self: Path) -> bytes:
+        if self.suffix == ".pkg":
+            raise FileNotFoundError(str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", vanishing)
+    _, response = asyncio.run(
+        voice_pkg._voice_file_response(
+            tmp_path, "us-app.roborock.com", "/a/voice-pkg/package/en.pkg"
+        )
+    )
+    assert response.body == b"fresh"
+    assert response.headers["X-RR-Voice-Cache"] == "miss"
