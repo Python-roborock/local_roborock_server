@@ -1729,6 +1729,30 @@ def test_closing_an_old_connection_does_not_mark_a_reconnected_robot_offline(tmp
     assert store.get("DUID1")["offline_at"]
 
 
+def test_a_robot_logging_in_with_its_own_credentials_is_online_before_it_publishes(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+    proxy.runtime_credentials = type(
+        "Creds", (), {"resolve_device_by_mqtt_username": lambda self, name: {"did": "did-test-1", "duid": "DUID1"}}
+    )()
+    store.mark_seen("DUID1")
+    store.mark_offline("DUID1")
+
+    proxy._bind_authenticated_device_topic("5", "device_mqtt_user", "abc")
+
+    assert store.get("DUID1")["offline_at"] is None
+    assert proxy._conn_duids["5"] == {"DUID1"}
+    proxy._forget_conn_trace_state("5")
+    assert store.get("DUID1")["offline_at"]
+
+
+def test_an_app_login_is_not_marked_as_a_robot_coming_online(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+
+    proxy._bind_authenticated_device_topic("5", "app_user", "abc")
+
+    assert store.get("DUID1") is None
+
+
 def test_queued_packets_of_a_closed_connection_cannot_clear_its_offline_mark(tmp_path) -> None:
     from roborock_local_server.bundled_backend.mqtt_tls_proxy_server import server as proxy_module
 

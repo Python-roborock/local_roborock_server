@@ -160,6 +160,20 @@ class MqttTlsProxy:
         did = str((device or {}).get("did") or "").strip()
         if did:
             self._set_conn_device_topic(conn_id, f"rr/d/i/{did}/{normalized_username}")
+            # Logging in with its own credentials means the robot is back, even before it publishes.
+            duid = str((device or {}).get("duid") or "").strip()
+            if duid and self.snapshot_store is not None:
+                try:
+                    self._note_robot_online(conn_id, duid)
+                except Exception:
+                    self.logger.exception("[conn %s] marking the robot online failed", conn_id)
+
+    def _note_robot_online(self, conn_id: str, duid: str) -> None:
+        with self._lock:
+            self._conn_duids.setdefault(conn_id, set()).add(duid)
+            self._duid_conn[duid] = conn_id
+        if self.snapshot_store is not None:
+            self.snapshot_store.mark_seen(duid)
 
     @staticmethod
     def _decode_remaining_length(data: bytes, start: int) -> tuple[int | None, int]:
@@ -638,10 +652,7 @@ class MqttTlsProxy:
             # App and bootstrap logins can publish on any topic; only the vacuum's own login speaks for it.
             if direction != "c2b" or topic != self._get_conn_device_topic(conn_id):
                 return
-            with self._lock:
-                self._conn_duids.setdefault(conn_id, set()).add(duid)
-                self._duid_conn[duid] = conn_id
-            self.snapshot_store.mark_seen(duid)
+            self._note_robot_online(conn_id, duid)
             # B01 robots (Q7, Q10) use other dps keys; their 121 is not the V1 state.
             if decoded_entry.get("version") == "B01":
                 return
