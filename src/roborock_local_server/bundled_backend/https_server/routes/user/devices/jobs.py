@@ -5,11 +5,10 @@ import re
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from shared.constants import DEFAULT_TIMEZONE
 from shared.context import ServerContext
 from shared.data_helpers import as_bool
 from shared.http_helpers import wrap_response
-from shared.schedule_runner import parse_cron
+from shared.schedule_runner import parse_cron, server_timezone
 from shared.schedule_store import SettingsError, delete_job, list_jobs, native_timer_name, upsert_job
 from shared.native_schedule_sync import TimerSyncError, sync_timer
 
@@ -84,7 +83,7 @@ def build_create(
         body = _json_body(body_params)
         cron = str(body.get("cron") or "").strip()
         parse_cron(cron)
-        zone = _validate_zone(body.get("timeZoneId", getattr(ctx, "timezone", "") or DEFAULT_TIMEZONE))
+        zone = _validate_zone(body.get("timeZoneId", getattr(ctx, "timezone", "") or server_timezone(ctx)))
     except ValueError as exc:
         return _error(400, str(exc))
     param = _parse_param(body.get("param"))

@@ -15,8 +15,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from roborock.protocol import create_mqtt_decoder, create_mqtt_encoder
 from roborock.roborock_message import RoborockMessage, RoborockMessageProtocol
 
-from .constants import DEFAULT_TIMEZONE
-from .schedule_runner import CronError, parse_cron
+from .schedule_runner import CronError, parse_cron, server_timezone
 from .schedule_store import (
     JOB_SETTING_KEYS,
     SettingsError,
@@ -177,7 +176,7 @@ def handle_timer_request(
                 param = merge_job_settings(existing.get("param") if existing else None, settings)
             except SettingsError as exc:
                 raise TimerRequestError(str(exc)) from exc
-        zone = str(getattr(ctx, "timezone", "") or default_timezone or DEFAULT_TIMEZONE)
+        zone = str(getattr(ctx, "timezone", "") or default_timezone or server_timezone(ctx))
         upsert_job(ctx, duid, job_id=job_id, cron=cron, enabled=enabled, time_zone=zone, param=param)
         return list(_OK)
 

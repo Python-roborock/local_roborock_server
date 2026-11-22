@@ -11,7 +11,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .constants import DEFAULT_TIMEZONE
+from . import data_helpers
 from .data_helpers import as_bool
 from .inventory_io import CachedInventory, load_inventory  # noqa: F401  (load_inventory stays importable from here)
 from .routine_runner import (
@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from .context import ServerContext
 
 _LOGGER = logging.getLogger(__name__)
+
+_LAST_RESORT_ZONE = "America/New_York"
 
 TICK_SECONDS = 20
 MAX_LATENESS_SECONDS = 60
@@ -162,9 +164,16 @@ def next_fire(spec: CronSpec, after: datetime) -> datetime | None:
     return None
 
 
+def server_timezone(ctx: Any) -> str:
+    """The server's zone: network.timezone, else the region's; works with or without data_helpers.default_timezone."""
+    region_default = getattr(data_helpers, "default_timezone", None)
+    if region_default is not None:
+        return str(region_default(ctx))
+    return str(getattr(ctx, "timezone", "") or "").strip() or _LAST_RESORT_ZONE
+
+
 def _zone(name: str, fallback: str) -> tzinfo:
-    # DEFAULT_TIMEZONE is what /location tells the robot when none is configured.
-    candidate = str(name or fallback or DEFAULT_TIMEZONE).strip()
+    candidate = str(name or fallback or _LAST_RESORT_ZONE).strip()
     return ZoneInfo(candidate)
 
 
@@ -271,7 +280,7 @@ def next_fire_time_utc(job: dict[str, Any], *, default_timezone: str = "", now: 
 class ScheduleRunner:
     def __init__(self, context: ServerContext, *, default_timezone: str = "") -> None:
         self._context = context
-        self._default_timezone = default_timezone
+        self._default_timezone = default_timezone or server_timezone(context)
         self._last_tick: datetime | None = None
         self._inventory = CachedInventory(context)
         self._logger = context.loggers.get("api") or context.loggers.get("unknown") or _LOGGER
