@@ -1273,7 +1273,15 @@ class ReleaseSupervisor:
                 return JSONResponse(response_payload, status_code=status_code)
 
         if self.config.matter.key_proxy and matter_proxy.matches(clean_path, request.method):
-            proxied = await matter_proxy.forward(request, self.config.network.region)
+            matter_proxy.redact_log_entry(entry)
+            if not matter_proxy.query_is_acceptable(query_params, request.url.query):
+                proxied: Response = Response(content=b"", status_code=400)
+            elif not matter_proxy.known_device(
+                self.runtime_state.vacuum_snapshot(), query_params, request.client.host if request.client else ""
+            ):
+                proxied = Response(content=b"", status_code=403)
+            else:
+                proxied = await matter_proxy.forward(request, self.config.network.region)
             entry["route"] = "matter_key_proxy"
             entry["response_meta"] = {"status_code": proxied.status_code, "bytes": len(proxied.body)}
             append_jsonl(self.context.http_jsonl, entry)

@@ -8,18 +8,34 @@ own request, with its own headers, to Roborock.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+from typing import Any
 
+import aiohttp
 from fastapi import Request
 from fastapi.responses import Response
 
 logger = logging.getLogger("real_stack.api")
 
 _PATH = re.compile(r"^/(?:[A-Za-z0-9.-]+/)?fwapi/matter/key/?$")
-# Headers that describe this hop, not the robot's request.
-_DROPPED = {"host", "connection", "content-length", "accept-encoding", "transfer-encoding", "keep-alive", "upgrade"}
+REGIONS = frozenset({"us", "eu", "cn", "ru"})
+UPSTREAM_BASE = "https://{region}iot.roborock.com"
+# Hop headers, proxy-added headers and browser state: none of these belong to the robot's own request.
+_DROPPED = {
+    "host", "connection", "content-length", "accept-encoding", "transfer-encoding", "keep-alive", "upgrade",
+    "te", "trailer", "proxy-authorization", "proxy-connection", "cookie", "forwarded", "via", "origin", "referer",
+    "x-real-ip", "true-client-ip", "cf-connecting-ip", "x-local-sync-secret",
+}
+_DROPPED_PREFIXES = ("x-forwarded-", "cf-", "x-envoy-", "x-amzn-", "sec-")
 TIMEOUT_SECONDS = 20
+MAX_QUERY_LENGTH = 1024
+MAX_QUERY_PARAMS = 16
+MAX_HEADERS = 32
+MAX_HEADER_VALUE = 2048
+_QUERY_KEY = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
+_DID_KEYS = ("did", "duid", "d", "device_id", "deviceId", "device_did", "deviceDid")
 
 
 def matches(clean_path: str, method: str) -> bool:
@@ -28,15 +44,57 @@ def matches(clean_path: str, method: str) -> bool:
 
 def upstream_url(region: str, query: str) -> str:
     code = region.strip().lower()
-    host = f"{code if re.fullmatch(r'[a-z]{2,3}', code) else 'us'}iot.roborock.com"
-    return f"https://{host}/fwapi/matter/key" + (f"?{query}" if query else "")
+    if code not in REGIONS:
+        raise ValueError(f"unsupported region {region!r}")
+    return UPSTREAM_BASE.format(region=code) + "/fwapi/matter/key" + (f"?{query}" if query else "")
+
+
+def forwardable_headers(headers: Any) -> dict[str, str]:
+    kept: dict[str, str] = {}
+    for name, value in headers.items():
+        lowered = name.lower()
+        if lowered in _DROPPED or lowered.startswith(_DROPPED_PREFIXES) or len(value) > MAX_HEADER_VALUE:
+            continue
+        kept[name] = value
+    return kept
+
+
+def query_is_acceptable(query_params: dict[str, list[str]], query: str) -> bool:
+    """Plain key=value pairs of bounded size; the query is signed, so it is passed on byte for byte."""
+    keys = [key for key in query_params if key != "__host"]
+    return len(query) <= MAX_QUERY_LENGTH and len(keys) <= MAX_QUERY_PARAMS and all(_QUERY_KEY.match(k) for k in keys)
+
+
+def known_device(vacuums: list[dict[str, Any]], query_params: dict[str, list[str]], client_ip: str) -> bool:
+    """A request names a paired robot (did/duid in the query), or comes from the address of one that is connected."""
+    named = {value for key in _DID_KEYS for value in query_params.get(key, []) if value}
+    for vac in vacuums:
+        if named & {str(vac.get("duid") or ""), str(vac.get("did") or "")}:
+            return True
+    if named:
+        return False
+    ips = {ip for vac in vacuums for ip in [*(vac.get("ips") or []), vac.get("last_ip")] if ip}
+    return client_ip in ips
+
+
+def redact_log_entry(entry: dict[str, object]) -> None:
+    """The robot's header and query values are its cloud credentials: keep names only, drop the query from the path."""
+    headers = entry.get("headers")
+    if isinstance(headers, dict):
+        entry["headers"] = {key: "<redacted>" for key in headers}
+    query = entry.get("query")
+    if isinstance(query, dict):
+        entry["query"] = {key: "<redacted>" for key in query}
+    entry["raw_path"] = str(entry.get("clean_path") or "")
 
 
 async def forward(request: Request, region: str) -> Response:
-    import aiohttp
-
-    url = upstream_url(region, request.url.query)
-    headers = {name: value for name, value in request.headers.items() if name.lower() not in _DROPPED}
+    try:
+        url = upstream_url(region, request.url.query)
+    except ValueError as exc:
+        logger.warning("Matter key request not forwarded: %s (expected one of %s)", exc, sorted(REGIONS))
+        return Response(content=b"", status_code=502)
+    headers = forwardable_headers(request.headers)
     # Names only: the values are the robot's credentials for the cloud.
     logger.info(
         "Matter key request from %s: forwarding to %s (header names: %s; query names: %s)",
@@ -48,9 +106,8 @@ async def forward(request: Request, region: str) -> Response:
                 body = await upstream.read()
                 content_type = upstream.headers.get("Content-Type", "application/octet-stream")
                 status = upstream.status
-    except Exception as exc:  # noqa: BLE001
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
         logger.warning("Matter key request could not reach Roborock: %s", exc)
         return Response(content=b"", status_code=502)
     logger.info("Matter key answer from Roborock: HTTP %d, %d bytes, %s", status, len(body), content_type)
     return Response(content=body, status_code=status, media_type=content_type)
-
