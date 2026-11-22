@@ -20,6 +20,7 @@ from shared.io_utils import append_jsonl, payload_preview
 from shared.protocol_auth import ProtocolAuthStore
 from shared.runtime_credentials import RuntimeCredentialsStore, parse_mqtt_connect_packet
 from shared.runtime_state import RuntimeState
+from shared.device_snapshot_store import DeviceSnapshotStore, is_mower_model, is_status_answer
 from shared.zone_ranges_store import ZoneRangesStore
 
 from .command_handlers import RpcCommandRegistry
@@ -57,6 +58,7 @@ class MqttTlsProxy:
         runtime_state: RuntimeState | None = None,
         runtime_credentials: RuntimeCredentialsStore | None = None,
         zone_ranges_store: ZoneRangesStore | None = None,
+        snapshot_store: DeviceSnapshotStore | None = None,
         tls_enabled: bool = True,
         on_onboarding_credentials_learned: Callable[[], None] | None = None,
         on_device_firmware_reported: Callable[[str, str], None] | None = None,
@@ -77,6 +79,9 @@ class MqttTlsProxy:
         self.runtime_state = runtime_state
         self.runtime_credentials = runtime_credentials
         self.zone_ranges_store = zone_ranges_store
+        self.snapshot_store = snapshot_store
+        self._conn_duids: dict[str, set[str]] = {}
+        self._duid_conn: dict[str, str] = {}
         self._on_onboarding_credentials_learned = on_onboarding_credentials_learned
         self._on_device_firmware_reported = on_device_firmware_reported
         self._server_socket: socket.socket | None = None
@@ -155,6 +160,20 @@ class MqttTlsProxy:
         did = str((device or {}).get("did") or "").strip()
         if did:
             self._set_conn_device_topic(conn_id, f"rr/d/i/{did}/{normalized_username}")
+            # Logging in with its own credentials means the robot is back, even before it publishes.
+            duid = str((device or {}).get("duid") or "").strip()
+            if duid and self.snapshot_store is not None:
+                try:
+                    self._note_robot_online(conn_id, duid)
+                except Exception:
+                    self.logger.exception("[conn %s] marking the robot online failed", conn_id)
+
+    def _note_robot_online(self, conn_id: str, duid: str) -> None:
+        with self._lock:
+            self._conn_duids.setdefault(conn_id, set()).add(duid)
+            self._duid_conn[duid] = conn_id
+        if self.snapshot_store is not None:
+            self.snapshot_store.mark_seen(duid)
 
     @staticmethod
     def _decode_remaining_length(data: bytes, start: int) -> tuple[int | None, int]:
@@ -594,6 +613,63 @@ class MqttTlsProxy:
         except Exception:
             self.logger.exception("recording firmware %s reported by %s failed", firmware_version, device_id)
 
+    def _duid_for_topic(self, topic: str) -> str:
+        parts = topic.split("/")
+        if topic.startswith("rr/m/") and len(parts) >= 6:
+            return parts[5]
+        if topic.startswith("rr/d/") and len(parts) >= 5 and self.runtime_credentials is not None:
+            device = self.runtime_credentials.resolve_device(did=parts[3])
+            return str(device.get("duid") or "") if device else ""
+        return ""
+
+    def _is_mower(self, duid: str) -> bool:
+        # Mower dps 121/122 are not state/battery, so their pushes must not fill the vacuum fields.
+        device = self.runtime_credentials.resolve_device(duid=duid) if self.runtime_credentials is not None else None
+        return is_mower_model((device or {}).get("model"))
+
+    def _observe_snapshot(
+        self,
+        conn_id: str,
+        direction: str,
+        topic: str,
+        proto_value: int,
+        decoded_entry: dict[str, Any],
+        payload_bytes: bytes,
+    ) -> None:
+        """Feed what the robot says into the last-known-state store."""
+        if self.snapshot_store is None:
+            return
+        try:
+            duid = self._duid_for_topic(topic)
+            if not duid:
+                return
+            payload_utf8 = decoded_entry.get("payload_utf8")
+            payload_utf8 = payload_utf8 if isinstance(payload_utf8, str) else None
+            if proto_value == 101:
+                # Any client's request: the nonce in it is what decrypts the map reply it gets.
+                self.snapshot_store.note_request(duid, payload_utf8)
+                return
+            # App and bootstrap logins can publish on any topic; only the vacuum's own login speaks for it.
+            if direction != "c2b" or topic != self._get_conn_device_topic(conn_id):
+                return
+            self._note_robot_online(conn_id, duid)
+            # B01 robots (Q7, Q10) use other dps keys; their 121 is not the V1 state.
+            if decoded_entry.get("version") == "B01":
+                return
+            if proto_value == 301:
+                self.snapshot_store.record_map(duid, payload_bytes)
+            elif proto_value == 102:
+                response_to = decoded_entry.get("response_to")
+                if isinstance(response_to, dict):
+                    if is_status_answer(response_to) and response_to.get("error") is None:
+                        self.snapshot_store.record_status_result(duid, response_to.get("result"))
+                    elif response_to.get("request_method") == "get_room_mapping" and response_to.get("error") is None:
+                        self.snapshot_store.record_room_mapping(duid, response_to.get("result"))
+                elif not self._is_mower(duid):
+                    self.snapshot_store.record_dps(duid, payload_utf8)
+        except Exception:
+            self.logger.exception("[conn %s] snapshot update failed", conn_id)
+
     def _trace_packet(self, conn_id: str, direction: str, packet: bytes) -> None:
         packet_type = packet[0] >> 4
         if packet_type in (12, 13):  # PINGREQ, PINGRESP
@@ -748,6 +824,7 @@ class MqttTlsProxy:
                             response_to.get("request_method"),
                             response_to.get("error"),
                         )
+            self._observe_snapshot(conn_id, direction, topic, proto_value, decoded_entry, payload_bytes)
             decoded_messages.append(decoded_entry)
             self.logger.info(
                 "[conn %s %s] PUBLISH topic=%s proto=%s(%d) ver=%s seq=%s key_source=%s payload=%s",
@@ -772,6 +849,17 @@ class MqttTlsProxy:
             self._conn_protocol_levels.pop(conn_id, None)
             self._conn_device_topics.pop(conn_id, None)
             self._pending_onboarding_auth.pop(conn_id, None)
+            gone_duids = self._conn_duids.pop(conn_id, set())
+            # A robot that already reconnected on a newer connection is still online.
+            gone_duids = {duid for duid in gone_duids if self._duid_conn.get(duid) == conn_id}
+            for duid in gone_duids:
+                del self._duid_conn[duid]
+        if self.snapshot_store is not None:
+            try:
+                for duid in gone_duids:
+                    self.snapshot_store.mark_offline(duid)
+            except Exception:
+                self.logger.exception("[conn %s] marking robots offline failed", conn_id)
 
     def _run_trace_worker(self) -> None:
         while True:
@@ -1027,4 +1115,7 @@ class MqttTlsProxy:
         if trace_thread is not None and trace_thread.is_alive():
             self._trace_queue.put(None)
             trace_thread.join(timeout=2.0)
+        # Updates traced while the worker drained its queue came after the caller's own flush.
+        if self.snapshot_store is not None:
+            self.snapshot_store.flush()
         self.logger.info("TLS MQTT proxy stopped")
