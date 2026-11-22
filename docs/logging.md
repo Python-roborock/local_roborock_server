@@ -45,8 +45,8 @@ the defaults automatically.
 
 ## Existing large logs and changes to retention
 
-At startup, the server first recovers missing MQTT credentials and seeds missing
-zone-range state from the existing logs, including numbered backups. It then
+At startup, the server first seeds missing zone-range state from the existing
+logs, including numbered backups. It then
 trims oversized logs to their most recent complete lines and removes backups
 beyond the configured count. This also applies when reducing either limit and
 to logs that are no longer receiving traffic. The trimming operation reads only
@@ -58,6 +58,13 @@ investigation before upgrading or lowering retention. Persistent credentials,
 inventory, zone ranges, device keys, and other state files are not subject to
 log rotation. Do not delete the entire `runtime/` directory to clear logs: it
 also contains persistent state.
+
+Older releases wrote each MQTT CONNECT packet to `mqtt_server.log` as hex, and
+that hex contains the client's MQTT username and password. Current releases log
+only the packet type and length. Lines already written stay in `mqtt_server.log`
+and its numbered backups until rotation drops them. To remove them sooner, stop
+the server and delete `runtime/mqtt_server.log` and `runtime/mqtt_server.log.*`.
+The server does not read these files at startup.
 
 Rotation coordinates writers within one server process. Run only one server
 against a given data directory, and let the server manage these files rather

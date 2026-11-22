@@ -620,6 +620,29 @@ def test_authorize_connect_rejects_onboarding_candidate_when_new_connections_dis
     assert candidate is None
 
 
+def test_trace_packet_logs_connect_without_credentials(tmp_path, caplog) -> None:
+    proxy = MqttTlsProxy(
+        cert_file=tmp_path / "fullchain.pem",
+        key_file=tmp_path / "privkey.pem",
+        listen_host="127.0.0.1",
+        listen_port=8883,
+        backend_host="127.0.0.1",
+        backend_port=1883,
+        localkey="test-local-key",
+        logger=logging.getLogger("test.mqtt_tls_proxy"),
+        decoded_jsonl=tmp_path / "decoded.jsonl",
+    )
+    password = "ff8922d24a9a9af81f18f35dcee9a5a5"
+    packet = _build_connect_packet(client_id="vaclocal-test", username="c25b14ceac358d2a", password=password)
+
+    with caplog.at_level(logging.INFO, logger="test.mqtt_tls_proxy"):
+        proxy._trace_packet("1", "c2b", packet)
+
+    assert f"[conn 1 c2b] CONNECT len={len(packet)}" in caplog.text
+    assert password not in caplog.text
+    assert password.encode().hex() not in caplog.text
+
+
 def test_trace_packet_persists_confirmed_onboarding_device_mqtt_credentials(tmp_path) -> None:
     cloud_snapshot_path = tmp_path / "cloud_snapshot.json"
     _seed_cloud_snapshot(cloud_snapshot_path)

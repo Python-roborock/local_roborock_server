@@ -20,9 +20,6 @@ from roborock_local_server.bundled_backend.shared.io_utils import (
     append_jsonl,
     setup_file_logger,
 )
-from roborock_local_server.bundled_backend.shared.runtime_credentials import (
-    RuntimeCredentialsStore,
-)
 from roborock_local_server.bundled_backend.shared.zone_ranges_store import (
     ZoneRangesStore,
 )
@@ -210,11 +207,8 @@ def test_supervisor_recovers_state_before_trimming_or_removing_logs(tmp_path, so
     config = load_config(config_file)
     paths = resolve_paths(config_file, config)
     paths.runtime_dir.mkdir(parents=True)
-    credentials = RuntimeCredentialsStore(paths.runtime_credentials_path)
-    credentials.ensure_device(did="123", duid="vacuum", device_mqtt_usr="c25b14ceac358d2a", assign_localkey=False)
-    connect = "CONNECT len=82 hex=105000044d51545404c2001e00106130313233393163623566386263393700106332356231346365616333353864326100206666383932326432346139613961663831663138663335646365653961356135"
     mqtt_log = paths.runtime_dir / ("mqtt_server.log" + source_suffix)
-    mqtt_log.write_text("[INFO] " + connect + "\n" + "later event\n" * 100_000)
+    mqtt_log.write_text("[INFO] first event\n" + "later event\n" * 100_000)
     mqtt_jsonl = paths.runtime_dir / ("decompiled_mqtt.jsonl" + source_suffix)
     mqtt_jsonl.write_text(json.dumps(zone_entry([1, 2, 3, 4])) + "\n" + '{"later":true}\n' * 100_000)
     # Also exercise cleanup for an inactive service, which may not emit on startup.
@@ -222,8 +216,6 @@ def test_supervisor_recovers_state_before_trimming_or_removing_logs(tmp_path, so
 
     supervisor = ReleaseSupervisor(config=config, paths=paths)
     try:
-        persisted = RuntimeCredentialsStore(paths.runtime_credentials_path)
-        assert persisted.resolve_device(duid="vacuum")["device_mqtt_pass"] == "ff8922d24a9a9af81f18f35dcee9a5a5"
         assert ZoneRangesStore(paths.runtime_dir).get("scene", 1) == [1, 2, 3, 4]
         assert supervisor.context.zone_ranges_store.get("scene", 1) == [1, 2, 3, 4]
         for path in (mqtt_log, mqtt_jsonl, paths.runtime_dir / "unknown_server.log"):
@@ -231,7 +223,7 @@ def test_supervisor_recovers_state_before_trimming_or_removing_logs(tmp_path, so
         if source_suffix:
             assert not mqtt_log.exists() and not mqtt_jsonl.exists()
         else:
-            assert "CONNECT" not in mqtt_log.read_text()
+            assert "first event" not in mqtt_log.read_text()
             assert "set_scenes_zones" not in mqtt_jsonl.read_text()
         # The supervisor must configure both aliases used by the vendored backend.
         for index in range(3):
