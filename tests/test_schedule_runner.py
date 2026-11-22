@@ -346,9 +346,13 @@ def test_server_timezone_prefers_the_configured_zone():
 
 
 def test_server_timezone_without_the_region_helper_falls_back_to_new_york(monkeypatch):
-    # Main has no data_helpers.default_timezone (the branch that adds it is not merged here).
+    # Covers a data_helpers without default_timezone.
     monkeypatch.delattr(sr.data_helpers, "default_timezone", raising=False)
     assert sr.server_timezone(SimpleNamespace(timezone="", region="eu")) == NEW_YORK
+
+
+def test_server_timezone_without_a_configured_zone_uses_the_region_zone():
+    assert sr.server_timezone(SimpleNamespace(timezone="", region="eu")) == "Europe/Berlin"
 
 
 def test_server_timezone_uses_the_region_helper_when_present(monkeypatch):
