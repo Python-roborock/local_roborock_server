@@ -81,6 +81,7 @@ class MqttTlsProxy:
         self.zone_ranges_store = zone_ranges_store
         self.snapshot_store = snapshot_store
         self._conn_duids: dict[str, set[str]] = {}
+        self._duid_conn: dict[str, str] = {}
         self._on_onboarding_credentials_learned = on_onboarding_credentials_learned
         self._on_device_firmware_reported = on_device_firmware_reported
         self._server_socket: socket.socket | None = None
@@ -607,6 +608,11 @@ class MqttTlsProxy:
             return str(device.get("duid") or "") if device else ""
         return ""
 
+    def _is_mower(self, duid: str) -> bool:
+        # Mower dps 121/122 are not state/battery, so their pushes must not fill the vacuum fields.
+        device = self.runtime_credentials.resolve_device(duid=duid) if self.runtime_credentials is not None else None
+        return str((device or {}).get("model") or "").lower().startswith("roborock.mower")
+
     def _observe_snapshot(
         self,
         conn_id: str,
@@ -629,10 +635,12 @@ class MqttTlsProxy:
                 # Any client's request: the nonce in it is what decrypts the map reply it gets.
                 self.snapshot_store.note_request(duid, payload_utf8)
                 return
-            if not (topic.startswith("rr/d/i/") and direction == "c2b"):
+            # App and bootstrap logins can publish on any topic; only the vacuum's own login speaks for it.
+            if direction != "c2b" or topic != self._get_conn_device_topic(conn_id):
                 return
             with self._lock:
                 self._conn_duids.setdefault(conn_id, set()).add(duid)
+                self._duid_conn[duid] = conn_id
             self.snapshot_store.mark_seen(duid)
             if proto_value == 301:
                 self.snapshot_store.record_map(duid, payload_bytes)
@@ -643,7 +651,7 @@ class MqttTlsProxy:
                         self.snapshot_store.record_status_result(duid, response_to.get("result"))
                     elif response_to.get("request_method") == "get_room_mapping" and response_to.get("error") is None:
                         self.snapshot_store.record_room_mapping(duid, response_to.get("result"))
-                else:
+                elif not self._is_mower(duid):
                     self.snapshot_store.record_dps(duid, payload_utf8)
         except Exception:
             self.logger.exception("[conn %s] snapshot update failed", conn_id)
@@ -822,6 +830,17 @@ class MqttTlsProxy:
             self._conn_protocol_levels.pop(conn_id, None)
             self._conn_device_topics.pop(conn_id, None)
             self._pending_onboarding_auth.pop(conn_id, None)
+            gone_duids = self._conn_duids.pop(conn_id, set())
+            # A robot that already reconnected on a newer connection is still online.
+            gone_duids = {duid for duid in gone_duids if self._duid_conn.get(duid) == conn_id}
+            for duid in gone_duids:
+                del self._duid_conn[duid]
+        if self.snapshot_store is not None:
+            try:
+                for duid in gone_duids:
+                    self.snapshot_store.mark_offline(duid)
+            except Exception:
+                self.logger.exception("[conn %s] marking robots offline failed", conn_id)
 
     def _run_trace_worker(self) -> None:
         while True:
