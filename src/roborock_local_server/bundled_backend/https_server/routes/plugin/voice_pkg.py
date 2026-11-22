@@ -26,6 +26,7 @@ VOICE_PROXY_HEADER = "x-rr-voice-proxy"
 VOICE_PKG_MAX_BYTES = 64 * 1024 * 1024
 VOICE_INFO_MAX_BYTES = 2 * 1024 * 1024
 VOICE_PKG_CACHE_MAX_FILES = 64
+VOICE_PKG_CACHE_MAX_BYTES = 512 * 1024 * 1024
 _STALE_TMP_SECONDS = 3600
 
 # The official plugin's areaServerMap: cosHost first (NewEndpoint robots), then the FDS host.
@@ -205,21 +206,26 @@ def _write_atomic(path: Path, data: bytes) -> None:
 
 
 def _evict_old_packages(cache_dir: Path) -> None:
-    """Keeps the newest VOICE_PKG_CACHE_MAX_FILES packages and drops stale temp files."""
+    """Keeps the newest packages within the file and byte caps and drops stale temp files."""
     now = time.time()
-    packages: list[tuple[float, Path]] = []
+    packages: list[tuple[float, int, Path]] = []
     for entry in cache_dir.iterdir():
         try:
             mtime = entry.stat().st_mtime
             if entry.suffix == ".tmp" and now - mtime > _STALE_TMP_SECONDS:
                 entry.unlink()
             elif entry.suffix == ".pkg":
-                packages.append((mtime, entry))
+                packages.append((mtime, entry.stat().st_size, entry))
         except OSError:
             continue
     packages.sort(key=lambda item: item[0], reverse=True)
-    for _, entry in packages[VOICE_PKG_CACHE_MAX_FILES:]:
-        entry.unlink(missing_ok=True)
+    kept_bytes = 0
+    for index, (_, size, entry) in enumerate(packages):
+        kept_bytes += size
+        if index >= VOICE_PKG_CACHE_MAX_FILES or kept_bytes > VOICE_PKG_CACHE_MAX_BYTES:
+            kept_bytes -= size
+            with contextlib.suppress(OSError):
+                entry.unlink(missing_ok=True)
 
 
 def _rewrite_info(

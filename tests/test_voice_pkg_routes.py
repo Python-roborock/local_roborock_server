@@ -401,3 +401,19 @@ def test_cache_hit_that_vanishes_before_the_read_is_a_miss(
     )
     assert response.body == b"fresh"
     assert response.headers["X-RR-Voice-Cache"] == "miss"
+
+
+def test_package_cache_is_bounded_by_total_bytes(tmp_path: Path, monkeypatch) -> None:
+    import os
+
+    from https_server.routes.plugin import voice_pkg
+
+    monkeypatch.setattr(voice_pkg, "VOICE_PKG_CACHE_MAX_BYTES", 25)
+    for index in range(4):
+        path = tmp_path / f"{index}.pkg"
+        path.write_bytes(b"x" * 10)
+        os.utime(path, (1000 + index, 1000 + index))
+
+    voice_pkg._evict_old_packages(tmp_path)
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["2.pkg", "3.pkg"]
