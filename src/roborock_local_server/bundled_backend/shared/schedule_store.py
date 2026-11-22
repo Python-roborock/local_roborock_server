@@ -237,7 +237,7 @@ def upsert_job(
     inventory = load_inventory(ctx)
     jobs = _jobs_for(inventory, duid, create=True)
     assert jobs is not None
-    if job_id is None:
+    if job_id is None or not str(job_id).strip():
         job_id = time.time_ns() // 1_000_000
         while any(_same_id(job, job_id) for job in jobs):
             job_id += 1

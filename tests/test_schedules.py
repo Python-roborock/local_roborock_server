@@ -461,3 +461,25 @@ def test_write_calls_answer_with_a_string_result_like_iotapi_declares(tmp_path: 
     body, headers = _signed_json(paths, collection, {"cron": "not a cron"})
     refused = client.post(collection, content=body, headers=headers).json()
     assert refused["success"] is False and refused["result"] is None
+
+
+@pytest.mark.parametrize("blank", ["", "  "])
+def test_the_official_apps_create_body_with_an_empty_id_gets_a_server_id(tmp_path: Path, monkeypatch, blank) -> None:
+    # Shape captured from the official app: "id" is an empty string and the cloud assigns the id.
+    client, paths = _jobs_client(tmp_path, "robot-test", [])
+    collection = "/user/devices/robot-test/jobs"
+    captured = {
+        "id": blank, "cron": "15 23 18 10 ?", "repeated": False, "enabled": True,
+        "param": {"id": 1, "method": "server_scheduled_start", "params": [
+            {"repeat": 1, "water_box_mode": 202, "segments": "0", "fan_power": 102, "mop_mode": 300,
+             "clean_mop": 1, "map_index": -1, "name": "1792329301298"}]},
+    }
+    ids = []
+    for _ in range(2):
+        raw, headers = _signed_json(paths, collection, captured)
+        result = client.post(collection, content=raw, headers=headers).json()
+        assert result["success"] is True and result["result"].isdigit()
+        ids.append(result["result"])
+    assert len(set(ids)) == 2
+    stored = json.loads(paths.inventory_path.read_text(encoding="utf-8"))["schedules"]["robot-test"]
+    assert sorted(str(job["id"]) for job in stored) == sorted(ids)
