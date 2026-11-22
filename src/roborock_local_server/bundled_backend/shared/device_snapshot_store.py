@@ -38,7 +38,7 @@ _DPS_ERROR = "120"
 _DPS_STATE = "121"
 _DPS_BATTERY = "122"
 
-_SECURITY_RE = re.compile(r'"endpoint\\?":\s*\\?"(\w+)\\?",\s*\\?"nonce\\?":\s*\\?"([0-9a-fA-F]+)')
+_HEX = re.compile(r"^[0-9a-fA-F]+$")
 
 
 def _bytes_from_hex(value: Any) -> bytes | None:
@@ -133,12 +133,39 @@ def _room_table(result: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def _security_in(value: Any) -> tuple[str, str] | None:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(value, dict):
+        return None
+    security = value.get("security")
+    if isinstance(security, dict):
+        endpoint, nonce = security.get("endpoint"), security.get("nonce")
+        if isinstance(endpoint, str) and endpoint and isinstance(nonce, str) and _HEX.match(nonce):
+            return endpoint, nonce
+    return None
+
+
 def _security_of(payload_utf8: str | None) -> tuple[str, str] | None:
     """(endpoint, nonce) from a request that asked for a map, or None."""
     if not payload_utf8 or "security" not in payload_utf8:
         return None
-    found = _SECURITY_RE.search(payload_utf8)
-    return (found.group(1), found.group(2)) if found else None
+    try:
+        payload = json.loads(payload_utf8)
+    except json.JSONDecodeError:
+        return None
+    found = _security_in(payload)
+    if found is not None:
+        return found
+    dps = payload.get("dps") if isinstance(payload, dict) else None
+    for inner in dps.values() if isinstance(dps, dict) else ():
+        found = _security_in(inner)
+        if found is not None:
+            return found
+    return None
 
 
 def _decode_map(payload: bytes, nonce: str) -> tuple[bytes, dict[str, int] | None, dict[str, int] | None]:
@@ -159,6 +186,7 @@ class DeviceSnapshotStore:
         self._flush_interval_s = flush_interval_s
         self._map_interval_s = map_interval_s
         self._lock = threading.RLock()
+        self._io_lock = threading.Lock()
         self._data: dict[str, dict[str, Any]] = {}
         self._maps: dict[str, bytes] = {}
         self._nonces: dict[str, dict[str, str]] = {}
@@ -192,23 +220,22 @@ class DeviceSnapshotStore:
                     pass
 
     def flush(self) -> None:
-        """Write everything changed since the last flush."""
+        """Write everything changed since the last flush; file I/O runs outside the store lock."""
         with self._lock:
-            dirty, dirty_maps = set(self._dirty), set(self._dirty_maps)
-            if not dirty and not dirty_maps:
+            if not self._dirty and not self._dirty_maps:
                 return
+            jobs = [(self._dir / f"{d}.json", json.dumps(self._data[d], separators=(",", ":")).encode()) for d in self._dirty]
+            jobs += [(self._dir / f"{d}.map", self._maps[d]) for d in self._dirty_maps if d in self._maps]
+            self._dirty.clear()
+            self._dirty_maps.clear()
+            self._last_flush = time.monotonic()
+        with self._io_lock:
             try:
                 self._dir.mkdir(parents=True, exist_ok=True)
             except OSError:
                 return
-            for duid in dirty:
-                self._write(self._dir / f"{duid}.json", json.dumps(self._data[duid], separators=(",", ":")).encode())
-            for duid in dirty_maps:
-                if duid in self._maps:
-                    self._write(self._dir / f"{duid}.map", self._maps[duid])
-            self._dirty.clear()
-            self._dirty_maps.clear()
-            self._last_flush = time.monotonic()
+            for path, content in jobs:
+                self._write(path, content)
 
     @staticmethod
     def _write(path: Path, content: bytes) -> None:
@@ -219,10 +246,10 @@ class DeviceSnapshotStore:
         except OSError:
             logger.warning("Could not write %s", path)
 
-    def _touch(self, duid: str, *, force_flush: bool = False) -> None:
+    def _touch(self, duid: str, *, force_flush: bool = False) -> bool:
+        """Mark a device dirty; True when the caller should flush once it has released the lock."""
         self._dirty.add(duid)
-        if force_flush or time.monotonic() - self._last_flush >= self._flush_interval_s:
-            self.flush()
+        return force_flush or time.monotonic() - self._last_flush >= self._flush_interval_s
 
     # ---- recording ---------------------------------------------------------------
 
@@ -240,11 +267,12 @@ class DeviceSnapshotStore:
         with self._lock:
             entry = self._entry(duid)
             entry["last_seen_at"] = utcnow_iso()
-            if entry.get("offline_at"):
+            was_offline = bool(entry.get("offline_at"))
+            if was_offline:
                 entry["offline_at"] = None
-                self._touch(duid, force_flush=True)
-            else:
-                self._touch(duid)
+            due = self._touch(duid, force_flush=was_offline)
+        if due:
+            self.flush()
 
     def mark_offline(self, duid: str) -> None:
         """The robot's connection closed. Written at once, since the next restart may lose the rest."""
@@ -255,6 +283,7 @@ class DeviceSnapshotStore:
             if not entry.get("offline_at"):
                 entry["offline_at"] = utcnow_iso()
             self._touch(duid, force_flush=True)
+        self.flush()
 
     def record_dps(self, duid: str, payload_utf8: str | None) -> None:
         """A status push, ``{"dps": {"122": 5}}``."""
@@ -275,9 +304,12 @@ class DeviceSnapshotStore:
             return
         with self._lock:
             entry = self._entry(duid)
-            if entry.get("rooms") != rooms:
-                entry["rooms"] = rooms
-                self._touch(duid)
+            if entry.get("rooms") == rooms:
+                return
+            entry["rooms"] = rooms
+            due = self._touch(duid)
+        if due:
+            self.flush()
 
     def _update_status(self, duid: str, update: dict[str, int]) -> None:
         with self._lock:
@@ -285,7 +317,9 @@ class DeviceSnapshotStore:
             status = entry.setdefault("status", {})
             status.update(update)
             status["updated_at"] = utcnow_iso()
-            self._touch(duid)
+            due = self._touch(duid)
+        if due:
+            self.flush()
 
     def note_request(self, duid: str, payload_utf8: str | None) -> None:
         """Remember the nonce a client sent with a request, so its map reply can be decrypted."""
@@ -327,7 +361,9 @@ class DeviceSnapshotStore:
                 "charger": charger,
                 "map_updated_at": utcnow_iso(),
             }
-            self._touch(duid)
+            due = self._touch(duid)
+        if due:
+            self.flush()
 
     # ---- backfill ----------------------------------------------------------------
 
@@ -422,6 +458,8 @@ class DeviceSnapshotStore:
                     continue
                 entry = self._entry(duid)
                 entry["last_seen_at"] = acc.get("last_seen_at")
+                # Nothing is connected right after a start, so a robot rebuilt from the log is offline since it last spoke.
+                entry["offline_at"] = acc.get("last_seen_at")
                 if acc["status"]:
                     entry["status"] = {**acc["status"], "updated_at": acc["status_at"]}
                 if acc["rooms"]:
