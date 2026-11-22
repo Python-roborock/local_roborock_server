@@ -24,19 +24,19 @@ body DID matches the URL DID. Only unambiguous reports with one value per field
 are persisted. Query parameters do not supply or override metadata.
 
 The Saros 20 Flow (`roborock.vacuum.a307`) uses a V2 form instead. It sends the
-five metadata fields as `multipart/form-data` parts in the same order, without a
-`signature` part. Four headers carry the signature: `v` is `v2`, `n` is a nonce,
-`t` is a Unix timestamp and `s` is the base64 signature. The device signs the
-form above, followed by the nonce and the timestamp, with PKCS#1 v1.5 and
-SHA-384:
+five metadata fields as `multipart/form-data` parts, without a `signature` part.
+Four headers carry the signature: `v` is `v2`, `n` is a nonce, `t` is a Unix
+timestamp and `s` is the base64 signature. The device signs the form above,
+followed by the nonce and the timestamp, with PKCS#1 v1.5 and SHA-384:
 
 ```text
 did=<numeric DID>&featureset=<decimal flags>&newfeatureset=<hex flags>&pid=<model>&sn=<serial>:<n>:<t>
 ```
 
-The server verifies it with the same device public key and applies the same
-checks. An upload of the five fields counts as malformed if a header is missing
-or `v` is not `v2`.
+The server rebuilds this text in the field order above, whatever the order of
+the parts. It verifies the signature with the same device public key and applies
+the same checks. An upload of the five fields counts as malformed if a header is
+missing or `v` is not `v2`.
 
 This handler accepts exactly the fields of either form, nonempty metadata
 values of 1–128 ASCII letters, digits, dots, underscores or hyphens, decimal

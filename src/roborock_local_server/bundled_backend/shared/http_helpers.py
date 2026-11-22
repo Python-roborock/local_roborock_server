@@ -35,7 +35,10 @@ def pick_first(values: list[str]) -> str:
 
 
 # Route builders receive no request headers. These headers reach them as
-# "__header_<name>" query pseudo-params, like "__host".
+# "__header_<name>" query pseudo-params, like "__host". The a307 sends these
+# four names with its device info upload. The key capture in server.py also
+# tries aliases like "sign", "nonce" and "ts", but no device info upload is
+# known to use them.
 _ROUTE_HEADERS = ("v", "n", "t", "s")
 _ROUTE_HEADER_PREFIX = "__header_"
 
