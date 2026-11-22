@@ -107,8 +107,8 @@ def test_the_cloud_is_asked_for_this_robots_package_and_must_agree_with_the_cata
 def test_the_package_must_be_for_the_hardware_the_robot_runs(tmp_path, monkeypatch, robot) -> None:
     supervisor, store = _supervisor(tmp_path, monkeypatch, reported="02.35.52", extra=ON)
     _remember(supervisor)
-    own = NEW_URL.replace("/rpkg_", "/rriotpkg/a245/rpkg_")
-    other = OLD_URL.replace("/rpkg_", "/rriotpkg/a101/rpkg_")
+    own = NEW_URL
+    other = OLD_URL.replace("/a245/", "/a101/")
     supervisor.cloud_manager.urls = {"02.33.48": other, "02.35.52": own}
     started = asyncio.run(supervisor.ota_installer.start_version("robot", *CONFIRM))
     assert started["started"] is False and "different hardware" in started["reason"]

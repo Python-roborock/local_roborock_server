@@ -224,6 +224,31 @@ def test_the_hardware_folder_of_a_package_address() -> None:
     assert ota_dry_run.package_family(f"https://files.roborock.com/x.{MD5}.signed.pkg") == ""
 
 
+def test_the_hardware_of_the_real_package_address_shapes() -> None:
+    folder = f"https://cdn.awsusor0.fds.api.mi-img.com/rriotpkg/a245/rpkg_beryl_lite_3348_fullos.{MD5}.signed.pkg"
+    regional = f"https://rrpkg-us.roborock.com/a245/rpkg_beryl_lite_3552_fullos.{MD5}.signed.pkg"
+    for url in (folder, regional):
+        assert ota_dry_run.package_family(url) == "a245" and ota_dry_run.package_name_prefix(url) == "rpkg_beryl_lite"
+    assert ota_dry_run.package_name_prefix(URL) == "pearl-s"
+    assert ota_dry_run.package_name_prefix(f"https://files.roborock.com/x.{MD5}.signed.pkg") == ""
+
+
+@pytest.mark.parametrize(("own", "target", "reason"), [
+    (f"https://cdn.awsusor0.fds.api.mi-img.com/rpkg_a245_3552_fullos.{OLD_MD5}.signed.pkg", OLD_URL, "hardware cannot be checked"),
+    (f"https://cdn.awsusor0.fds.api.mi-img.com/rriotpkg/a245/rpkg_beryl_lite_3552_fullos.{OLD_MD5}.signed.pkg",
+     f"https://cdn.awsusor0.fds.api.mi-img.com/rpkg_beryl_lite_3348_fullos.{OLD_MD5}.signed.pkg", "hardware cannot be checked"),
+    (f"https://cdn.awsusor0.fds.api.mi-img.com/rriotpkg/a245/rpkg_other_3552_fullos.{OLD_MD5}.signed.pkg", OLD_URL, "different hardware"),
+    (f"https://cdn.awsusor0.fds.api.mi-img.com/rriotpkg/a101/rpkg_beryl_lite_3552_fullos.{OLD_MD5}.signed.pkg", OLD_URL, "different hardware"),
+])
+def test_a_package_whose_hardware_is_missing_or_different_is_refused(tmp_path, monkeypatch, robot, own, target, reason) -> None:
+    supervisor, _ = catalog_supervisor(tmp_path, monkeypatch, reported="02.35.52", extra="allow_downgrade = true\n")
+    supervisor.ota_installer.catalog.add(MODEL, "02.33.48", source="robot_reported", url=OLD_URL, md5=OLD_MD5)
+    supervisor.cloud_manager.urls = {"02.33.48": target, "02.35.52": own}
+    started = asyncio.run(supervisor.ota_installer.start_version("robot", "02.33.48", True, "02.33.48"))
+    assert started["started"] is False and reason in started["reason"]
+    assert supervisor.ota_installer._running == {} and robot.downloads == []
+
+
 def test_only_robots_in_the_inventory_are_owned(tmp_path, monkeypatch) -> None:
     supervisor = button_supervisor(tmp_path, monkeypatch, enable=True)
     assert supervisor.ota_installer.owns("robot") and not supervisor.ota_installer.owns("someone-elses")

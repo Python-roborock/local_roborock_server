@@ -14,8 +14,8 @@ from roborock_local_server.server import ReleaseSupervisor
 MODEL = "roborock.vacuum.a245"
 OLD, NEW = b"old firmware" * 50, b"new firmware" * 50
 OLD_MD5, NEW_MD5 = hashlib.md5(OLD).hexdigest(), hashlib.md5(NEW).hexdigest()
-OLD_URL = f"https://cdn.awsusor0.fds.api.mi-img.com/rpkg_a245_3348_fullos.{OLD_MD5}.signed.pkg"
-NEW_URL = f"https://cdn.awsusor0.fds.api.mi-img.com/rpkg_a245_3552_fullos.{NEW_MD5}.signed.pkg"
+OLD_URL = f"https://cdn.awsusor0.fds.api.mi-img.com/rriotpkg/a245/rpkg_beryl_lite_3348_fullos.{OLD_MD5}.signed.pkg"
+NEW_URL = f"https://cdn.awsusor0.fds.api.mi-img.com/rriotpkg/a245/rpkg_beryl_lite_3552_fullos.{NEW_MD5}.signed.pkg"
 BYTES = {OLD_URL: (OLD, OLD_MD5), NEW_URL: (NEW, NEW_MD5)}
 
 

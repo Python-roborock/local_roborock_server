@@ -54,7 +54,7 @@ PACKAGE_HOSTS = frozenset({
     "cdn.awsusor0.fds.api.mi-img.com", "cdn.awssgp0.fds.api.mi-img.com", "cdn.cnbj2.fds.api.mi-img.com",
     "cdn.ksyru0-eco.fds.api.mi-img.com",
 })
-_PACKAGE_FAMILY = re.compile(r"/rriotpkg/([^/]+)/")
+_PACKAGE_NAME = re.compile(r"^(.+?)_\d+_fullos\.")
 _PACKAGE_MD5 = re.compile(r"\.([0-9a-f]{32})\.signed\.pkg$")
 _PATH = re.compile(r"^/ota_test/([A-Za-z0-9_-]{16,})(?:/([A-Za-z0-9._-]{1,200})|\.bin)$")
 _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
@@ -406,8 +406,16 @@ async def _open(session: Any, method: str, url: str) -> Any:
 
 
 def package_family(url: Any) -> str:
-    """The hardware folder of a package address (the a245 of .../rriotpkg/a245/...), or an empty string when it has none."""
-    match = _PACKAGE_FAMILY.search(str(url or ""))
+    """The hardware folder of a package address (a245 in .../rriotpkg/a245/... or in rrpkg-us.../a245/...), or an empty string."""
+    parts = [part for part in urlparse(str(url or "")).path.split("/") if part]
+    if len(parts) >= 3 and parts[0] == "rriotpkg":
+        return parts[1]
+    return parts[0] if len(parts) == 2 else ""
+
+
+def package_name_prefix(url: Any) -> str:
+    """The hardware part of the package file name (rpkg_beryl_lite in rpkg_beryl_lite_3552_fullos.<md5>.signed.pkg), or an empty string."""
+    match = _PACKAGE_NAME.match(urlparse(str(url or "")).path.rsplit("/", 1)[-1])
     return match.group(1) if match else ""
 
 

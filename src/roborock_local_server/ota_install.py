@@ -25,6 +25,7 @@ from .ota_dry_run import (
     package_address,
     package_family,
     package_md5,
+    package_name_prefix,
     release_package,
     resolve_package,
 )
@@ -249,7 +250,9 @@ class OtaInstaller:
         own = own or str((self.catalog.entry(model, reported) or {}).get("url") or "")
         if not own:
             raise PackageRefused(f"The package address of the {reported} the robot runs is not known, so its hardware cannot be checked")
-        if package_family(own) and package_family(url) != package_family(own):
+        if not (package_family(own) and package_family(url) and package_name_prefix(own) and package_name_prefix(url)):
+            raise PackageRefused("The package address does not name its hardware, so the robot's hardware cannot be checked")
+        if package_family(url) != package_family(own) or package_name_prefix(url) != package_name_prefix(own):
             raise PackageRefused(f"The package of {version} is for different hardware than the one the robot runs now")
         return url
 
