@@ -22,11 +22,7 @@ _LOCKS_GUARD = threading.Lock()
 
 @contextmanager
 def inventory_transaction(path: Path):
-    """Serialize inventory read/modify/write within this server process.
-
-    Refuse to mutate corrupt existing inventory rather than replacing it with
-    an empty fallback. External writers must stop the server first.
-    """
+    """Serialize inventory read/modify/write in this process; a corrupt existing file is refused, not replaced."""
     path = path.resolve()
     with _LOCKS_GUARD:
         lock = _LOCKS.setdefault(path, threading.RLock())
@@ -76,10 +72,7 @@ def load_inventory(ctx: ServerContext) -> dict[str, Any]:
 
 
 class CachedInventory:
-    """Re-reads the inventory file only when its size, modification time or file id changed.
-
-    The returned dict is shared: callers must treat it as read-only.
-    """
+    """Re-reads the inventory only when its size, mtime or file id changed; the shared dict is read-only."""
 
     def __init__(self, ctx: ServerContext) -> None:
         self._ctx = ctx

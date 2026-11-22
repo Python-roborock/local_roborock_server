@@ -99,11 +99,7 @@ def reconcile_native_enabled(
     ctx: ServerContext, duid: str, snapshot: list[dict[str, Any]], states: dict[str, bool],
     *, explicit_enable: dict[str, Any] | None = None,
 ) -> list[Any]:
-    """Merge a fresh robot read only into unchanged, uniquely linked jobs.
-
-    Preserve complete records and occurrence claims. A still-on robot timer
-    must not resurrect a consumed one-time job after a restart or routine poll.
-    """
+    """Merge a robot read into unchanged, uniquely linked jobs; a still-on timer never revives a consumed one-time job."""
     inventory = load_inventory(ctx)
     jobs = _jobs_for(inventory, duid, create=False) or []
     by_name: dict[str, list[dict[str, Any]]] = {}
@@ -142,14 +138,7 @@ def reconcile_native_enabled(
 
 
 def job_settings(job: dict[str, Any]) -> dict[str, Any]:
-    """The vac/mop settings a job carries, as a flat dict.
-
-    ``name``, when the job has one, rides along too, outside ``JOB_SETTING_KEYS``: it is not a
-    vac/mop setting a client edits, it is the official app's own link from this job to the
-    robot's server_timer entry it saved alongside it (POST/PUT /user/devices/{duid}/jobs carries
-    it in exactly this spot, confirmed live). Native timer entries themselves are
-    read from the robot; this helper does not turn them into legacy timers.
-    """
+    """The vac/mop settings a job carries; ``name``, the app's link to the robot's server_timer entry, rides along."""
     entry = _settings_entry(job)
     settings = {key: entry[key] for key in JOB_SETTING_KEYS if key in entry}
     name = entry.get("name")
@@ -159,10 +148,7 @@ def job_settings(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def merge_job_settings(param: dict[str, Any] | None, settings: dict[str, Any]) -> dict[str, Any]:
-    """Copy of ``param`` with ``settings`` merged in; a None value clears that setting.
-
-    Settings not mentioned are left alone, so editing one option never resets the rest.
-    """
+    """Copy of ``param`` with ``settings`` merged in; None clears a setting and unmentioned ones are kept."""
     merged = copy.deepcopy(param) if isinstance(param, dict) else copy.deepcopy(DEFAULT_JOB_PARAM)
     params = merged.get("params")
     if not isinstance(params, list) or not params or not isinstance(params[0], dict):
@@ -230,10 +216,7 @@ def upsert_job(
     create_only: bool = False,
     expected_job: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create the job, or update cron/enabled on an existing one while keeping its settings.
-
-    An existing job keeps its own timezone unless ``override_time_zone`` is set.
-    """
+    """Create the job, or update an existing one keeping its settings and (unless overridden) its timezone."""
     inventory = load_inventory(ctx)
     jobs = _jobs_for(inventory, duid, create=True)
     assert jobs is not None
@@ -306,12 +289,7 @@ def delete_job(ctx: ServerContext, duid: str, job_id: Any) -> bool:
 
 @inventory_mutation
 def claim_occurrence(ctx: ServerContext, duid: str, job: dict[str, Any], due: datetime) -> bool:
-    """Persist an at-most-once decision before any robot command is sent.
-
-    A crash after this write can skip a clean; replaying a clean after restart is
-    deliberately avoided. Compare the snapshot under the same lock as CRUD so a
-    disabled, edited, or deleted job cannot be claimed from a stale tick.
-    """
+    """Persist an at-most-once claim before any command is sent; a stale, edited or disabled job cannot be claimed."""
     inventory = load_inventory(ctx)
     jobs = _jobs_for(inventory, duid, create=False) or []
     current = next((item for item in jobs if _same_id(item, job.get("id"))), None)

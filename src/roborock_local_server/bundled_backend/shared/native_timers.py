@@ -22,8 +22,7 @@ def native_timer_name(entry_id: str) -> str:
 
 
 def parse_native_timers(timers: Any) -> list[NativeTimer]:
-    """Most robots answer [name, "on"|"off", ...]. An S6 MaxV (a10, 02.62.46) answers
-    ["Y <name> 1 1 <cron> app_start", 0] for an on timer and ["Y ...", "off", 0] for an off one."""
+    """Reads [name, "on"|"off", ...] and the S6 MaxV form ["Y <name> 1 1 <cron> app_start", 0] (["Y ...", "off", 0] when off)."""
     found: list[NativeTimer] = []
     if not isinstance(timers, list):
         return found

@@ -66,11 +66,7 @@ from .inventory_io import WEB_API_INVENTORY_FILE
 class SchedulerCommand(StrEnum):
     """A robot command python-roborock's RoborockCommand does not list."""
 
-    # The cloud's own way to run a schedule: the robot answers it with the schedule's settings entry
-    # (the same one the cloud job carries, including "name", the robot-side timer id) and records the
-    # clean as "Schedules" in its history, for whole-home and room schedules alike. Confirmed live;
-    # without the entry it answers -10005 "Invalid timer", and with a bare id "Param should be
-    # name + fan + segment".
+    # The cloud's way to run a schedule; it needs the job's whole settings entry, "name" included (confirmed live).
     SERVER_SCHEDULED_START = "server_scheduled_start"
     GET_SERVER_TIMER = "get_server_timer"
 
@@ -92,15 +88,10 @@ _STEP_START_COMMANDS = {
 }
 _ACTION_LOCK_ERROR_CODES = {-10003, -10007}
 _PARAM_ERROR_CODE = -10005
-# What app_start takes in one command, as the official app's own schedule entries carry it. A
-# robot accepted every one of these together and applied the modes (confirmed live); it answers
-# -10005 "Param error" to a value it does not support, such as a route its model lacks.
+# What app_start takes in one command, as the official app's schedule entries carry it (confirmed live).
 _APP_START_KEYS = ("repeat", "water_box_mode", "segments", "fan_power", "mop_mode", "clean_mop", "map_index")
 _APP_START_DEFAULTS = {"repeat": 1, "segments": "0", "clean_mop": 1, "map_index": -1}
-# app_start's "source" field is how the robot learns who started a clean, for its history. 3 is
-# python-roborock's RoborockStartType.schedule, and a robot recorded the clean as "Schedule" in the
-# official app's history; an app start is 2. "start_type", "startType", "start_from", "from" and
-# "trigger" were all accepted but ignored, so the clean was recorded as "App".
+# app_start "source" 3 (RoborockStartType.schedule) makes the robot's history say "Schedule"; other spellings are ignored.
 _SCHEDULE_START_SOURCE = 3
 _RESUME_COMMAND_BY_IN_CLEANING: dict[int, RoborockCommand] = {
     RoborockInCleaning.global_clean_not_complete.value: RoborockCommand.APP_START,
@@ -1134,9 +1125,7 @@ class RoutineRunner:
                 if step.method == SCHEDULE_SERVER_START:
                     timer_name = _single_start_entry(step).get("name")
                     timers = await client.send_command(SchedulerCommand.GET_SERVER_TIMER, [])
-                    # The cloud job's enabled field can remain true when the
-                    # robot timer is off. A failed/malformed read must not start
-                    # cleaning, nor enqueue a start for an offline robot.
+                    # The job can stay enabled while the robot timer is off; an unreadable list must not start a clean.
                     if not isinstance(timers, list):
                         raise RoutineExecutionError("Cannot verify native schedule timer state")
                     matching = [timer for timer in parse_native_timers(timers) if timer.name == timer_name]

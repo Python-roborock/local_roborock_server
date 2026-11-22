@@ -1,9 +1,4 @@
-"""Local executor for cloud-style schedules (``server_scheduled_start`` jobs).
-
-Roborock's cloud fires these at ``nextFireTime``. With the vacuum pointed at this
-server, nothing else would, so the server evaluates the stored cron entries
-itself and hands each due job to the routine runner.
-"""
+"""Local executor for cloud-style schedules: evaluates stored crons and hands each due job to the routine runner."""
 
 from __future__ import annotations
 
@@ -145,11 +140,7 @@ def parse_cron(expression: str) -> CronSpec:
 
 
 def next_fire(spec: CronSpec, after: datetime) -> datetime | None:
-    """Next wall-clock match; skip DST gaps and use only the first repeated hour.
-
-    This explicit DST policy is provisional until compared with cloud behavior.
-    Compare UTC instants because local datetime arithmetic can hide DST folds.
-    """
+    """Next wall-clock match; skips DST gaps and uses only the first repeated hour (provisional policy)."""
     zone = after.tzinfo
     if zone is None:
         raise ValueError("after must be timezone-aware")

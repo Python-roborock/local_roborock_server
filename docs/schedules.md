@@ -15,7 +15,7 @@ restoration, daily reset, and recovery. The server provides the underlying APIs.
 | PUT/PATCH `/user/devices/{duid}/jobs/{id}` | Verify native enablement when supplied, then save; preserve omitted fields and unknown model fields; `result` is `"done"` |
 | DELETE an item | Remove the stored job and its occurrence record; `result` is `"done"` |
 | `get/set/upd/del_server_timer` | Forward unchanged to the robot, which owns these timer entries |
-| Legacy `get/set/upd/del_timer` | `set_timer` and the `upd_timer`/`del_timer` of a stored job are answered from the store. `get_timer` goes to the robot and the store's jobs are added to its reply. Anything about a timer the store does not hold, and patrol timers, go to the robot |
+| Legacy `get/set/upd/del_timer` | `set_timer` and the `upd_timer`/`del_timer` of a stored job are answered from the store. `get_timer` goes to the robot and the store's jobs are added to its reply (if the robot has not answered after 6 seconds, the store's jobs are sent alone; a robot error reply is passed through). Anything about a timer the store does not hold, and patrol timers, go to the robot |
 | Native scheduled execution | Verify the robot timer is on, then send `server_scheduled_start` with the complete settings entry |
 
 A job's numeric `id` is different from the robot timer's string ID in
@@ -87,9 +87,8 @@ cron/settings by this enablement reconciliation.
 ## Execution and missed runs
 
 The scheduler evaluates five-field cron expressions in each job's IANA timezone.
-It checks approximately every 20 seconds, allowing less than 60 seconds of normal
-dispatch latency. Startup establishes a fresh baseline; suspended/late ticks do
-not drain historical jobs. Recurring jobs remain enabled for future occurrences.
+It checks approximately every 20 seconds and starts a job whose occurrence fell
+inside the last tick, with up to 60 seconds of allowed lateness.
 
 Before dispatch, the server saves an occurrence claim in the persistent inventory
 under `schedule_occurrences`. A repeated tick, restart, or backward clock change
@@ -100,10 +99,9 @@ inventory lock does not coordinate multiple containers or external file editors.
 Cloud re-import replaces schedule definitions, so back up local edits before
 refreshing. Occurrence claims are retained across that refresh.
 
-## Missed runs
+### Missed runs
 
-The scheduler only starts a job for an occurrence that falls inside the last tick, plus up
-to 60 seconds of lateness. There is no catch-up:
+There is no catch-up:
 
 - The first tick after startup only sets a baseline. A job due while the server was stopped,
   restarting, or suspended is lost, and so is one due during an event-loop stall longer than
@@ -113,9 +111,12 @@ to 60 seconds of lateness. There is no catch-up:
   another routine or schedule is running on that robot, or if the 60 second dispatch window
   has passed by the time the robot has answered, that occurrence is skipped and is not
   retried later.
-- A recurring job stays enabled and runs at its next occurrence.
+- A recurring job stays enabled and runs at its next occurrence. Day and month names
+  (`MON-FRI`, `JAN`) work in crons, and so do ranges that wrap past Sunday (`FRI-SUN`, `6-0`).
 - A one-time job (`repeated` false) is disabled when its occurrence is claimed, whether or not
   the clean then started. It does not run again, even after a failure.
+
+### Native schedules
 
 A fresh native timer read must find exactly one matching `on` entry. Off, missing,
 ambiguous, malformed, or unreachable timer state prevents a start. After that

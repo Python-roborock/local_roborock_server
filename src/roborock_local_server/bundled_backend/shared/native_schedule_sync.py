@@ -45,12 +45,7 @@ def _timer_state(timers: Any, name: str) -> str:
 async def sync_timer(
     context: Any, duid: str, name: str, enabled: bool, *, check_current: Callable[[], None],
 ) -> str:
-    """Update only the named timer; a fresh read is the success criterion.
-
-    The app sends upd_server_timer before its HTTP job update. A timed-out write
-    may still have reached the vacuum, so read it back without repeating the
-    write. Never create a timer or infer one from a cloud job's numeric ID.
-    """
+    """Update only the named timer; a fresh read is the success criterion, and a lost ack is read back, not resent."""
     from shared.routine_runner import _RoutineMqttClient
 
     device = context.runtime_credentials.resolve_device(duid=duid)
@@ -115,12 +110,7 @@ def timer_states(timers: Any) -> dict[str, bool]:
 
 
 class NativeScheduleSync:
-    """One coordinator for API edits and read-only reconciliation from any client.
-
-    Native RPCs still reach the robot unchanged. Observing a write only schedules
-    a fresh read; no optimistic request or generic 'ok' reply mutates inventory.
-    Periodic reads also catch LAN changes and recover after missed MQTT traffic.
-    """
+    """Reconciles native schedule enablement for every client; an observed write only triggers a fresh read."""
 
     INTERVAL = 30.0
     DEBOUNCE = 0.3

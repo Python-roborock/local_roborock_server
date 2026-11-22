@@ -1,23 +1,6 @@
 """Answer the vacuum's legacy timer RPCs (get/set/upd/del_timer) from the schedule store.
 
-On cloud-managed robots the schedules live server-side, not on the robot, so
-clients such as LocalRock that ask the robot for its timers would otherwise see
-nothing and could never change the schedules the cloud imported. The topic
-bridge hands matching requests here instead of forwarding them to the robot. Requests about a
-timer the store does not own (a robot's own legacy timer, a patrol timer) still go to the robot,
-and get_timer replies from the robot are merged with the store's entries.
-
-Deliberately not handled here: get/set/upd/del_server_timer, the newer sibling
-protocol some firmware speaks instead of (or alongside) this one. The robot
-stores those entries itself and the official app reads them back from it, so
-they must always forward to the robot untouched. Answering them from this store
-instead, tried once, hid the robot's real schedules from every client reading
-through the server, and the official app then deleted them (it removes
-server_timer entries it does not recognize when its schedule screen opens).
-
-What runs a server_timer schedule is the cloud's own record of it, the job the
-official app also writes to /user/devices/{duid}/jobs, which ScheduleRunner
-fires like any other. The robot was not seen to run them itself.
+get/set/upd/del_server_timer always go to the robot, which owns those entries; the server runs them from their /jobs record.
 """
 
 from __future__ import annotations
@@ -84,12 +67,9 @@ class _SetTimer(NamedTuple):
 
 
 def device_cron(cron: str) -> str | None:
-    """Cron in the robot's own 'm h dom month dow' form, with '?' written as '*'.
+    """Cron in the robot's 'm h dom month dow' form ('?' as '*'), or None when it has no such form.
 
-    A one-time schedule pins the day of the month and the month ('15 23 18 10 *'), exactly as
-    the robot and the official app write it (confirmed live), so it is shown like any other.
-    A job that pins only one of the two has no such form and is left out of get_timer rather
-    than shown wrong.
+    A one-time schedule pins day and month ('15 23 18 10 *'); a job pinning only one of them has no form.
     """
     fields = str(cron or "").split()
     if len(fields) != 5:
