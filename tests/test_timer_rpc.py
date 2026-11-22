@@ -494,13 +494,26 @@ def test_no_fallback_reply_is_sent_once_the_robot_has_answered(ctx, monkeypatch)
     assert sent.count(cloud.topic_out) == 1
 
 
-def test_a_robot_error_reply_to_get_timer_is_passed_through(ctx):
+def _robot_error_frame(request_id):
+    body = json.dumps({"id": request_id, "error": {"code": -10005, "message": "unsupported"}})
+    payload = json.dumps({"t": 1790000000, "dps": {"102": body}}).encode()
+    return create_mqtt_encoder(LOCALKEY)(RoborockMessage(protocol=RoborockMessageProtocol.RPC_RESPONSE, payload=payload))
+
+
+def test_a_robot_error_reply_to_get_timer_still_shows_the_stores_timers(ctx):
     interceptor = timer_rpc.TimerRpcInterceptor(ctx)
     interceptor(DUID, _encode_request("get_timer", [], request_id=63))
-    body = json.dumps({"id": 63, "error": {"code": -10005, "message": "unsupported"}})
-    payload = json.dumps({"t": 1790000000, "dps": {"102": body}}).encode()
-    frame = create_mqtt_encoder(LOCALKEY)(RoborockMessage(protocol=RoborockMessageProtocol.RPC_RESPONSE, payload=payload))
-    assert interceptor.merge_response(DUID, frame) is None
+    reply = _decode_reply(interceptor.merge_response(DUID, _robot_error_frame(63)))
+    assert reply.api_error is None
+    assert [entry[0] for entry in reply.data] == ["3549431", "3549434", "3878757"]
+
+
+def test_a_robot_error_reply_with_nothing_in_the_store_is_passed_through(ctx):
+    for job in schedule_store.list_jobs(ctx, DUID):
+        schedule_store.delete_job(ctx, DUID, str(job["id"]))
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    interceptor(DUID, _encode_request("get_timer", [], request_id=64))
+    assert interceptor.merge_response(DUID, _robot_error_frame(64)) is None
 
 
 def test_one_job_with_an_unreadable_cron_does_not_hide_the_other_timers(ctx):

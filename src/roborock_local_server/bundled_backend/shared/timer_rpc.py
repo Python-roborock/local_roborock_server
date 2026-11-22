@@ -310,9 +310,10 @@ class TimerRpcInterceptor:
         if pending is None or pending.expires <= time.monotonic():
             return None
         pending.answered[0] = True
-        if body.get("error") is not None:
+        # A robot that rejects get_timer still has the store's timers to show; no error reaches the app then.
+        theirs = body.get("result") if body.get("error") is None and isinstance(body.get("result"), list) else []
+        if body.get("error") is not None and not pending.entries:
             return None
-        theirs = body.get("result") if isinstance(body.get("result"), list) else []
         known = {str(entry[0]) for entry in theirs if isinstance(entry, list) and entry}
         merged = [*theirs, *(entry for entry in pending.entries if str(entry[0]) not in known)]
         return _encode_reply(localkey, message, {"id": body.get("id"), "result": merged})
