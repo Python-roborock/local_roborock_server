@@ -98,8 +98,8 @@ def _parse_field(
                 start, end = number(first), number(last)
             except ValueError as exc:
                 raise CronError(f"bad {name} range {part!r}") from exc
-            if names is _WEEKDAY_NAMES and last.strip().upper() == "SUN":
-                end = high  # a range ending on SUN runs to the end of the week (MON-SUN, FRI-SUN)
+            if names is _WEEKDAY_NAMES and last.strip().upper() == "SUN" and start > 0:
+                end = high  # a range ending on SUN runs to the end of the week (MON-SUN, FRI-SUN); SUN-SUN is Sunday
             if names is _WEEKDAY_NAMES and start > end and 0 <= end and start <= high:
                 # A day range that wraps past Saturday (6-0, SAT-MON).
                 if start < low or end > high:

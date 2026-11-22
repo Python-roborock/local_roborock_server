@@ -325,6 +325,7 @@ def test_unknown_day_or_month_names_are_rejected(expression):
     [
         ("0 8 * * MON-SUN", {0, 1, 2, 3, 4, 5, 6}),
         ("0 8 * * FRI-SUN", {5, 6, 0}),
+        ("0 8 * * SUN-SUN", {0}),
         ("0 8 * * 6-0", {6, 0}),
         ("0 8 * * SAT-MON", {6, 0, 1}),
         ("0 8 * * 1-7", {0, 1, 2, 3, 4, 5, 6}),
