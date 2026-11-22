@@ -4,6 +4,8 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
 
+from .constants import DEFAULT_TIMEZONE
+
 if TYPE_CHECKING:
     from .context import ServerContext
 
@@ -68,8 +70,6 @@ REGION_TIMEZONES: dict[str, str] = {
     "ru": "Europe/Moscow",
 }
 
-FALLBACK_TIMEZONE = "America/New_York"
-
 
 def default_timezone(ctx: ServerContext) -> str:
     """Return network.timezone if set, else the timezone of the region."""
@@ -77,7 +77,7 @@ def default_timezone(ctx: ServerContext) -> str:
         return ctx.timezone.strip()
 
     region = (ctx.region or "").strip().lower()
-    return REGION_TIMEZONES.get(region, FALLBACK_TIMEZONE)
+    return REGION_TIMEZONES.get(region, DEFAULT_TIMEZONE)
 
 
 def default_product_name(model: str) -> str:
