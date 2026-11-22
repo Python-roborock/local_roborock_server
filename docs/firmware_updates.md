@@ -13,7 +13,10 @@ through the app's own Update button.
 
 The official app asks the server `GET /ota/firmware/<duid>/updatev2` (or `/ota/firmware/updatev2?duids=...`). The
 server asks Roborock's cloud and returns its answer, so the app shows the real version and release notes. Both calls
-need the app's signature, like the rest of the protocol, and are never refused as replayed.
+need the app's signature, like the rest of the protocol. The app sends the check and the progress read within milliseconds
+of each other with the same signature, so these read-only GETs (the four check and status paths, nothing else) are not
+refused for repeating a signature; the signature and its age are still verified, and every other route, the upgrade
+POSTs included, refuses a repeated one.
 
 `GET /admin/api/cloud/firmware` lists the update status of every robot on the account in one call, for scripts.
 
@@ -46,16 +49,27 @@ works for a `config.toml` that already exists.
 
 With it on, pressing Update in the official app (`POST /ota/device/<duid>/upgrade`) does the following:
 
-1. The server asks the cloud for the offered version and refuses if there is none. The request then answers at once
-   (`started`) and steps 2 to 5 run in the background, so a slow package download cannot time the request out. The
+1. The server checks the robot is in its inventory (404 otherwise), asks the cloud for the offered version and refuses
+   if there is none. Only one install runs at a time for the whole server: a second press while one is starting or
+   running answers `started: false` with the reason and leaves the running install and its status alone. The request
+   then answers at once (`started`) and steps 2 to 5 run in the background, so a slow package download cannot time the request out. The
    status poll shows `START` until the robot takes over, and a failure in the steps below shows as `FAILED` with the reason.
 2. It asks the cloud for the package address (`/user/devices/<duid>/fw?version=<version>`). The file name carries the
    package's MD5. The server downloads the package to `runtime/ota_packages/` and checks it against that MD5.
 3. It checks the robot: docked (charging, fully charged, or asleep on the charger), idle, not cleaning, no error, at
    least 80% battery, and no other install running. Otherwise it answers with the reason and changes nothing.
-4. It serves the package to the robot from a one-time URL on this server and sends the robot's own OTA command
-   (`miIO.ota`, `proc: "dnld install"`).
-5. It follows the robot through download, install and reboot, and returns once the robot is idle again.
+4. It serves the package to the robot from a URL with a random token on this server and sends the robot's own OTA
+   command (`miIO.ota`, `proc: "dnld install"`). The URL is not single use: it answers every request until it expires
+   (30 minutes) or the install ends.
+5. It follows the robot through download, install and reboot. The install counts as done (`IDLE` for the app) only when
+   the robot fetched the whole package from this server, went offline and came back idle, and reports the target
+   version afterwards (the server waits up to 3 minutes for that report). Otherwise the status is `FAILED` with the
+   reason, so a brief disconnect is never reported as a success.
+
+Package addresses are only accepted on Roborock's package hosts (`rrpkg-us.roborock.com`, `files.roborock.com`,
+`app-files.roborock.com`, `cn-app.roborock.com`, `us-app.roborock.com` and the `cdn.*.fds.api.mi-img.com` hosts of
+the app's regions) over https; any other address is refused. The package cache is shared by all robots, and a package
+a robot is downloading or installing is never removed by another robot's clean-up.
 
 The `latest-stable` upgrade call is still refused, and the Update button only installs the version the cloud offers.
 The package cache is cleared after a successful install and holds a single file otherwise, unless
@@ -92,16 +106,31 @@ allow_downgrade = true
 
 With both on, any catalog version of the robot's model other than the one it reports can be installed, older ones
 included. Without a version the one the robot ran before its last install is used. The install goes the same way as
-an update: the same docked, idle, error-free and 80% battery checks, the same one-time URL and the same live status
-for the app. The package is fetched from the address in the catalog and checked against its MD5; if that address no
-longer works, a new one is asked for and accepted only with the same MD5.
+an update: the same docked, idle, error-free and 80% battery checks, the same token URL and the same live status
+for the app. The catalog is keyed by model, so what it remembers may have been learned from another robot. The
+cloud is therefore asked for THIS robot's package of the version every time, and the install is refused when:
 
-- LocalRock: `POST /ota/device/<duid>/upgrade/version?version=<version>`. The path-style update check
+- the cloud gives this robot no package of that version,
+- the checksum differs from the catalog's (another variant or region), or
+- the package's hardware folder (the `a245` of `.../rriotpkg/a245/...`) differs from the one of the package the robot
+  runs now, when both addresses have one.
+
+Going to an older version also needs a confirmation in the request, so a stray call cannot downgrade a robot.
+
+- LocalRock: `POST /ota/device/<duid>/upgrade/version` with a JSON body
+  `{"version": "02.33.48", "confirm_downgrade": true}`. For a version older than the one the robot reports,
+  `confirm_downgrade` must be `true` and `version` must be in the body and name the same version as the one
+  installed; otherwise the answer is 409 with `needs_confirmation: true`. A newer catalog version needs no
+  confirmation. A `?version=` in the query is still read, but is not a confirmation. The path-style update check
   (`GET /ota/firmware/<duid>/updatev2`) adds `downgradeAllowed`, `availableVersions` (each with `version`,
   `current`, `installable`, `firstSeen`, `size`, `released`) and `previousVersion` when the robot ran another version before its
   last install.
 - Admin: `GET /admin/api/firmware/<duid>/versions` and `POST /admin/api/firmware/<duid>/install-version` with
-  `{"version": "02.33.48"}` (or no body for the previous version).
+  `{"version": "02.33.48", "confirm_downgrade": true}` (the previous version when `version` is empty, which is also
+  a downgrade and also needs `confirm_downgrade`).
+
+Both routes work for robots in this server's inventory only (404 otherwise). The server holds a single account, so a
+signed-in app session may install on any robot of that account, and the cloud checks the stored login too.
 
 `keep_previous_package = true` keeps the package files from before and after each install in `runtime/ota_packages/`
 (two files of about 300 MB), so going back needs no download. The catalog is kept either way.
@@ -159,7 +188,11 @@ app treats an error from that poll as a failed update, and polls it whenever the
 quiet for 90 seconds, which the reboot does. While an install runs, the server therefore answers that poll itself
 with the robot's real state: `DOWNLOADING`, `INSTALLING` or `WAIT_INSTALL` with the progress, `IDLE` only once the
 robot has rebooted and is idle again (the app reads `IDLE` as success), and `FAILED` with the reason when the install
-did not finish. The answer is kept for 30 minutes.
+did not finish. The answer is kept for 30 minutes and saved to `runtime/ota_live.json`, so it survives a restart of
+the server. An install that was still running at the restart is then answered as `FAILED` ("The server restarted
+during the install"), because the server no longer watches the robot and the app would read a missing status as
+success. The robot may still finish the update on its own; check the version it reports. The path-form poll
+(`/ota/firmware/<duid>/upgrade/status`) is forwarded to the cloud like the query form when no local install is shown.
 
 During the install the robot's own status messages reach the app as usual: `P201` carries the status
 (`DOWNLOADING`, `INSTALLING`, `IDLE`), `P200` the download progress from 0 to 100, and `P203` the new version when
@@ -167,7 +200,7 @@ the robot reconnects.
 
 ### The install record
 
-Each install writes `runtime/ota_results/<time>_<duid>.json` with the parameters sent to the robot (the one-time token
+Each install writes `runtime/ota_results/<time>_<duid>.json` with the parameters sent to the robot (the URL token
 is hidden), the robot's state timeline, whether it went offline and came back, and the version it reports afterwards.
 It is the place to look when an install did not behave.
 
@@ -188,8 +221,9 @@ not part of the server:
   It showed the header capitalisation requirement and the robot's state names.
 - An explorer for candidate cloud OTA paths, read with the stored login, which located the package address route.
 
-Both were admin-only debug endpoints on a development branch (`feat/ota-install-test` in the author's fork). They are
-left out of the server because they let an admin drive a robot's firmware by hand. The robot's OTA commands are
+Both were admin-only debug endpoints on a development branch (`feat/ota-install-test` in the author's fork). The
+admin endpoints are left out of the server because they let an admin drive a robot's firmware by hand; the download
+and watch code they used ships as `ota_dry_run.py`, which the installer runs. The robot's OTA commands are
 `get_ota_state` (`idle`, `downloading`, `installing`, `wait_install`, `failed`), `get_ota_progress` (0 to 100, and 0
 while installing) and `miIO.ota` with `{"mode": "normal", "install": "0" or "1", "app_url": ..., "file_md5": ...,
 "proc": "dnld" or "dnld install"}`.
