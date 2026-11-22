@@ -33,7 +33,8 @@ PACKAGE_WATCH_SECONDS = 240
 # An install: the robot reboots and is briefly unreachable, so the watch is long and tolerates silence.
 INSTALL_WATCH_SECONDS = 900
 INSTALL_TOKEN_TTL_SECONDS = 1800
-INSTALL_MIN_BATTERY = 80
+# The official app offers an update on the dock at 20% or more (personal_center bundle), so the server follows it.
+INSTALL_MIN_BATTERY = 20
 WAIT_INSTALL_STUCK_SECONDS = 60
 MAX_PACKAGE_BYTES = 400 * 1024 * 1024
 MAX_REDIRECTS = 3
@@ -188,7 +189,7 @@ class OtaDryRun:
         should serve it, or None for data when the robot should fetch the url directly. Without a package
         a random file is used. With [install] the robot is asked to download AND install the package.
         """
-        refusal = await self._refusal(client, INSTALL_MIN_BATTERY if install else 30)
+        refusal = await self._refusal(client, INSTALL_MIN_BATTERY)
         if refusal:
             return {"ran": False, "reason": refusal}
 
@@ -235,7 +236,7 @@ class OtaDryRun:
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
-    async def _refusal(self, client: Any, min_battery: int = 30) -> str:
+    async def _refusal(self, client: Any, min_battery: int = INSTALL_MIN_BATTERY) -> str:
         status = await self._ask(client, "get_status", [])
         first = status[0] if isinstance(status, list) and status and isinstance(status[0], dict) else None
         if first is None:

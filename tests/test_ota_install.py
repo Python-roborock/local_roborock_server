@@ -74,8 +74,8 @@ def test_a_dry_run_still_only_downloads() -> None:
     assert result["install"] is False
 
 
-def test_an_install_needs_a_well_charged_robot_but_a_dry_run_does_not() -> None:
-    result = asyncio.run(OtaDryRun().run(Robot(["idle"], battery=70), "https://srv:555", dict(PACKAGE_INFO), None, install=True))
+def test_an_install_follows_the_official_apps_battery_gate_like_a_dry_run() -> None:
+    result = asyncio.run(OtaDryRun().run(Robot(["idle"], battery=19), "https://srv:555", dict(PACKAGE_INFO), None, install=True))
     assert result["ran"] is False and "battery" in result["reason"]
 
     result = asyncio.run(OtaDryRun().run(Robot(["idle", "wait_install"], battery=70), "https://srv:555", dict(PACKAGE_INFO)))

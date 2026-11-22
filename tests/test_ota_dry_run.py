@@ -75,13 +75,23 @@ def test_the_url_stops_working_after_the_run(monkeypatch) -> None:
 def test_a_robot_that_is_not_docked_idle_and_healthy_is_left_alone(monkeypatch) -> None:
     _fast(monkeypatch)
     for status in ([{"state": 5, "battery": 90, "in_cleaning": 1, "error_code": 0}],
-                   [{"state": 8, "battery": 10, "in_cleaning": 0, "error_code": 0}],
+                   [{"state": 8, "battery": 19, "in_cleaning": 0, "error_code": 0}],
                    [{"state": 8, "battery": 90, "in_cleaning": 0, "error_code": 12}]):
         dry_run = OtaDryRun()
         robot = FakeRobot(dry_run, ["idle"], status=status)
         result = asyncio.run(dry_run.run(robot, "https://srv:555"))
         assert result["ran"] is False
         assert all(method != "miIO.ota" for method, _ in robot.asked)
+
+
+def test_the_battery_gate_is_the_official_apps_twenty_percent(monkeypatch) -> None:
+    _fast(monkeypatch)
+    for battery, ran in ((19, False), (20, True)):
+        dry_run = OtaDryRun()
+        status = [{"state": 8, "battery": battery, "in_cleaning": 0, "error_code": 0}]
+        robot = FakeRobot(dry_run, ["idle"], status=status)
+        result = asyncio.run(dry_run.run(robot, "https://srv:555"))
+        assert any(method == "miIO.ota" for method, _ in robot.asked) is ran
 
 
 def test_a_robot_already_updating_is_left_alone(monkeypatch) -> None:

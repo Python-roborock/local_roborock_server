@@ -57,7 +57,7 @@ With it on, pressing Update in the official app (`POST /ota/device/<duid>/upgrad
 2. It asks the cloud for the package address (`/user/devices/<duid>/fw?version=<version>`). The file name carries the
    package's MD5. The server downloads the package to `runtime/ota_packages/` and checks it against that MD5.
 3. It checks the robot: docked (charging, fully charged, or asleep on the charger), idle, not cleaning, no error, at
-   least 80% battery, and no other install running. Otherwise it answers with the reason and changes nothing.
+   least 20% battery, the same gate the official app uses before it offers an update, and no other install running. Otherwise it answers with the reason and changes nothing.
 4. It serves the package to the robot from a URL with a random token on this server and sends the robot's own OTA
    command (`miIO.ota`, `proc: "dnld install"`). The URL is not single use: it answers every request until it expires
    (30 minutes) or the install ends.
@@ -107,7 +107,7 @@ allow_downgrade = true
 
 With both on, any catalog version of the robot's model other than the one it reports can be installed, older ones
 included. Without a version the one the robot ran before its last install is used. The install goes the same way as
-an update: the same docked, idle, error-free and 80% battery checks, the same token URL and the same live status
+an update: the same docked, idle, error-free and 20% battery checks, the same token URL and the same live status
 for the app. The catalog is keyed by model, so what it remembers may have been learned from another robot. The
 cloud is therefore asked for THIS robot's package of the version every time, and the install is refused when:
 
