@@ -47,12 +47,11 @@ a request without a robot id from a machine at a robot's address passes it.
 
 ### What is logged
 
-The shared request log (`http_jsonl`) normally stores every header and query value. For this route it keeps only the
-header and query names, the path without its query string, the response status and size, and the robot id if the
-request carried one. The console log has the same names and the answer's status and size. The key itself is never
-logged. Two things outside this route still see the robot's signed query: the device key cache, which stores signed
-queries for key recovery as for any robot request, and the request log of a server that has the proxy switched off,
-which treats the request like any other unknown path.
+The shared request log (`http_jsonl`) normally stores every header and query value. For this route, with the proxy
+on or off, it keeps only the header and query names, the path without its query string, and the robot id if the
+request carried one. With the proxy on it also records the response status and size. The console log has the same names and the answer's status and size. The key itself is never
+logged. One thing outside this route still sees the robot's signed query: the device key cache, which stores signed
+queries for key recovery as for any robot request.
 
 Without the proxy, the robot's request reaches the catch-all route and the robot reports `KeyCorrupt`, because it got
 something that is not a key.

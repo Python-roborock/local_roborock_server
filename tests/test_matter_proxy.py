@@ -239,11 +239,13 @@ def test_when_disabled_nothing_is_forwarded(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(matter_proxy, "forward", fail_forward)
     supervisor.runtime_state.upsert_vacuum("D1", did="d1", name="Robot")
-    response = TestClient(supervisor.app).get(PATH + "?did=d1")
+    response = TestClient(supervisor.app).get(PATH + "?did=d1&signature=QUERYSECRET", headers={"Authorization": "SECRETVALUE"})
 
     assert called == []
     assert response.content != b"KEYBYTES"
     assert "matter_key_proxy" not in supervisor.context.http_jsonl.read_text(encoding="utf-8")
+    log_text = supervisor.context.http_jsonl.read_text(encoding="utf-8")
+    assert PATH in log_text and "QUERYSECRET" not in log_text and "SECRETVALUE" not in log_text
 
 
 def test_the_route_answers_429_after_too_many_requests(tmp_path, monkeypatch) -> None:

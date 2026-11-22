@@ -1063,6 +1063,8 @@ class ReleaseSupervisor:
             "body_sha256": body_sha256,
             "remote": f"{client_host}:{client_port}",
         }
+        if matter_proxy.matches(clean_path, request.method):
+            matter_proxy.redact_log_entry(entry)
         if explicit_did:
             entry["did"] = explicit_did
         if explicit_pid:
@@ -1274,7 +1276,6 @@ class ReleaseSupervisor:
                 return JSONResponse(response_payload, status_code=status_code)
 
         if self.config.matter.key_proxy and matter_proxy.matches(clean_path, request.method):
-            matter_proxy.redact_log_entry(entry)
             matter_query = matter_proxy.parse_query(request.url.query)
             client_ip = request.client.host if request.client else ""
             admitted = False
