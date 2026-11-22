@@ -120,6 +120,10 @@ class MqttTlsProxy:
             return
         for endpoint in endpoints:
             try:
+                endpoint.shutdown(socket.SHUT_RDWR)
+            except (OSError, ValueError, AttributeError):
+                pass
+            try:
                 endpoint.close()
             except OSError:
                 pass
@@ -821,6 +825,10 @@ class MqttTlsProxy:
         finally:
             for endpoint in (src, dst):
                 try:
+                    endpoint.shutdown(socket.SHUT_RDWR)
+                except (OSError, ValueError, AttributeError):
+                    pass
+                try:
                     endpoint.close()
                 except OSError:
                     pass
@@ -903,6 +911,10 @@ class MqttTlsProxy:
                 for endpoint in (tls_conn, backend):
                     if endpoint is None:
                         continue
+                    try:
+                        endpoint.shutdown(socket.SHUT_RDWR)
+                    except (OSError, ValueError, AttributeError):
+                        pass
                     try:
                         endpoint.close()
                     except OSError:
