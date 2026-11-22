@@ -12,12 +12,22 @@ import time
 from typing import Any, Literal
 
 import aiohttp
+from roborock.data import UserData
+from roborock.exceptions import (
+    RoborockAccountDoesNotExist,
+    RoborockConnectionException,
+    RoborockInvalidCredentials,
+    RoborockNoResponseFromBaseURL,
+    RoborockRateLimit,
+    RoborockTimeout,
+)
 from roborock.web_api import RoborockApiClient
 
 from .backend import (
     _build_inventory,
     _fetch_additional_web_cache,
     _fetch_cloud_home_data_with_api,
+    _fetch_plugin_catalogs,
     _flatten_device_scenes,
     _load_existing_inventory_for_merge,
     _merge_existing_inventory_mutations,
@@ -28,6 +38,29 @@ from .backend import (
     _normalize_value_map,
 )
 from shared.inventory_io import atomic_write_inventory, inventory_transaction
+
+
+def summarize_plugin_catalogs(catalogs: dict[str, Any]) -> dict[str, Any]:
+    """The plugin catalogs reduced to what picks a plugin: versions, levels and download URLs."""
+    keep = ("version", "apiLevel", "apilevel", "pluginLevel", "productid", "categoryId", "category", "moduleType", "url", "id", "model")
+    summary: dict[str, Any] = {"fetched_at_utc": catalogs.get("fetched_at_utc")}
+    for name, catalog in catalogs.items():
+        if not isinstance(catalog, dict):
+            continue
+        entry: dict[str, Any] = {"params": catalog.get("params") or catalog.get("json") or {}}
+        if catalog.get("fetched_at_utc"):
+            entry["fetched_at_utc"] = catalog["fetched_at_utc"]
+        if "error" in catalog:
+            entry["error"] = catalog["error"]
+        data = catalog.get("data")
+        if isinstance(data, dict):
+            data = data.get("categoryPluginList")
+        records = data if isinstance(data, list) else []
+        entry["plugins"] = [
+            {key: record[key] for key in keep if key in record} for record in records if isinstance(record, dict)
+        ]
+        summary[name] = entry
+    return summary
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -45,6 +78,43 @@ def _to_jsonable(value: Any) -> Any:
     if callable(as_dict):
         return _to_jsonable(as_dict())
     return str(value)
+
+
+def _merge_plugin_catalogs(stored: dict[str, Any], fresh: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Catalog by catalog: a fresh entry with an error never replaces a stored one that has none."""
+    merged = dict(stored)
+    kept: list[str] = []
+    for name, entry in fresh.items():
+        previous = stored.get(name)
+        failed = isinstance(entry, dict) and "error" in entry
+        if failed and isinstance(previous, dict) and "error" not in previous:
+            kept.append(name)
+            # Stamp the kept entry with its real age so the new top-level stamp does not make it look fresh.
+            merged[name] = {"fetched_at_utc": stored.get("fetched_at_utc"), **previous}
+            continue
+        merged[name] = entry
+    return merged, kept
+
+
+def _describe_refresh_error(exc: BaseException) -> str:
+    """Only a rejected login says to sign in again; other failures get their own advice."""
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and current not in chain:
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    if any(isinstance(item, RoborockRateLimit) for item in chain):
+        return f"The cloud is rate limiting requests ({exc}). Wait a few minutes and refresh again."
+    if any(isinstance(item, (RoborockInvalidCredentials, RoborockAccountDoesNotExist)) for item in chain):
+        return f"The cloud rejected the stored login ({exc}). Request a code and sign in again."
+    if any(isinstance(item, (TimeoutError, RoborockTimeout)) for item in chain):
+        return "The cloud did not answer in time. Try the refresh again."
+    if any(
+        isinstance(item, (aiohttp.ClientError, OSError, RoborockConnectionException, RoborockNoResponseFromBaseURL))
+        for item in chain
+    ):
+        return f"The cloud could not be reached ({exc}). Check the network and try again."
+    return f"The cloud request failed ({exc}). The stored catalogs were kept."
 
 
 @dataclass
@@ -68,6 +138,7 @@ class CloudImportManager:
         self.ttl_seconds = ttl_seconds
         self._sessions: dict[str, PendingCloudSession] = {}
         self._lock = threading.Lock()
+        self._snapshot_lock = threading.Lock()
 
     def _cleanup_locked(self) -> None:
         now = time.time()
@@ -127,6 +198,74 @@ class CloudImportManager:
             "expires_at": datetime.fromtimestamp(expires_at_ts, tz=timezone.utc).isoformat(),
         }
 
+    def _read_snapshot(self) -> dict[str, Any]:
+        try:
+            parsed = json.loads(self.snapshot_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def plugin_catalogs(self) -> dict[str, Any]:
+        """The stored plugin catalogs, summarized, without any cloud request."""
+        web_cache = self._read_snapshot().get("web_api_cache")
+        catalogs = web_cache.get("plugin_catalogs") if isinstance(web_cache, dict) else None
+        return summarize_plugin_catalogs(catalogs) if isinstance(catalogs, dict) else {}
+
+    async def refresh_plugin_catalogs(self) -> dict[str, Any]:
+        """Re-reads the plugin catalogs from the cloud with the login the snapshot already holds.
+
+        Only the plugin catalogs in the snapshot change; the inventory is left alone. A rejected
+        login needs the email-code sign-in again, which stores a fresh one.
+        """
+        snapshot = self._read_snapshot()
+        meta = snapshot.get("meta") if isinstance(snapshot.get("meta"), dict) else {}
+        try:
+            user_data = UserData.from_dict(snapshot.get("user_data"))
+        except (TypeError, ValueError, KeyError):
+            user_data = None
+        email = str(meta.get("username") or "")
+        if user_data is None or not user_data.token or not email:
+            raise ValueError("No cloud login is stored. Request a code and sign in first.")
+
+        timeout = aiohttp.ClientTimeout(total=120)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            api = RoborockApiClient(username=email, base_url=str(meta.get("base_url") or "") or None, session=session)
+            if meta.get("device_identifier"):
+                setattr(api, "_device_identifier", str(meta["device_identifier"]))
+            try:
+                home_data = await _fetch_cloud_home_data_with_api(api, user_data)
+                catalogs = await _fetch_plugin_catalogs(api, user_data, home_data)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(_describe_refresh_error(exc)) from exc
+
+        failed = [name for name, item in catalogs.items() if isinstance(item, dict) and "error" in item]
+        if failed and len(failed) == sum(1 for item in catalogs.values() if isinstance(item, dict)):
+            errors = "; ".join(str(catalogs[name]["error"]) for name in failed)
+            raise ValueError(f"The cloud returned no plugin catalogs ({errors}). The stored catalogs were kept.")
+
+        fresh = _to_jsonable(catalogs)
+        # The cloud wait is over; re-read under the lock so a sign-in that finished meanwhile is not reverted.
+        with self._snapshot_lock:
+            snapshot = self._read_snapshot()
+            current = snapshot.get("user_data")
+            if not isinstance(current, dict) or not current.get("token"):
+                raise ValueError("The stored cloud login is missing or unreadable. Request a code and sign in again.")
+            if current.get("token") != user_data.token:
+                raise ValueError("A new sign-in finished while the refresh ran. Run the refresh again.")
+            web_cache = snapshot.get("web_api_cache")
+            if not isinstance(web_cache, dict):
+                web_cache = {}
+                snapshot["web_api_cache"] = web_cache
+            stored = web_cache.get("plugin_catalogs")
+            stored = stored if isinstance(stored, dict) else {}
+            merged, kept = _merge_plugin_catalogs(stored, fresh)
+            web_cache["plugin_catalogs"] = merged
+            atomic_write_inventory(self.snapshot_path, snapshot)
+        result = {"success": True, "step": "plugins_refreshed", **summarize_plugin_catalogs(merged)}
+        if kept:
+            result["kept_previous"] = kept
+        return result
+
     async def submit_code(self, *, session_id: str, code: str) -> dict[str, Any]:
         normalized_session_id = session_id.strip()
         normalized_code = code.strip()
@@ -180,6 +319,7 @@ class CloudImportManager:
                 "generated_at_utc": datetime.now(timezone.utc).isoformat(),
                 "username": session_data.email,
                 "base_url": session_data.base_url,
+                "device_identifier": session_data.device_identifier,
                 "source": "admin_email_code_login",
             },
             "user_data": _to_jsonable(user_data),
@@ -196,7 +336,8 @@ class CloudImportManager:
             )
 
             atomic_write_inventory(self.inventory_path, normalized_inventory)
-        self.snapshot_path.write_text(json.dumps(normalized_snapshot, indent=2) + "\n", encoding="utf-8")
+        with self._snapshot_lock:
+            atomic_write_inventory(self.snapshot_path, normalized_snapshot)
 
         with self._lock:
             self._sessions.pop(normalized_session_id, None)

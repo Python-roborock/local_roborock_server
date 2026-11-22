@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import json
@@ -638,7 +639,7 @@ async def _fetch_cloud_home_data_with_api(api: RoborockApiClient, user_data: Use
                 # The library applies request rate-limits per method family.
                 # Back off a bit before trying legacy endpoint variants.
                 await asyncio.sleep(1.2)
-    raise RuntimeError(f"Failed to fetch cloud home_data: {last_error}")
+    raise RuntimeError(f"Failed to fetch cloud home_data: {last_error}") from last_error
 
 
 async def _fetch_cloud_home_data_from_dict(
@@ -763,6 +764,12 @@ def _merge_existing_inventory_mutations(
         return cloud_inventory
 
     merged = dict(cloud_inventory)
+
+    # Refreshing cloud definitions must not erase the local scheduler's record
+    # of occurrences already attempted (including a clean with a lost reply).
+    occurrences = existing_inventory.get("schedule_occurrences")
+    if isinstance(occurrences, dict):
+        merged["schedule_occurrences"] = copy.deepcopy(occurrences)
 
     rooms = _merge_record_lists_by_identity(
         _inventory_rooms(merged),
