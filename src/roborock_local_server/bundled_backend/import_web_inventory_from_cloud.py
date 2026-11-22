@@ -639,7 +639,7 @@ async def _fetch_cloud_home_data_with_api(api: RoborockApiClient, user_data: Use
                 # The library applies request rate-limits per method family.
                 # Back off a bit before trying legacy endpoint variants.
                 await asyncio.sleep(1.2)
-    raise RuntimeError(f"Failed to fetch cloud home_data: {last_error}")
+    raise RuntimeError(f"Failed to fetch cloud home_data: {last_error}") from last_error
 
 
 async def _fetch_cloud_home_data_from_dict(
