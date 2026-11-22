@@ -26,6 +26,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from roborock.protocol import create_mqtt_decoder, create_mqtt_encoder
@@ -66,6 +67,8 @@ class ForwardToRobot(Exception):
 _PATROL_ACTIONS = frozenset({"app_start_patrol", "start_patrol"})
 _STATUS_WORDS = frozenset({"on", "off", "disable"})
 _PENDING_SECONDS = 30.0
+# How long a forwarded get_timer waits for the robot before the store answers alone.
+FALLBACK_SECONDS = 6.0
 _NAME_RE = re.compile(r"[A-Za-z]{3}")
 _MONTH_NUMBERS = {name: number for number, name in enumerate(
     ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), 1)}
@@ -95,8 +98,14 @@ def device_cron(cron: str) -> str | None:
     if (dom == "*") != (month == "*"):
         return None
     # Robot clients read digits, so day and month names (MON-FRI) are written out as numbers.
-    month = _NAME_RE.sub(lambda m: str(_MONTH_NUMBERS[m.group(0).upper()]), month)
-    dow = _NAME_RE.sub(lambda m: str(_DAY_NUMBERS[m.group(0).upper()]), dow)
+    try:
+        month = _NAME_RE.sub(lambda m: str(_MONTH_NUMBERS[m.group(0).upper()]), month)
+        dow = _NAME_RE.sub(lambda m: str(_DAY_NUMBERS[m.group(0).upper()]), dow)
+        if "7" in dow or any(int(a) > int(b) for a, b in re.findall(r"(\d)-(\d)", dow)):
+            # Clients that only know 0-6 get Sunday as 0 and no wrapping ranges.
+            dow = ",".join(str(day) for day in sorted(parse_cron(f"0 0 * * {dow}").days_of_week))
+    except (KeyError, CronError):
+        return None
     return f"{minute} {hour} {dom} {month} {dow}"
 
 
@@ -107,6 +116,7 @@ def _timer_entry(job: dict[str, Any]) -> list[Any] | None:
         return None
     cron = device_cron(str(job.get("cron") or ""))
     if cron is None:
+        _LOGGER.debug("Schedule %s has a cron get_timer cannot show: %r", job.get("id"), job.get("cron"))
         return None
     enabled = job.get("enabled", True)
     on = enabled not in (False, 0, "0", "false", "False")
@@ -207,6 +217,14 @@ def handle_timer_request(
     raise TimerRequestError(f"not a timer method: {method!r}")
 
 
+class _Pending(NamedTuple):
+    expires: float
+    entries: list[Any]
+    seq: int | None
+    version: bytes | None
+    answered: list[bool]
+
+
 class TimerRpcInterceptor:
     """Bridge hook: turn an encrypted timer request into an encrypted reply, or None to forward."""
 
@@ -214,7 +232,7 @@ class TimerRpcInterceptor:
         self._context = context
         self._default_timezone = default_timezone
         # get_timer requests forwarded to the robot whose reply needs the store's entries added.
-        self._pending: dict[tuple[str, Any], tuple[float, list[Any]]] = {}
+        self._pending: dict[tuple[str, Any], _Pending] = {}
 
     def _localkey(self, duid: str) -> str:
         creds = self._context.runtime_credentials
@@ -259,14 +277,36 @@ class TimerRpcInterceptor:
         if method == "get_timer" and "result" in body:
             # The robot may hold legacy timers of its own: let it answer and add the store's entries.
             if body["result"]:
-                self._remember_pending(duid, request_id, body["result"])
+                self._remember_pending(duid, request_id, body["result"], message)
             return None
         return _encode_reply(localkey, message, body)
 
-    def _remember_pending(self, duid: str, request_id: Any, entries: list[Any]) -> None:
+    def _remember_pending(self, duid: str, request_id: Any, entries: list[Any], message: RoborockMessage) -> None:
         now = time.monotonic()
-        self._pending = {key: value for key, value in self._pending.items() if value[0] > now}
-        self._pending[(duid, request_id)] = (now + _PENDING_SECONDS, entries)
+        self._pending = {key: value for key, value in self._pending.items() if value.expires > now}
+        self._pending[(duid, request_id)] = _Pending(now + _PENDING_SECONDS, entries, message.seq, message.version, [False])
+
+    def request_fallback(self, duid: str, payload: bytes) -> tuple[float, Callable[[], bytes | None]] | None:
+        """For a get_timer just forwarded: a delay and a producer of the store-only reply if the robot stays silent."""
+        localkey = self._localkey(duid)
+        try:
+            (message,) = create_mqtt_decoder(localkey)(payload)
+            request = _dps_body(message, RoborockMessageProtocol.RPC_REQUEST)
+        except Exception:  # noqa: BLE001
+            return None
+        key = (duid, request.get("id") if request else None)
+        pending = self._pending.get(key)
+        if request is None or request.get("method") != "get_timer" or pending is None:
+            return None
+
+        def reply() -> bytes | None:
+            if pending.answered[0]:
+                return None
+            pending.answered[0] = True
+            self._pending.pop(key, None)
+            return _encode_reply(localkey, message, {"id": key[1], "result": pending.entries})
+
+        return FALLBACK_SECONDS, reply
 
     def merge_response(self, duid: str, payload: bytes) -> bytes | None:
         """Add the store's timers to the robot's get_timer reply, or None to pass it on unchanged."""
@@ -288,11 +328,14 @@ class TimerRpcInterceptor:
         if body is None:
             return None
         pending = self._pending.get((duid, body.get("id")))
-        if pending is None or pending[0] <= time.monotonic():
+        if pending is None or pending.expires <= time.monotonic():
+            return None
+        pending.answered[0] = True
+        if body.get("error") is not None:
             return None
         theirs = body.get("result") if isinstance(body.get("result"), list) else []
         known = {str(entry[0]) for entry in theirs if isinstance(entry, list) and entry}
-        merged = [*theirs, *(entry for entry in pending[1] if str(entry[0]) not in known)]
+        merged = [*theirs, *(entry for entry in pending.entries if str(entry[0]) not in known)]
         return _encode_reply(localkey, message, {"id": body.get("id"), "result": merged})
 
 

@@ -2025,6 +2025,7 @@ class ReleaseSupervisor:
                 request_observer=self.schedule_sync.observe_request,
                 request_interceptor=timer_rpc,
                 response_rewriter=timer_rpc.merge_response,
+                request_fallback=timer_rpc.request_fallback,
             )
             await self._topic_bridge.start()
             self.runtime_state.set_service("mqtt_topic_bridge", running=True, required=False, enabled=True)

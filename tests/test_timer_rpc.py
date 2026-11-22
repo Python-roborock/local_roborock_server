@@ -436,3 +436,81 @@ def test_get_timer_shows_day_names_as_numbers(ctx):
     timer_rpc.handle_timer_request(ctx, DUID, "set_timer", [["named", ["on", ["0 8 * * MON-FRI", ["start_clean", {}]]]]])
     listed = timer_rpc.handle_timer_request(ctx, DUID, "get_timer", None)
     assert next(entry for entry in listed if entry[0] == "named")[2][0] == "0 8 * * 1-5"
+
+
+def _bridge_with_fallback(ctx, interceptor):
+    return MqttTopicBridge(
+        host="127.0.0.1", port=1883, logger=logging.getLogger("test.timer_fallback"),
+        request_interceptor=interceptor, response_rewriter=interceptor.merge_response,
+        request_fallback=interceptor.request_fallback,
+    )
+
+
+def test_get_timer_is_answered_by_the_store_when_the_robot_stays_silent(ctx, monkeypatch):
+    monkeypatch.setattr(timer_rpc, "FALLBACK_SECONDS", 0.02)
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    bridge = _bridge_with_fallback(ctx, interceptor)
+    bridge._remember_device_seen(DeviceTopicKey(did="robot-did", mqtt_usr="robot-user"))
+    cloud = CloudTopicKey(rriot_u="u", mqtt_username="m", duid=DUID)
+    sent = []
+
+    class Client:
+        async def publish(self, topic, payload, **kwargs):
+            sent.append((topic, payload))
+
+    async def exercise():
+        request = SimpleNamespace(payload=_encode_request("get_timer", [], request_id=61), qos=0, retain=False)
+        await bridge._handle_cloud_message(Client(), request, cloud, cloud.topic_in)
+        await asyncio.sleep(0.1)
+
+    asyncio.run(exercise())
+    assert [topic for topic, _ in sent][-1] == cloud.topic_out
+    reply = _decode_reply(sent[-1][1])
+    assert reply.request_id == 61
+    assert [entry[0] for entry in reply.data] == ["3549431", "3549434", "3878757"]
+
+
+def test_no_fallback_reply_is_sent_once_the_robot_has_answered(ctx, monkeypatch):
+    monkeypatch.setattr(timer_rpc, "FALLBACK_SECONDS", 0.05)
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    bridge = _bridge_with_fallback(ctx, interceptor)
+    device = DeviceTopicKey(did="robot-did", mqtt_usr="robot-user")
+    bridge._remember_device_seen(device)
+    cloud = CloudTopicKey(rriot_u="u", mqtt_username="m", duid=DUID)
+    sent = []
+
+    class Client:
+        async def publish(self, topic, payload, **kwargs):
+            sent.append(topic)
+
+    async def exercise():
+        request = SimpleNamespace(payload=_encode_request("get_timer", [], request_id=62), qos=0, retain=False)
+        await bridge._handle_cloud_message(Client(), request, cloud, cloud.topic_in)
+        reply = SimpleNamespace(payload=_encode_robot_reply(62, []), qos=0, retain=False)
+        await bridge._handle_device_message(Client(), reply, device, device.topic_in)
+        await asyncio.sleep(0.15)
+
+    asyncio.run(exercise())
+    assert sent.count(cloud.topic_out) == 1
+
+
+def test_a_robot_error_reply_to_get_timer_is_passed_through(ctx):
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    interceptor(DUID, _encode_request("get_timer", [], request_id=63))
+    body = json.dumps({"id": 63, "error": {"code": -10005, "message": "unsupported"}})
+    payload = json.dumps({"t": 1790000000, "dps": {"102": body}}).encode()
+    frame = create_mqtt_encoder(LOCALKEY)(RoborockMessage(protocol=RoborockMessageProtocol.RPC_RESPONSE, payload=payload))
+    assert interceptor.merge_response(DUID, frame) is None
+
+
+def test_one_job_with_an_unreadable_cron_does_not_hide_the_other_timers(ctx):
+    schedule_store.upsert_job(ctx, DUID, job_id="bad", cron="0 0 * * ABC", enabled=True)
+    assert timer_rpc.device_cron("0 0 * * ABC") is None
+    listed = timer_rpc.handle_timer_request(ctx, DUID, "get_timer", None)
+    assert [entry[0] for entry in listed] == ["3549431", "3549434", "3878757"]
+
+
+def test_get_timer_writes_sunday_as_zero(ctx):
+    assert timer_rpc.device_cron("0 8 * * 5-7") == "0 8 * * 0,5,6"
+    assert timer_rpc.device_cron("0 8 * * FRI-SUN") == "0 8 * * 0,5,6"
+    assert timer_rpc.device_cron("0 8 * * 1,7") == "0 8 * * 0,1"

@@ -76,6 +76,7 @@ class MqttTopicBridge:
         request_interceptor: Callable[[str, bytes], bytes | None] | None = None,
         request_observer: Callable[[str, bytes], None] | None = None,
         response_rewriter: Callable[[str, bytes], bytes | None] | None = None,
+        request_fallback: Callable[[str, bytes], tuple[float, Callable[[], bytes | None]] | None] | None = None,
     ) -> None:
         # Given (duid, payload) for each rr/m request; returns an encoded reply to
         # publish back to the requester instead of forwarding, or None to forward.
@@ -83,6 +84,9 @@ class MqttTopicBridge:
         self._request_observer = request_observer
         # Given (duid, payload) for each rr/d reply; returns a replacement payload, or None to keep it.
         self._response_rewriter = response_rewriter
+        # Given (duid, payload) for a forwarded request; may return (delay, producer) for a reply to send if the robot stays silent.
+        self._request_fallback = request_fallback
+        self._fallback_tasks: set[asyncio.Task[None]] = set()
         self._host = host
         self._port = port
         self._logger = logger
@@ -393,6 +397,28 @@ class MqttTopicBridge:
         retain = bool(getattr(message, "retain", False))
         await client.publish(target_topic, message.payload if payload is None else payload, qos=qos, retain=retain)
 
+    def _schedule_fallback(self, client: aiomqtt.Client, message: aiomqtt.Message, cloud_topic: CloudTopicKey) -> None:
+        if self._request_fallback is None or bool(getattr(message, "retain", False)):
+            return
+        try:
+            plan = self._request_fallback(cloud_topic.duid, bytes(message.payload))
+        except Exception:  # noqa: BLE001
+            return
+        if plan is None:
+            return
+        delay, produce = plan
+        qos = _extract_qos(message)
+
+        async def answer() -> None:
+            await asyncio.sleep(delay)
+            reply = produce()
+            if reply is not None:
+                await client.publish(cloud_topic.topic_out, reply, qos=qos)
+
+        task = asyncio.get_running_loop().create_task(answer())
+        self._fallback_tasks.add(task)
+        task.add_done_callback(self._fallback_tasks.discard)
+
     async def _handle_cloud_message(
         self,
         client: aiomqtt.Client,
@@ -446,6 +472,7 @@ class MqttTopicBridge:
             except Exception:  # Observation must never prevent forwarding.
                 self._logger.warning("MQTT request observer failed for %s", src_topic, exc_info=True)
         await self._publish_mirror(client, message, target_topic)
+        self._schedule_fallback(client, message, cloud_topic)
         self._logger.info(
             "MQTT bridge m->d %s -> %s bytes=%d",
             src_topic,
