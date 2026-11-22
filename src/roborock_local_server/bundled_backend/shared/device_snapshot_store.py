@@ -446,6 +446,9 @@ class DeviceSnapshotStore:
                     continue
                 acc = seen.setdefault(duid, {"status": {}, "status_at": None, "map": None, "rooms": []})
                 acc["last_seen_at"] = at
+                # B01 robots use other dps keys; their 121 is not the V1 state.
+                if message.get("version") == "B01":
+                    continue
                 if proto == 301:
                     raw = _bytes_from_hex(message.get("payload_hex"))
                     if raw is not None and len(raw) >= 24:

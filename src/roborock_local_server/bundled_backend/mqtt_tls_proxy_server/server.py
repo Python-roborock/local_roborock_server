@@ -642,6 +642,9 @@ class MqttTlsProxy:
                 self._conn_duids.setdefault(conn_id, set()).add(duid)
                 self._duid_conn[duid] = conn_id
             self.snapshot_store.mark_seen(duid)
+            # B01 robots (Q7, Q10) use other dps keys; their 121 is not the V1 state.
+            if decoded_entry.get("version") == "B01":
+                return
             if proto_value == 301:
                 self.snapshot_store.record_map(duid, payload_bytes)
             elif proto_value == 102:

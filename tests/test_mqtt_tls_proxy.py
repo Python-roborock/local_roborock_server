@@ -1747,6 +1747,19 @@ def test_queued_packets_of_a_closed_connection_cannot_clear_its_offline_mark(tmp
     assert "1" not in proxy._conn_duids
 
 
+def test_b01_pushes_mark_the_robot_seen_but_do_not_fill_the_v1_status(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+    proxy._set_conn_device_topic("7", ROBOT_TOPIC)
+
+    proxy._observe_snapshot("7", "c2b", ROBOT_TOPIC, 102, {"version": "B01", "payload_utf8": '{"dps":{"121":8}}'}, b"")
+
+    entry = store.get("DUID1")
+    assert entry["last_seen_at"]
+    assert entry["status"] == {}
+    proxy._observe_snapshot("7", "c2b", ROBOT_TOPIC, 102, {"version": "1.0", **PUSH}, b"")
+    assert store.get("DUID1")["status"]["battery"] == 5
+
+
 def test_mower_pushes_do_not_fill_the_vacuum_status_fields(tmp_path) -> None:
     proxy, store = _snapshot_proxy(tmp_path)
     proxy.runtime_credentials = type(
