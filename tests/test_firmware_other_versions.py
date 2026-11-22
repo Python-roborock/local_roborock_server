@@ -15,6 +15,7 @@ from test_firmware_catalog import robot as robot  # noqa: PLC0414  (the fixture)
 from roborock_local_server import ota_dry_run
 
 ON = "allow_downgrade = true\n"
+CONFIRM = ("02.33.48", True, "02.33.48")
 
 
 def _remember(supervisor):
@@ -51,11 +52,11 @@ def test_install_enable_is_needed_too(tmp_path, monkeypatch) -> None:
 def test_the_previous_version_is_reinstalled_from_the_remembered_package(tmp_path, monkeypatch, robot) -> None:
     supervisor, store = _supervisor(tmp_path, monkeypatch, reported="02.35.52", extra=ON)
     _remember(supervisor)
-    supervisor.cloud_manager.urls = {}  # the cloud is not asked for the address again
 
-    started = _install(supervisor, store, robot, lambda: supervisor.ota_installer.start_version("robot"), "02.33.48")
+    started = _install(supervisor, store, robot, lambda: supervisor.ota_installer.start_version("robot", *CONFIRM), "02.33.48")
 
     assert started == {"started": True, "version": "02.33.48"}
+    assert ("/user/devices/robot/fw", {"version": "02.33.48"}) in supervisor.cloud_manager.asked  # asked for THIS robot
     assert robot.downloads == [OLD_URL]
     sent = next(params for method, params in robot.asked if method == "miIO.ota")
     assert sent["file_md5"] == OLD_MD5 and sent["install"] == "1"
@@ -71,7 +72,7 @@ def test_any_catalog_version_can_be_picked_from_the_app_route(tmp_path, monkeypa
 
     async def start():
         route, body = await supervisor._firmware_ota_response(
-            "/ota/device/robot/upgrade/version", "POST", {"version": ["02.33.48"]},
+            "/ota/device/robot/upgrade/version", "POST", {}, {"version": "02.33.48", "confirm_downgrade": True},
         )
         assert route == "ota_upgrade_version_started"
         return body["data"]
@@ -87,39 +88,71 @@ def test_unknown_current_and_missing_versions_are_refused(tmp_path, monkeypatch)
     assert "already runs" in asyncio.run(installer.start_version("robot", "02.35.52"))["reason"]
     assert "not in the firmware catalog" in asyncio.run(installer.start_version("robot", "01.00.00"))["reason"]
     installer.catalog.add(MODEL, "02.20.00", source="cloud_offer")
-    assert "no package" in asyncio.run(installer.start_version("robot", "02.20.00"))["reason"]
+    assert "no package" in asyncio.run(installer.start_version("robot", "02.20.00", True, "02.20.00"))["reason"]
     supervisor.context.snapshot_store.version = ""
     assert "not known" in asyncio.run(installer.start_version("robot", "02.33.48"))["reason"]
 
 
-def test_a_stale_address_is_replaced_only_by_the_same_package(tmp_path, monkeypatch, robot) -> None:
+def test_the_cloud_is_asked_for_this_robots_package_and_must_agree_with_the_catalog(tmp_path, monkeypatch, robot) -> None:
     supervisor, store = _supervisor(tmp_path, monkeypatch, reported="02.35.52", extra=ON)
     _remember(supervisor)
-    fresh = OLD_URL.replace("cdn.example.com", "cdn2.example.com")
-    plain = ota_dry_run._download_to_file
-
-    async def stale_first(url, target):
-        if url == OLD_URL:
-            raise ota_dry_run.PackageUnavailable("The package server answered HTTP 403")
-        return await plain(url.replace("cdn2.example.com", "cdn.example.com"), target)
-
-    monkeypatch.setattr(ota_dry_run, "_download_to_file", stale_first)
-    supervisor.cloud_manager.urls = {"02.33.48": fresh}
-    assert _install(supervisor, store, robot, lambda: supervisor.ota_installer.start_version("robot"), "02.33.48")["started"]
-
-    supervisor.cloud_manager.urls = {"02.35.52": NEW_URL.replace(NEW_MD5, "f" * 32)}
-    monkeypatch.setattr(ota_dry_run, "_download_to_file", _always_403)
-    async def go():
-        assert (await supervisor.ota_installer.start_version("robot", "02.35.52"))["started"] is True
-        await asyncio.gather(*supervisor.ota_installer._running.values())
-
-    asyncio.run(go())
-    assert "no matching one" in supervisor.ota_installer.live_status("robot")["errMsg"]
-    assert supervisor.ota_installer.live_status("robot")["status"] == "FAILED"
+    # The catalog's package was learned from another robot; this robot's cloud answer is a different file.
+    supervisor.cloud_manager.urls = {"02.33.48": OLD_URL.replace(OLD_MD5, "f" * 32), "02.35.52": NEW_URL}
+    started = asyncio.run(supervisor.ota_installer.start_version("robot", *CONFIRM))
+    assert started["started"] is False and "differs from the catalog" in started["reason"]
+    assert supervisor.ota_installer._running == {} and supervisor.ota_installer.live_status("robot") is None
+    assert robot.downloads == []
 
 
-async def _always_403(url, target):
-    raise ota_dry_run.PackageUnavailable("The package server answered HTTP 403")
+def test_the_package_must_be_for_the_hardware_the_robot_runs(tmp_path, monkeypatch, robot) -> None:
+    supervisor, store = _supervisor(tmp_path, monkeypatch, reported="02.35.52", extra=ON)
+    _remember(supervisor)
+    own = NEW_URL.replace("/rpkg_", "/rriotpkg/a245/rpkg_")
+    other = OLD_URL.replace("/rpkg_", "/rriotpkg/a101/rpkg_")
+    supervisor.cloud_manager.urls = {"02.33.48": other, "02.35.52": own}
+    started = asyncio.run(supervisor.ota_installer.start_version("robot", *CONFIRM))
+    assert started["started"] is False and "different hardware" in started["reason"]
+
+
+def test_a_version_the_cloud_will_not_give_this_robot_is_refused(tmp_path, monkeypatch) -> None:
+    supervisor, _ = _supervisor(tmp_path, monkeypatch, reported="02.35.52", extra=ON)
+    _remember(supervisor)  # the catalog knows a package, the cloud has none for this robot
+    supervisor.cloud_manager.urls = {"02.35.52": NEW_URL}
+    started = asyncio.run(supervisor.ota_installer.start_version("robot", *CONFIRM))
+    assert started["started"] is False and "no package" in started["reason"]
+
+
+def test_an_older_version_needs_the_request_to_confirm_it_by_name(tmp_path, monkeypatch, robot) -> None:
+    supervisor, store = _supervisor(tmp_path, monkeypatch, reported="02.35.52", extra=ON)
+    _remember(supervisor)
+    installer = supervisor.ota_installer
+    for args in (("02.33.48",), ("02.33.48", True), ("02.33.48", True, "02.30.00"), ("02.33.48", False, "02.33.48")):
+        refused = asyncio.run(installer.start_version("robot", *args))
+        assert refused["started"] is False and refused["needs_confirmation"] is True and "confirm_downgrade" in refused["reason"]
+    assert installer._running == {} and robot.downloads == []
+
+    async def post(body):
+        return await supervisor._firmware_ota_response("/ota/device/robot/upgrade/version", "POST", {"version": ["02.33.48"]}, body)
+
+    route, answer = asyncio.run(post({}))  # a version in the query alone is not a confirmation
+    assert route == "ota_upgrade_version_refused" and answer["data"]["needs_confirmation"] is True
+    route, answer = asyncio.run(post({"confirm_downgrade": True}))
+    assert route == "ota_upgrade_version_refused" and answer["data"]["needs_confirmation"] is True
+    assert _install(supervisor, store, robot, lambda: installer.start_version("robot", *CONFIRM), "02.33.48")["started"]
+
+
+def test_a_newer_catalog_version_needs_no_confirmation(tmp_path, monkeypatch, robot) -> None:
+    supervisor, store = _supervisor(tmp_path, monkeypatch, reported="02.33.48", extra=ON)
+    _remember(supervisor)
+    assert _install(supervisor, store, robot, lambda: supervisor.ota_installer.start_version("robot", "02.35.52"), "02.35.52")["started"]
+
+
+def test_installing_on_a_robot_that_is_not_in_the_inventory_is_a_404(tmp_path, monkeypatch) -> None:
+    supervisor, _ = _supervisor(tmp_path, monkeypatch, reported="02.35.52", extra=ON)
+    for path in ("/ota/device/stranger/upgrade", "/ota/device/stranger/upgrade/version"):
+        route, body = asyncio.run(supervisor._firmware_ota_response(path, "POST", {}, {"version": "02.33.48", "confirm_downgrade": True}))
+        assert body["code"] == 404 and body["data"]["started"] is False
+    assert supervisor.ota_installer._running == {}
 
 
 def test_the_firmware_check_lists_the_models_versions_for_localrock(tmp_path, monkeypatch) -> None:

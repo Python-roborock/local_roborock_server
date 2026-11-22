@@ -536,7 +536,8 @@ def register_standalone_admin_routes(
         except json.JSONDecodeError:
             body = {}
         version = str((body or {}).get("version") or "").strip() if isinstance(body, dict) else ""
-        started = await supervisor.ota_installer.start_version(duid, version)
+        confirmed = isinstance(body, dict) and body.get("confirm_downgrade") is True
+        started = await supervisor.ota_installer.start_version(duid, version, confirmed, version)
         return JSONResponse({"success": started["started"], **started}, status_code=200 if started["started"] else 409)
 
     @app.post("/admin/api/firmware/{duid}/learn-versions")

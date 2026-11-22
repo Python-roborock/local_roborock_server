@@ -682,7 +682,7 @@ class ReleaseSupervisor:
         return None
 
     async def _firmware_ota_response(
-        self, clean_path: str, method: str, query_params: dict[str, list[str]],
+        self, clean_path: str, method: str, query_params: dict[str, list[str]], body: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]] | None:
         """Answers the app's firmware calls: the check and its progress are read from the cloud, the upgrade is refused."""
         def first(name: str, default: str = "") -> str:
@@ -719,12 +719,20 @@ class ReleaseSupervisor:
             return route_name, {"success": True, "code": 200, "msg": "success", "data": result, "result": result}
         other = self._OTA_UPGRADE_VERSION.match(clean_path)
         if other and method == "POST":
-            started = await self.ota_installer.start_version(other.group(1), first("version"))
+            if not self.ota_installer.owns(other.group(1)):
+                return "ota_upgrade_version_unknown", self._unknown_device_response(other.group(1))
+            body = body or {}
+            named = str(body.get("version") or "").strip()
+            started = await self.ota_installer.start_version(
+                other.group(1), named or first("version"), body.get("confirm_downgrade") is True, named,
+            )
             if started["started"]:
                 return "ota_upgrade_version_started", {"success": True, "code": 200, "msg": "success", "data": started, "result": started}
             return "ota_upgrade_version_refused", {"success": False, "code": 409, "msg": "firmware_upgrade_refused", "data": started}
         upgrade = self._OTA_UPGRADE.match(clean_path)
         if upgrade and method == "POST" and not upgrade.group(2) and self.config.ota.enable_install:
+            if not self.ota_installer.owns(upgrade.group(1)):
+                return "ota_upgrade_unknown", self._unknown_device_response(upgrade.group(1))
             started = await self.ota_installer.start(upgrade.group(1))
             if started["started"]:
                 return "ota_upgrade_started", {"success": True, "code": 200, "msg": "success", "data": started, "result": started}
@@ -737,6 +745,10 @@ class ReleaseSupervisor:
                 "data": {"error": "Installing firmware is not supported by the local server yet."},
             }
         return None
+
+    @staticmethod
+    def _unknown_device_response(duid: str) -> dict[str, Any]:
+        return {"success": False, "code": 404, "msg": "firmware_device_unknown", "data": {"started": False, "reason": f"Unknown device {duid!r}"}}
 
     @staticmethod
     def _normalized_path(path: str) -> str:
@@ -1480,7 +1492,9 @@ class ReleaseSupervisor:
             )
             return response
 
-        ota_response = await self._firmware_ota_response(clean_path, request.method, query_params)
+        ota_response = await self._firmware_ota_response(
+            clean_path, request.method, query_params, _request_json_object(body_params),
+        )
         if ota_response is not None:
             route_name, response_payload = ota_response
         else:

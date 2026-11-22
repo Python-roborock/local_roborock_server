@@ -21,21 +21,29 @@ from .firmware_catalog import SOURCE_INSTALL, SOURCE_OFFER, SOURCE_ROBOT, Firmwa
 from .firmware_scan import DEFAULT_MAX_EMPTY, FirmwareScan
 from .ota_dry_run import (
     PackageRefused,
-    PackageUnavailable,
     clean_package_cache,
     package_address,
+    package_family,
     package_md5,
+    release_package,
     resolve_package,
 )
 
 # A child logger: only real_stack.<name> loggers have an output handler, plain real_stack drops INFO.
 logger = logging.getLogger("real_stack.api")
 
+BUSY_REASON = "Another firmware install is already starting or running"
+# After the reboot the robot reports its version on its own; wait this long for the target version to show.
+REPORT_WAIT_SECONDS = 180
+REPORT_POLL_SECONDS = 3
+
 
 class OtaInstaller:
     def __init__(self, supervisor: Any) -> None:
         self._supervisor = supervisor
         self._running: dict[str, asyncio.Task[None]] = {}
+        # Set before the first await of a start, so a second press cannot begin while the first is still asking the cloud.
+        self._claim = ""
         self.results: dict[str, dict[str, Any]] = {}
         # What the official app reads while an install runs: the cloud knows nothing of a local install, so
         # the app's status polls are answered from here. The app treats IDLE as success and an error as failure.
@@ -123,11 +131,25 @@ class OtaInstaller:
                 continue
             self._lookups[(model, version)] = asyncio.create_task(self._learn(robot, model, version, SOURCE_OFFER))
 
+    def _busy(self) -> bool:
+        return bool(self._claim) or any(not task.done() for task in self._running.values())
+
+    def owns(self, duid: str) -> bool:
+        """Whether the robot is in this server's inventory, the one account whose robots the app may install on."""
+        return self._vacuum(duid) is not None
+
     async def start(self, duid: str) -> dict[str, Any]:
         """Begins an install in the background, or says why not. One install runs at a time."""
+        if self._busy():
+            return {"started": False, "reason": BUSY_REASON}
+        self._claim = duid
+        try:
+            return await self._start(duid)
+        finally:
+            self._claim = ""
+
+    async def _start(self, duid: str) -> dict[str, Any]:
         supervisor = self._supervisor
-        if any(not task.done() for task in self._running.values()):
-            return {"started": False, "reason": "Another firmware install is already running"}
         vacuum = self._vacuum(duid)
         if vacuum is None:
             return {"started": False, "reason": f"Unknown device {duid!r}"}
@@ -154,14 +176,27 @@ class OtaInstaller:
         ota = self._supervisor.config.ota
         return bool(ota.enable_install and getattr(ota, "allow_downgrade", False))
 
-    async def start_version(self, duid: str, version: str = "") -> dict[str, Any]:
+    async def start_version(self, duid: str, version: str = "", confirm: bool = False, confirm_version: str = "") -> dict[str, Any]:
         """Installs a catalog version other than the robot's current one (older ones included), by default the one
-        it ran before its last install. Proven on one Qrevo Curv 2 Flow only, so it needs its own opt-in."""
-        supervisor = self._supervisor
+        it ran before its last install. Proven on one Qrevo Curv 2 Flow only, so it needs its own opt-in; an older
+        version also needs the request to confirm it by name ([confirm] and [confirm_version] equal to the target)."""
         if not self.other_versions_allowed:
             return {"started": False, "reason": "Installing another firmware version is off ([ota] enable_install and allow_downgrade)"}
-        if any(not task.done() for task in self._running.values()):
-            return {"started": False, "reason": "Another firmware install is already running"}
+        if self._busy():
+            return {"started": False, "reason": BUSY_REASON}
+        self._claim = duid
+        try:
+            return await self._start_version(duid, version, confirm, confirm_version)
+        finally:
+            self._claim = ""
+
+    @staticmethod
+    def _is_downgrade(version: str, reported: str) -> bool:
+        target, current = firmware_versions.parse(version), firmware_versions.parse(reported)
+        return target is None or current is None or target < current
+
+    async def _start_version(self, duid: str, version: str, confirm: bool, confirm_version: str) -> dict[str, Any]:
+        supervisor = self._supervisor
         vacuum = self._vacuum(duid)
         if vacuum is None:
             return {"started": False, "reason": f"Unknown device {duid!r}"}
@@ -177,26 +212,43 @@ class OtaInstaller:
         entry = self.catalog.entry(model, version)
         if entry is None:
             return {"started": False, "reason": f"{version} is not in the firmware catalog for {model}"}
-        if not entry.get("md5"):
-            entry = await self._learn(duid, model, version, entry["sources"][0] if entry.get("sources") else SOURCE_OFFER)
-        if not entry or not entry.get("md5"):
-            return {"started": False, "reason": f"The cloud gives no package for {version}"}
+        if self._is_downgrade(version, reported) and not (confirm and confirm_version == version):
+            return {
+                "started": False, "needs_confirmation": True, "version": version,
+                "reason": f"{version} is older than the {reported} the robot runs; resend with confirm_downgrade true and version {version}",
+            }
+        try:
+            url = await self._robot_package_url(duid, model, version, reported, entry)
+        except PackageRefused as exc:
+            return {"started": False, "reason": str(exc)}
 
         async def resolve(keep: set[str]) -> dict[str, Any]:
-            try:
-                return await resolve_package(
-                    supervisor.cloud_manager, duid, version, serve=True, cache_dir=self.cache_dir, known_url=entry["url"], keep=keep,
-                )
-            except PackageUnavailable:
-                # The remembered address went stale: ask again, and only take the same package.
-                url = await package_address(supervisor.cloud_manager, duid, version)
-                if package_md5(url) != entry["md5"]:
-                    raise PackageRefused(f"The remembered package of {version} is gone and the cloud has no matching one") from None
-                return await resolve_package(
-                    supervisor.cloud_manager, duid, version, serve=True, cache_dir=self.cache_dir, known_url=url, keep=keep,
-                )
+            return await resolve_package(
+                supervisor.cloud_manager, duid, version, serve=True, cache_dir=self.cache_dir, known_url=url, keep=keep,
+            )
 
         return await self._launch(duid, vacuum, reported, version, resolve)
+
+    async def _robot_package_url(self, duid: str, model: str, version: str, reported: str, entry: dict[str, Any]) -> str:
+        """The package address the cloud gives THIS robot for [version], checked against the catalog and the robot's own
+        hardware. The catalog is keyed by model, so what it remembers may have been learned from another robot."""
+        cloud = self._supervisor.cloud_manager
+        try:
+            url = await package_address(cloud, duid, version)
+        except Exception as exc:  # noqa: BLE001
+            raise PackageRefused(f"Could not ask the cloud for the package of {version}: {exc}") from None
+        if not url:
+            raise PackageRefused(f"The cloud gives no package of {version} for this robot")
+        if entry.get("md5") and entry["md5"] != package_md5(url):
+            raise PackageRefused(f"The cloud's package of {version} for this robot differs from the catalog's; it may be another variant")
+        try:
+            own = await package_address(cloud, duid, reported)
+        except Exception:  # noqa: BLE001
+            own = ""
+        own = own or str((self.catalog.entry(model, reported) or {}).get("url") or "")
+        if package_family(own) and package_family(url) != package_family(own):
+            raise PackageRefused(f"The package of {version} is for different hardware than the one the robot runs now")
+        return url
 
     def version_info(self, duid: str) -> dict[str, Any]:
         """The catalog versions for the robot's model, the current one marked, for LocalRock's firmware screen."""
@@ -229,6 +281,7 @@ class OtaInstaller:
         """Records the version the robot runs now, fetches the package (the slow part), then installs it."""
         duid = device["duid"]
         model = self.model_of(duid, vacuum)
+        package: dict[str, Any] | None = None
         try:
             before = await self._learn(duid, model, reported, SOURCE_ROBOT) if model and reported and reported != version else None
             keep = {f"{before['md5']}.pkg"} if self._keep_packages and before and before.get("md5") else set()
@@ -242,6 +295,8 @@ class OtaInstaller:
             logger.warning("Firmware install of %s on %s did not start: %s", version, duid, reason)
             self.results[duid] = {"ran": False, "reason": reason, "version": version, "firmware_version_reported": reported}
             self._set_live(duid, "FAILED", err_msg=reason, err_code=1)
+            if package and isinstance(package.get("data"), Path):
+                release_package(package["data"].name)
             return
         await self._install(device, package, version, model, reported, keep)
 
@@ -290,6 +345,24 @@ class OtaInstaller:
             return None
         return {key: value for key, value in entry.items() if key != "at"}
 
+    @staticmethod
+    def _failure(result: dict[str, Any]) -> str:
+        """Why the watched install does not count as finished, or an empty string when it looks complete."""
+        if not result.get("ran"):
+            return str(result.get("reason") or "The robot did not finish the update")
+        if not result.get("package_fully_fetched"):
+            return "The robot never downloaded the whole package from this server"
+        if result.get("final_state") != "idle" or not result.get("saw_offline"):
+            return "The robot did not finish the update"
+        return ""
+
+    async def _wait_for_version(self, duid: str, version: str) -> None:
+        """Gives the rebooted robot a while to report the version it now runs."""
+        deadline = time.monotonic() + REPORT_WAIT_SECONDS
+        store = self._supervisor.context.snapshot_store
+        while firmware_versions.reported_version(store, duid) != version and time.monotonic() < deadline:
+            await asyncio.sleep(REPORT_POLL_SECONDS)
+
     async def _install(
         self, device: dict[str, str], package: dict[str, Any], version: str, model: str = "", previous: str = "",
         keep: set[str] | None = None,
@@ -301,23 +374,27 @@ class OtaInstaller:
             await client.connect()
             result = await supervisor.ota_dry_run.run(
                 client, supervisor.context.api_url(), package, None, True,
-                on_state=lambda state, progress: self._robot_state(duid, state, progress),
+                on_state=lambda state, progress: self._robot_state(duid, state, progress), duid=duid,
             )
         except Exception as exc:  # noqa: BLE001
             result = {"ran": False, "reason": str(exc)}
         finally:
             await client.close()
-        snapshot = supervisor.context.snapshot_store.get(duid) if supervisor.context.snapshot_store else None
-        reported = (snapshot or {}).get("firmware_version")
+            if isinstance(package.get("data"), Path):
+                release_package(package["data"].name)
+        failure = self._failure(result)
+        if not failure:
+            await self._wait_for_version(duid, version)
+        reported = firmware_versions.reported_version(supervisor.context.snapshot_store, duid) or None
+        if not failure and reported != version:
+            failure = f"The robot reports firmware {reported or 'nothing'} after the update, not {version}"
         self.results[duid] = {**result, "version": version, "firmware_version_reported": reported}
         self._write_record(duid, self.results[duid])
-        succeeded = bool(result.get("ran")) and result.get("final_state") == "idle" and bool(result.get("saw_offline"))
+        succeeded = not failure
         if succeeded:
             self._set_live(duid, "IDLE", "100")
         else:
-            self._set_live(duid, "FAILED", err_msg=str(result.get("reason") or "The robot did not finish the update"), err_code=1)
-        if reported != version:
-            logger.warning("After the install the robot %s reports firmware %r, not %s", duid, reported, version)
+            self._set_live(duid, "FAILED", err_msg=failure, err_code=1)
         changed = bool(reported) and bool(previous) and reported != previous
         if model and previous and previous != version and result.get("ran") and (succeeded or changed):
             self.catalog.remember_install(duid, model, previous, version)

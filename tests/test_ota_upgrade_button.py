@@ -160,6 +160,9 @@ def test_a_finished_install_reports_idle_and_a_failed_one_reports_the_reason(tmp
     monkeypatch.setattr(ota_dry_run, "_download_to_file", fake_to_file)
     monkeypatch.setattr(ota_dry_run, "POLL_SECONDS", 0)
     monkeypatch.setattr(ota_dry_run, "INSTALL_WATCH_SECONDS", 2)
+    robot.fetch_from = supervisor.ota_dry_run
+    report = '{"mqttOtaData":{"mqttOtaFirmwareVersion":{"version":"02.16.00"}}}'
+    robot.on_ota = lambda: supervisor.context.snapshot_store.record_firmware_version("robot", report)
 
     async def go():
         await supervisor.ota_installer.start("robot")

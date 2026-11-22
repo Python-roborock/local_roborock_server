@@ -8,7 +8,7 @@ from roborock_local_server.ota_dry_run import OtaDryRun, PackageRefused, resolve
 
 PACKAGE = b"not really a firmware, but it has bytes" * 100
 MD5 = hashlib.md5(PACKAGE).hexdigest()  # noqa: S324
-URL = f"https://cdn.example.com/rriotpkg/a101/pearl-s_1526_fullos.{MD5}.signed.pkg"
+URL = f"https://cdn.awsusor0.fds.api.mi-img.com/rriotpkg/a101/pearl-s_1526_fullos.{MD5}.signed.pkg"
 DOCKED = [{"state": 8, "battery": 100, "in_cleaning": 0, "error_code": 0}]
 
 
@@ -54,7 +54,7 @@ def test_only_the_current_version_can_be_used() -> None:
 
 
 def test_an_unexpected_package_address_is_refused() -> None:
-    for url in ("http://cdn.example.com/x.%s.signed.pkg" % MD5, "https://cdn.example.com/no-checksum.pkg", None):
+    for url in ("http://cdn.awsusor0.fds.api.mi-img.com/x.%s.signed.pkg" % MD5, "https://cdn.awsusor0.fds.api.mi-img.com/no-checksum.pkg", None):
         with pytest.raises(PackageRefused, match="not in the expected form"):
             asyncio.run(resolve_package(FakeCloud(url=url), "duid", "02.15.26", serve=True))
 
@@ -149,7 +149,7 @@ def test_the_package_is_served_under_its_real_file_name_with_the_cdn_headers() -
 
 def test_only_the_real_file_name_is_served() -> None:
     dry_run = OtaDryRun()
-    active = dry_run._active = ota_dry_run._Active("t" * 24, PACKAGE, MD5, 9e12, filename="right.signed.pkg")
+    active = dry_run._slots[""] = ota_dry_run._Active("t" * 24, PACKAGE, MD5, 9e12, filename="right.signed.pkg")
     assert dry_run.file_response("/ota_test/" + "t" * 24 + "/right.signed.pkg", "GET", {}, "x").status_code == 200
     assert dry_run.file_response("/ota_test/" + "t" * 24 + "/wrong.signed.pkg", "GET", {}, "x").status_code == 404
     assert len(active.hits) == 1
@@ -172,7 +172,7 @@ def _wire_names(response):
 
 def test_the_title_case_variant_sends_header_names_as_written() -> None:
     dry_run = OtaDryRun()
-    dry_run._active = ota_dry_run._Active(
+    dry_run._slots[""] = ota_dry_run._Active(
         "t" * 24, PACKAGE, MD5, 9e12, filename="f.signed.pkg", headers={"Etag": f'"{MD5}"'}, variant={"title_case": True},
     )
     response = dry_run.file_response("/ota_test/" + "t" * 24 + "/f.signed.pkg", "GET", {}, "x")
@@ -184,15 +184,15 @@ def test_the_title_case_variant_sends_header_names_as_written() -> None:
 def test_names_are_capitalised_by_default_and_close_is_optional() -> None:
     dry_run = OtaDryRun()
     path = "/ota_test/" + "t" * 24 + "/f.signed.pkg"
-    dry_run._active = ota_dry_run._Active("t" * 24, PACKAGE, MD5, 9e12, filename="f.signed.pkg")
+    dry_run._slots[""] = ota_dry_run._Active("t" * 24, PACKAGE, MD5, 9e12, filename="f.signed.pkg")
     assert "Content-Length" in _wire_names(dry_run.file_response(path, "GET", {}, "x"))  # capitalised by default
 
-    dry_run._active = ota_dry_run._Active("t" * 24, PACKAGE, MD5, 9e12, filename="f.signed.pkg", variant={"title_case": False})
+    dry_run._slots[""] = ota_dry_run._Active("t" * 24, PACKAGE, MD5, 9e12, filename="f.signed.pkg", variant={"title_case": False})
     assert all(name == name.lower() for name in _wire_names(dry_run.file_response(path, "GET", {}, "x")))
 
-    dry_run._active = ota_dry_run._Active("t" * 24, PACKAGE, MD5, 9e12, filename="f.signed.pkg", variant={"title_case": True, "connection_close": True})
+    dry_run._slots[""] = ota_dry_run._Active("t" * 24, PACKAGE, MD5, 9e12, filename="f.signed.pkg", variant={"title_case": True, "connection_close": True})
     assert "Connection" in _wire_names(dry_run.file_response(path, "GET", {}, "x"))
-    dry_run._active = ota_dry_run._Active("t" * 24, PACKAGE, MD5, 9e12, filename="f.signed.pkg", variant={"connection_close": True})
+    dry_run._slots[""] = ota_dry_run._Active("t" * 24, PACKAGE, MD5, 9e12, filename="f.signed.pkg", variant={"connection_close": True})
     assert b"close" in dict(dry_run.file_response(path, "GET", {}, "x").raw_headers).values()
 
 

@@ -3,7 +3,7 @@
 Random mode serves a throwaway file that is not a firmware, so nothing could be flashed even if
 install were on. Package mode uses the robot's own CURRENT firmware package, resolved from the
 cloud and checked against its checksum, with install off. Either way the file is served from a
-one-time URL on this server, or the CDN address is given directly when asked.
+token URL on this server (reusable until it expires), or the CDN address is given directly when asked.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from datetime import UTC
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi.responses import Response, StreamingResponse
 
@@ -45,6 +46,13 @@ DOCKED_STATES = {8, 100}
 SLEEPING_ON_DOCK_STATE = 2
 # States a new attempt may start from: wait_install is a package a dry run staged earlier, replaced by the new one.
 STARTABLE_STATES = ("idle", "failed", "wait_install")
+# Hosts the cloud has handed out firmware and plugin packages from (the app's regional CDN and file hosts).
+PACKAGE_HOSTS = frozenset({
+    "rrpkg-us.roborock.com", "files.roborock.com", "app-files.roborock.com", "cn-app.roborock.com", "us-app.roborock.com",
+    "cdn.awsusor0.fds.api.mi-img.com", "cdn.awssgp0.fds.api.mi-img.com", "cdn.cnbj2.fds.api.mi-img.com",
+    "cdn.ksyru0-eco.fds.api.mi-img.com",
+})
+_PACKAGE_FAMILY = re.compile(r"/rriotpkg/([^/]+)/")
 _PACKAGE_MD5 = re.compile(r"\.([0-9a-f]{32})\.signed\.pkg$")
 _PATH = re.compile(r"^/ota_test/([A-Za-z0-9_-]{16,})(?:/([A-Za-z0-9._-]{1,200})|\.bin)$")
 _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
@@ -83,6 +91,17 @@ def _chunks(data: bytes | Path, start: int, end: int):
         yield data[offset:min(offset + CHUNK_BYTES, end + 1)]
 
 
+def _fully_fetched(hits: list[dict[str, Any]], total: int) -> bool:
+    """True when the requests the robot made together delivered every byte of the file."""
+    reached = 0
+    for hit in sorted(hits, key=lambda item: item.get("start", 0)):
+        start, sent = int(hit.get("start", 0)), int(hit.get("bytes_sent", 0))
+        if start > reached:
+            return False
+        reached = max(reached, start + sent)
+    return total > 0 and reached >= total
+
+
 @dataclass
 class _Active:
     token: str
@@ -97,19 +116,20 @@ class _Active:
 
 class OtaDryRun:
     def __init__(self) -> None:
-        self._active: _Active | None = None
+        # One slot per robot, so a second robot's run does not take the first one's file away.
+        self._slots: dict[str, _Active] = {}
+
+    def _find(self, token: str) -> _Active | None:
+        return next((active for active in list(self._slots.values()) if secrets.compare_digest(active.token, token)), None)
 
     def file_response(self, clean_path: str, method: str, headers: Any, remote: str) -> Response | None:
-        """The test file for its one-time URL, or None when the path is not a dry-run path."""
+        """The test file for its token URL (reusable until it expires), or None when the path is not a dry-run path."""
         match = _PATH.match(clean_path)
         if match is None:
             return None
-        active = self._active
+        active = self._find(match.group(1))
         asked_name = match.group(2)
-        if (
-            active is None or not secrets.compare_digest(active.token, match.group(1)) or time.time() > active.expires_at
-            or (asked_name is not None and asked_name != active.filename)
-        ):
+        if active is None or time.time() > active.expires_at or (asked_name is not None and asked_name != active.filename):
             return Response(status_code=404)
         hit: dict[str, Any] = {
             "time": time.time(), "method": method, "remote": remote,
@@ -147,6 +167,7 @@ class OtaDryRun:
     async def _counted(data: bytes | Path, start: int, end: int, total: int, hit: dict[str, Any]):
         """Sends the file in chunks and records how much the robot took and whether it took all of it."""
         sent, started = 0, time.monotonic()
+        hit["start"] = start
         try:
             for chunk in _chunks(data, start, end):
                 yield chunk
@@ -158,7 +179,7 @@ class OtaDryRun:
 
     async def run(
         self, client: Any, api_url: str, package: dict[str, Any] | None = None, variant: dict[str, bool] | None = None,
-        install: bool = False, on_state: Any = None,
+        install: bool = False, on_state: Any = None, duid: str = "",
     ) -> dict[str, Any]:
         """Checks the robot is docked and idle, asks it to download the file, and watches its OTA state.
 
@@ -182,7 +203,7 @@ class OtaDryRun:
                 filename, headers = package.get("filename", ""), package.get("headers", {})
         ttl = INSTALL_TOKEN_TTL_SECONDS if install else TOKEN_TTL_SECONDS
         active = _Active(secrets.token_urlsafe(18), data, md5, time.time() + ttl, filename, headers, dict(variant or {}))
-        self._active = active
+        self._slots[duid] = active
         served = f"{api_url}/ota_test/{active.token}/{filename}" if filename else f"{api_url}/ota_test/{active.token}.bin"
         params = {
             "mode": "normal", "install": "1" if install else "0", "app_url": direct_url or served,
@@ -193,14 +214,16 @@ class OtaDryRun:
             reply = await self._ask(client, "miIO.ota", params)
             trace = await self._watch(client, seconds, install=install, on_state=on_state)
         finally:
-            self._active = None
+            if self._slots.get(duid) is active:
+                del self._slots[duid]
         states = [step["state"] for step in trace]
         return {
             "ran": True, "package": package is not None, "variant": active.variant, "install": install,
             "saw_offline": None in states,
             "stuck_in_wait_install": install and bool(trace) and trace[-1]["state"] == "wait_install",
             "params": {**params, "app_url": params["app_url"].replace(active.token, "<token>")},
-            "ota_reply": reply, "file_fetched": bool(active.hits), "hits": active.hits, "trace": trace,
+            "ota_reply": reply, "file_fetched": bool(active.hits), "package_fully_fetched": _fully_fetched(active.hits, _size(data)),
+            "hits": active.hits, "trace": trace,
             "final_state": trace[-1]["state"] if trace else None,
         }
 
@@ -311,9 +334,25 @@ def _file_md5(path: Path) -> str:
     return digest.hexdigest()
 
 
+# Cached package names a robot is downloading or installing right now; a clean-up for another robot leaves them.
+_PINNED: dict[str, int] = {}
+
+
+def pin_package(name: str) -> None:
+    _PINNED[name] = _PINNED.get(name, 0) + 1
+
+
+def release_package(name: str) -> None:
+    left = _PINNED.get(name, 0) - 1
+    if left > 0:
+        _PINNED[name] = left
+    else:
+        _PINNED.pop(name, None)
+
+
 def clean_package_cache(cache_dir: Path, keep: str | Collection[str] = ()) -> None:
-    """Removes cached packages (and half-downloaded ones) other than the ones named in [keep]."""
-    kept = {keep} if isinstance(keep, str) else set(keep)
+    """Removes cached packages (and half-downloaded ones) other than [keep] and the ones in use."""
+    kept = ({keep} if isinstance(keep, str) else set(keep)) | set(_PINNED)
     for path in cache_dir.glob("*.pkg*") if cache_dir.is_dir() else ():
         if path.name not in kept:
             path.unlink(missing_ok=True)
@@ -334,9 +373,17 @@ async def _download(url: str) -> tuple[bytes, dict[str, str]]:
 
 
 def package_md5(url: Any) -> str:
-    """The checksum in a package address, or an empty string when the address is not in the expected form."""
+    """The checksum in a package address, or an empty string when the address is not https on a Roborock package host."""
     match = _PACKAGE_MD5.search(str(url or ""))
-    return match.group(1) if match and str(url).startswith("https://") else ""
+    if match is None or urlparse(str(url)).scheme != "https" or (urlparse(str(url)).hostname or "") not in PACKAGE_HOSTS:
+        return ""
+    return match.group(1)
+
+
+def package_family(url: Any) -> str:
+    """The hardware folder of a package address (the a245 of .../rriotpkg/a245/...), or an empty string when it has none."""
+    match = _PACKAGE_FAMILY.search(str(url or ""))
+    return match.group(1) if match else ""
 
 
 async def package_address(cloud: Any, duid: str, version: str) -> str:
@@ -398,16 +445,22 @@ async def resolve_package(
     if cache_dir is not None:
         name = f"{md5}.pkg"
         path = cache_dir / name
-        clean_package_cache(cache_dir, keep={name, *keep})
-        loop = asyncio.get_running_loop()
-        if path.is_file() and await loop.run_in_executor(None, _file_md5, path) == md5:
-            cdn_headers: dict[str, str] = {}
-        else:
-            path.unlink(missing_ok=True)
-            got, cdn_headers = await _download_to_file(str(url), path)
-            if got != md5:
+        # Pinned until the caller releases it, so another robot's clean-up cannot delete it mid-download.
+        pin_package(name)
+        try:
+            clean_package_cache(cache_dir, keep={name, *keep})
+            loop = asyncio.get_running_loop()
+            if path.is_file() and await loop.run_in_executor(None, _file_md5, path) == md5:
+                cdn_headers: dict[str, str] = {}
+            else:
                 path.unlink(missing_ok=True)
-                raise PackageRefused("The downloaded package does not match the checksum in its address")
+                got, cdn_headers = await _download_to_file(str(url), path)
+                if got != md5:
+                    path.unlink(missing_ok=True)
+                    raise PackageRefused("The downloaded package does not match the checksum in its address")
+        except BaseException:
+            release_package(name)
+            raise
         return {
             "url": url, "md5": md5, "data": path, "filename": str(url).rsplit("/", 1)[-1],
             "headers": {key: value for key, value in cdn_headers.items() if key.lower() not in _NOT_MIRRORED},

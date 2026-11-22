@@ -142,7 +142,7 @@ def test_a_robot_that_is_updating_is_still_left_alone(monkeypatch) -> None:
 
 def test_the_file_route_records_how_much_the_robot_took() -> None:
     dry_run = OtaDryRun()
-    active = dry_run._active = ota_dry_run._Active("t" * 24, b"x" * (3 * ota_dry_run.CHUNK_BYTES), "md5", 9e12)
+    active = dry_run._slots[""] = ota_dry_run._Active("t" * 24, b"x" * (3 * ota_dry_run.CHUNK_BYTES), "md5", 9e12)
     path = "/ota_test/" + "t" * 24 + ".bin"
 
     async def take_all():

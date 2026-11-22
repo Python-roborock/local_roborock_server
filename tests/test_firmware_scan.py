@@ -10,7 +10,7 @@ from roborock_local_server.firmware_scan import FirmwareScan
 
 
 def url(version):
-    return f"https://cdn.example.com/rpkg_{version}.{hashlib.md5(version.encode()).hexdigest()}.signed.pkg"
+    return f"https://cdn.awsusor0.fds.api.mi-img.com/rpkg_{version}.{hashlib.md5(version.encode()).hexdigest()}.signed.pkg"
 
 
 class FakeCloud:

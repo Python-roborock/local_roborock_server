@@ -16,6 +16,13 @@ class Robot:
         self.states, self.battery, self.asked = list(states), battery, []
 
     status_extra: dict = {}
+    on_ota = None  # called when the robot is sent the install, like its new version being reported
+    fetch_from = None  # an OtaDryRun: the robot then downloads the file it is sent, as a real one does
+
+    async def _fetch(self, app_url):
+        response = self.fetch_from.file_response("/ota_test" + app_url.split("/ota_test", 1)[1], "GET", {}, "robot")
+        async for _ in response.body_iterator:
+            pass
 
     async def send_command(self, method, params):
         self.asked.append((method, params))
@@ -29,6 +36,10 @@ class Robot:
         if method == "get_ota_progress":
             return {"ota_progress": 0}
         if method == "miIO.ota":
+            if self.on_ota is not None:
+                self.on_ota()
+            if self.fetch_from is not None:
+                await self._fetch(params["app_url"])
             return ["ok"]
         raise AssertionError(method)
 
