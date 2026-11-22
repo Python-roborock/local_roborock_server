@@ -285,3 +285,15 @@ def test_malformed_import_does_not_block_other_jobs(tmp_path, monkeypatch):
     runner.tick(_utc(2026, 9, 28, 14, 59, 40))
     runner.tick(_utc(2026, 9, 28, 15, 0, 5))
     assert len(fake.started) == 1
+
+
+def test_ticks_do_not_reload_an_unchanged_inventory(tmp_path, monkeypatch):
+    from shared import inventory_io
+
+    runner, ctx, _ = _runner_with_inventory(tmp_path, monkeypatch, [_job()])
+    loads = []
+    real_load = inventory_io.load_inventory
+    monkeypatch.setattr(inventory_io, "load_inventory", lambda c: loads.append(1) or real_load(c))
+    for second in range(5):
+        runner.tick(_utc(2026, 9, 28, 14, 0, second * 10))
+    assert len(loads) == 1

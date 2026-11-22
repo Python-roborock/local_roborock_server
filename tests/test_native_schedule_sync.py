@@ -5,6 +5,7 @@ import copy
 import json
 from pathlib import Path
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -162,10 +163,63 @@ class NativeCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.network.start()
         self.addCleanup(self.network.stop)
 
-    async def test_external_toggle_reconciliation_reads_only_and_closes_connection(self):
+    async def test_external_toggle_reconciliation_reads_only_and_keeps_the_connection(self):
         self.assertEqual(await self.coordinator.refresh("robot"), [701])
         self.assertFalse(store.list_jobs(self.context, "robot")[0]["enabled"])
+        self.assertEqual(self.robot.calls, ["connect", "get_server_timer"])
+        await self.coordinator.aclose()
         self.assertEqual(self.robot.calls, ["connect", "get_server_timer", "close"])
+
+    async def test_later_reads_reuse_the_connection_instead_of_opening_a_new_one(self):
+        for _ in range(3):
+            await self.coordinator.refresh("robot")
+        self.assertEqual(self.robot.calls.count("connect"), 1)
+        self.assertEqual(self.robot.calls.count("get_server_timer"), 3)
+        await self.coordinator.aclose()
+
+    async def test_a_failed_read_drops_the_connection_and_backs_off_exponentially(self):
+        async def never_answers():
+            raise TimeoutError
+
+        self.robot.after_read = never_answers
+        await self.coordinator.refresh("robot")
+        first = self.coordinator._retry_at["robot"] - time.monotonic()
+        self.assertEqual(self.robot.calls[-1], "close")
+        await self.coordinator.refresh("robot")
+        second = self.coordinator._retry_at["robot"] - time.monotonic()
+        self.assertEqual(self.robot.calls.count("connect"), 2)
+        self.assertLessEqual(first, self.coordinator.INTERVAL)
+        self.assertGreater(second, first)
+        self.robot.after_read = None
+        await self.coordinator.refresh("robot")
+        self.assertNotIn("robot", self.coordinator._retry_at)
+
+    async def test_the_periodic_scan_skips_a_robot_that_is_backing_off(self):
+        self.coordinator.INTERVAL = 0.02
+        self.coordinator.DEBOUNCE = 0
+        self.coordinator._retry_at["robot"] = time.monotonic() + 3600
+        stop = asyncio.Event()
+        task = asyncio.create_task(self.coordinator.run(stop))
+        await asyncio.sleep(0.15)
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        self.assertEqual(self.robot.calls, [])
+
+    async def test_stopping_the_loop_closes_the_connection(self):
+        self.coordinator.DEBOUNCE = 0
+        stop = asyncio.Event()
+        task = asyncio.create_task(self.coordinator.run(stop))
+        async with asyncio.timeout(1):
+            while "get_server_timer" not in self.robot.calls:
+                await asyncio.sleep(0.001)
+        stop.set()
+        self.coordinator._wake.set()
+        await task
+        self.assertEqual(self.robot.calls[-1], "close")
 
     async def test_a_read_that_times_out_is_quiet(self):
         async def never_answers():

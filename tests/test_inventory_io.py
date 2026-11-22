@@ -69,3 +69,28 @@ def test_context_write_failure_returns_false_and_logs(tmp_path, monkeypatch, cap
     with caplog.at_level(logging.ERROR):
         assert inventory_io.write_inventory(ctx, {}) is False
     assert "Unable to persist inventory" in caplog.text
+
+
+def test_cached_inventory_reads_the_file_only_when_it_changed(tmp_path, monkeypatch):
+    ctx = SimpleNamespace(http_jsonl=tmp_path / "http.jsonl")
+    inventory_io.atomic_write_inventory(tmp_path / inventory_io.WEB_API_INVENTORY_FILE, {"schedules": {}})
+    reads = []
+    real_load = inventory_io.load_inventory
+    monkeypatch.setattr(inventory_io, "load_inventory", lambda c: reads.append(1) or real_load(c))
+    cache = inventory_io.CachedInventory(ctx)
+
+    assert cache.read() == {"schedules": {}}
+    assert cache.read() == {"schedules": {}}
+    assert len(reads) == 1
+
+    inventory_io.atomic_write_inventory(tmp_path / inventory_io.WEB_API_INVENTORY_FILE, {"schedules": {"a": []}})
+    assert cache.read() == {"schedules": {"a": []}}
+    assert len(reads) == 2
+
+
+def test_cached_inventory_follows_a_file_that_appears_later(tmp_path):
+    ctx = SimpleNamespace(http_jsonl=tmp_path / "http.jsonl")
+    cache = inventory_io.CachedInventory(ctx)
+    assert cache.read() == {}
+    inventory_io.atomic_write_inventory(tmp_path / inventory_io.WEB_API_INVENTORY_FILE, {"x": 1})
+    assert cache.read() == {"x": 1}

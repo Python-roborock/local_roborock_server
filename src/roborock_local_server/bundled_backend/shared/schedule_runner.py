@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .constants import DEFAULT_TIMEZONE
 from .data_helpers import as_bool
-from .inventory_io import load_inventory
+from .inventory_io import CachedInventory, load_inventory  # noqa: F401  (load_inventory stays importable from here)
 from .routine_runner import (
     SCHEDULE_APP_START,
     SCHEDULE_SERVER_START,
@@ -262,11 +262,11 @@ class ScheduleRunner:
         self._context = context
         self._default_timezone = default_timezone
         self._last_tick: datetime | None = None
+        self._inventory = CachedInventory(context)
         self._logger = context.loggers.get("api") or context.loggers.get("unknown") or _LOGGER
 
     def due_jobs(self, since: datetime, until: datetime) -> list[tuple[str, dict[str, Any], datetime]]:
-        inventory = load_inventory(self._context)
-        schedules = inventory.get("schedules")
+        schedules = self._inventory.read().get("schedules")
         if not isinstance(schedules, dict):
             return []
         due: list[tuple[str, dict[str, Any], datetime]] = []
@@ -287,7 +287,7 @@ class ScheduleRunner:
                     continue
                 upcoming = next_fire(spec, since.astimezone(zone))
                 if upcoming is not None and upcoming.astimezone(timezone.utc) <= until:
-                    due.append((str(device_id), job, upcoming))
+                    due.append((str(device_id), copy.deepcopy(job), upcoming))
         return due
 
     def tick(self, now: datetime | None = None) -> list[dict[str, Any]]:
