@@ -24,7 +24,7 @@ import uvicorn
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .certs import CertificateManager
-from .bundled_backend.shared.constants import DEFAULT_PRODUCT_SCHEMA, REGION_COUNTRY
+from .bundled_backend.shared.constants import DEFAULT_PRODUCT_SCHEMA, region_country
 from .bundled_backend.shared.data_helpers import utcnow_iso
 from .product_registry import resolve_product_metadata
 from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIRED_ONBOARDING_STEPS
@@ -68,12 +68,6 @@ from .security import AdminSessionManager, verify_password
 ALL_HTTP_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
 PROTOCOL_AUTH_SYNC_PATH = "/internal/protocol/user-data"
 PROTOCOL_AUTH_SYNC_SECRET_HEADER = "x-local-sync-secret"
-_REGION_COUNTRY_CODE = {
-    "US": "1",
-    "CN": "86",
-    "EU": "49",
-    "RU": "7",
-}
 PROJECT_SUPPORT = {
     "title": "Support This Project",
     "text": (
@@ -581,10 +575,6 @@ class ReleaseSupervisor:
             self.config.admin.protocol_login_pin_hash,
         )
 
-    @staticmethod
-    def _default_country_code_for_region(region: str) -> str:
-        return _REGION_COUNTRY_CODE.get(str(region or "").upper(), "1")
-
     def _local_protocol_identity(self) -> dict[str, Any]:
         email = self._protocol_login_email()
         normalized_email = email.casefold()
@@ -592,6 +582,7 @@ class ReleaseSupervisor:
         uid = (int(digest[:12], 16) % 900_000_000) + 100_000_000
         region = self.config.network.region.lower()
         region_upper = region.upper()
+        country, countrycode = region_country(region)
         return {
             "uid": uid,
             "rruid": f"rrls-{digest[:20]}",
@@ -599,8 +590,8 @@ class ReleaseSupervisor:
             # The app keeps "region" as RRUser.region. The device plugin needs
             # it in fetchCountryInfo and retries forever without it.
             "region": region,
-            "country": REGION_COUNTRY.get(region_upper, region_upper),
-            "countrycode": self._default_country_code_for_region(region_upper),
+            "country": country,
+            "countrycode": countrycode,
             "nickname": "Local User",
             "hasPassword": True,
             "rriot": {

@@ -133,11 +133,21 @@ MODEL_PRODUCT_ID_OVERRIDES = {
     "roborock.vacuum.sc05": 10001,
 }
 
-# The login and user answers name a country, and "EU" is none. The EU cloud
-# answers "DE", which fits the dialing code 49.
+# The login and user answers name a country and its dialing code. "EU" is no
+# country, so the EU cloud answers "DE", which fits the dialing code 49.
 REGION_COUNTRY = {
-    "EU": "DE",
+    "US": ("US", "1"),
+    "CN": ("CN", "86"),
+    "EU": ("DE", "49"),
+    "RU": ("RU", "7"),
 }
+
+
+def region_country(region: str) -> tuple[str, str]:
+    """Return the country and its dialing code for a cloud region."""
+    region_upper = str(region or "").upper()
+    return REGION_COUNTRY.get(region_upper, (region_upper, "1"))
+
 
 MQTT_TYPES = {
     1: "CONNECT",

@@ -261,11 +261,12 @@ def test_local_pin_login_names_the_region_and_country_of_the_config(
     assert login_payload["countrycode"] == countrycode
 
 
-@pytest.mark.parametrize(("region", "country"), [("eu", "DE"), ("us", "US")])
+@pytest.mark.parametrize(("region", "country", "countrycode"), [("eu", "DE", "49"), ("us", "US", "1")])
 def test_url_and_user_info_routes_name_the_country_of_the_login_answer(
     tmp_path: Path,
     region: str,
     country: str,
+    countrycode: str,
 ) -> None:
     supervisor, _paths = _build_supervisor(tmp_path, with_snapshot=False, region=region)
     client = TestClient(supervisor.app)
@@ -276,15 +277,17 @@ def test_url_and_user_info_routes_name_the_country_of_the_login_answer(
     )
     assert login_response.status_code == 200
     login_payload = login_response.json()["data"]
-    assert login_payload["country"] == country
+    assert (login_payload["country"], login_payload["countrycode"]) == (country, countrycode)
 
     url_response = client.post("/api/v1/getUrlByEmail", data={"email": "user@example.com"})
     assert url_response.status_code == 200
-    assert url_response.json()["data"]["country"] == country
+    url_data = url_response.json()["data"]
+    assert (url_data["country"], url_data["countrycode"]) == (country, countrycode)
 
     user_info = client.get("/api/v1/userInfo", headers=_token_headers(login_payload))
     assert user_info.status_code == 200
-    assert user_info.json()["data"]["country"] == country
+    user_data = user_info.json()["data"]
+    assert (user_data["country"], user_data["countrycode"]) == (country, countrycode)
 
 
 def test_user_info_prefers_the_country_of_the_cloud_snapshot(tmp_path: Path) -> None:
