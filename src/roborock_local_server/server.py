@@ -65,7 +65,7 @@ from https_server.routes.auth.service import (
     load_cloud_full_snapshot,
     with_current_server_urls,
 )
-from .bundled_backend.shared.device_snapshot_store import DeviceSnapshotStore
+from .bundled_backend.shared.device_snapshot_store import DeviceSnapshotStore, is_mower_model
 from .bundled_backend.shared.zone_ranges_store import ZoneRangesStore
 from .security import AdminSessionManager, verify_password
 
@@ -505,8 +505,12 @@ class ReleaseSupervisor:
             device = self.runtime_credentials.resolve_device(did=did)
             return str(device.get("duid") or "") if device else ""
 
+        def is_mower(duid: str) -> bool:
+            device = self.runtime_credentials.resolve_device(duid=duid)
+            return is_mower_model(device.get("model") if device else "")
+
         try:
-            added = store.seed_from_mqtt_jsonl(self.paths.mqtt_jsonl_path, resolve_duid)
+            added = store.seed_from_mqtt_jsonl(self.paths.mqtt_jsonl_path, resolve_duid, is_mower)
         except Exception:
             self.root_logger.exception("Could not seed last-known device state from the MQTT log")
             return

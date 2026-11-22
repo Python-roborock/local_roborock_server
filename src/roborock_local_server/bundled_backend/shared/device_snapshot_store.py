@@ -99,6 +99,11 @@ def _dps_update(payload_utf8: str | None) -> dict[str, int]:
     return update
 
 
+def is_mower_model(model: Any) -> bool:
+    """Mowers push dps 121/122 as something other than state and battery."""
+    return str(model or "").lower().startswith("roborock.mower")
+
+
 def is_status_answer(response_to: dict[str, Any]) -> bool:
     """True for the answer to ``get_status`` or ``get_prop ["get_status"]`` (both carry the same status)."""
     method = response_to.get("request_method")
@@ -211,6 +216,9 @@ class DeviceSnapshotStore:
             duid = str(raw.get("duid") or path.stem) if isinstance(raw, dict) else ""
             if not isinstance(raw, dict) or not duid or not _SAFE_DUID.match(duid):
                 continue
+            # Whatever was connected when the server stopped is not connected now; the first packet clears this.
+            if not raw.get("offline_at"):
+                raw["offline_at"] = raw.get("last_seen_at")
             self._data[duid] = raw
             map_path = self._dir / f"{duid}.map"
             if map_path.exists():
@@ -220,31 +228,44 @@ class DeviceSnapshotStore:
                     pass
 
     def flush(self) -> None:
-        """Write everything changed since the last flush; file I/O runs outside the store lock."""
-        with self._lock:
-            if not self._dirty and not self._dirty_maps:
-                return
-            jobs = [(self._dir / f"{d}.json", json.dumps(self._data[d], separators=(",", ":")).encode()) for d in self._dirty]
-            jobs += [(self._dir / f"{d}.map", self._maps[d]) for d in self._dirty_maps if d in self._maps]
-            self._dirty.clear()
-            self._dirty_maps.clear()
-            self._last_flush = time.monotonic()
+        """Write everything changed since the last flush; flushes are serialised and I/O runs outside the store lock."""
         with self._io_lock:
+            with self._lock:
+                if not self._dirty and not self._dirty_maps:
+                    return
+                dirty, dirty_maps = set(self._dirty), set(self._dirty_maps)
+                jobs = [(self._dir / f"{d}.json", json.dumps(self._data[d], separators=(",", ":")).encode()) for d in dirty]
+                jobs += [(self._dir / f"{d}.map", self._maps[d]) for d in dirty_maps if d in self._maps]
+                self._dirty.clear()
+                self._dirty_maps.clear()
+                self._last_flush = time.monotonic()
             try:
                 self._dir.mkdir(parents=True, exist_ok=True)
             except OSError:
+                self._requeue(dirty, dirty_maps)
                 return
-            for path, content in jobs:
-                self._write(path, content)
+            failed_paths = [path for path, content in jobs if not self._write(path, content)]
+            if failed_paths:
+                self._requeue(
+                    {p.stem for p in failed_paths if p.suffix == ".json"},
+                    {p.stem for p in failed_paths if p.suffix == ".map"},
+                )
+
+    def _requeue(self, dirty: set[str], dirty_maps: set[str]) -> None:
+        with self._lock:
+            self._dirty |= dirty
+            self._dirty_maps |= dirty_maps
 
     @staticmethod
-    def _write(path: Path, content: bytes) -> None:
+    def _write(path: Path, content: bytes) -> bool:
         tmp = path.with_suffix(path.suffix + ".tmp")
         try:
             tmp.write_bytes(content)
             tmp.replace(path)
         except OSError:
             logger.warning("Could not write %s", path)
+            return False
+        return True
 
     def _touch(self, duid: str, *, force_flush: bool = False) -> bool:
         """Mark a device dirty; True when the caller should flush once it has released the lock."""
@@ -387,7 +408,12 @@ class DeviceSnapshotStore:
             return resolve_duid(parts[3])
         return ""
 
-    def seed_from_mqtt_jsonl(self, mqtt_jsonl: Path, resolve_duid: Callable[[str], str]) -> int:
+    def seed_from_mqtt_jsonl(
+        self,
+        mqtt_jsonl: Path,
+        resolve_duid: Callable[[str], str],
+        is_mower: Callable[[str], bool] | None = None,
+    ) -> int:
         """Fill in devices the store knows nothing about from the decoded MQTT log.
 
         The log holds what each robot last said, so a robot that stopped answering before this
@@ -444,7 +470,9 @@ class DeviceSnapshotStore:
                         if rooms:
                             acc["rooms"] = rooms
                         continue
-                    if isinstance(response_to, dict):
+                    if is_mower is not None and is_mower(duid):
+                        update = {}
+                    elif isinstance(response_to, dict):
                         update = (
                             _status_update(response_to.get("result"))
                             if is_status_answer(response_to) and response_to.get("error") is None
