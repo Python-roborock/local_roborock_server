@@ -13,6 +13,14 @@ from typing import Any, Literal
 
 import aiohttp
 from roborock.data import UserData
+from roborock.exceptions import (
+    RoborockAccountDoesNotExist,
+    RoborockConnectionException,
+    RoborockInvalidCredentials,
+    RoborockNoResponseFromBaseURL,
+    RoborockRateLimit,
+    RoborockTimeout,
+)
 from roborock.web_api import RoborockApiClient
 
 from .backend import (
@@ -82,6 +90,27 @@ def _merge_plugin_catalogs(stored: dict[str, Any], fresh: dict[str, Any]) -> tup
             continue
         merged[name] = entry
     return merged, kept
+
+
+def _describe_refresh_error(exc: BaseException) -> str:
+    """Only a rejected login says to sign in again; other failures get their own advice."""
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and current not in chain:
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    if any(isinstance(item, RoborockRateLimit) for item in chain):
+        return f"The cloud is rate limiting requests ({exc}). Wait a few minutes and refresh again."
+    if any(isinstance(item, (RoborockInvalidCredentials, RoborockAccountDoesNotExist)) for item in chain):
+        return f"The cloud rejected the stored login ({exc}). Request a code and sign in again."
+    if any(isinstance(item, (TimeoutError, RoborockTimeout)) for item in chain):
+        return "The cloud did not answer in time. Try the refresh again."
+    if any(
+        isinstance(item, (aiohttp.ClientError, OSError, RoborockConnectionException, RoborockNoResponseFromBaseURL))
+        for item in chain
+    ):
+        return f"The cloud could not be reached ({exc}). Check the network and try again."
+    return f"The cloud request failed ({exc}). The stored catalogs were kept."
 
 
 @dataclass
@@ -203,14 +232,12 @@ class CloudImportManager:
                 home_data = await _fetch_cloud_home_data_with_api(api, user_data)
                 catalogs = await _fetch_plugin_catalogs(api, user_data, home_data)
             except Exception as exc:  # noqa: BLE001
-                raise ValueError(
-                    f"The cloud rejected the stored login ({exc}). Request a code and sign in again."
-                ) from exc
+                raise ValueError(_describe_refresh_error(exc)) from exc
 
         failed = [name for name, item in catalogs.items() if isinstance(item, dict) and "error" in item]
         if failed and len(failed) == sum(1 for item in catalogs.values() if isinstance(item, dict)):
             errors = "; ".join(str(catalogs[name]["error"]) for name in failed)
-            raise ValueError(f"The cloud returned no plugin catalogs ({errors}). Request a code and sign in again.")
+            raise ValueError(f"The cloud returned no plugin catalogs ({errors}). The stored catalogs were kept.")
 
         fresh = _to_jsonable(catalogs)
         # The cloud wait is over; re-read under the lock so a sign-in that finished meanwhile is not reverted.

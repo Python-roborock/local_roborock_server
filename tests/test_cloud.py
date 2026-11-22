@@ -3,7 +3,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import aiohttp
 import pytest
+from roborock.exceptions import RoborockInvalidCredentials, RoborockRateLimit, RoborockTimeout
 
 from roborock_local_server import cloud as cloud_module
 from roborock_local_server.backend import _merge_existing_inventory_mutations
@@ -357,7 +359,7 @@ def test_refresh_plugin_catalogs_reports_a_rejected_login(tmp_path, monkeypatch)
     _patch_plugin_fetch(monkeypatch, _NEW_CATALOGS)
 
     async def rejected(api, user_data):
-        raise RuntimeError("invalid token")
+        raise RoborockInvalidCredentials("invalid token")
 
     monkeypatch.setattr(cloud_module, "_fetch_cloud_home_data_with_api", rejected)
     with pytest.raises(ValueError, match="sign in again"):
@@ -477,3 +479,38 @@ def test_submit_code_stores_the_device_identifier(tmp_path, monkeypatch) -> None
     stored = json.loads(manager.snapshot_path.read_text(encoding="utf-8"))
     assert stored["meta"]["device_identifier"] == _fake_client_instances[0]._device_identifier
 
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (RoborockRateLimit("slow down"), "rate limiting"),
+        (RoborockInvalidCredentials("bad token"), "sign in again"),
+        (TimeoutError(), "did not answer in time"),
+        (RoborockTimeout("t"), "did not answer in time"),
+        (aiohttp.ClientConnectionError("dns"), "could not be reached"),
+        (RuntimeError("something odd"), "request failed"),
+    ],
+)
+def test_refresh_plugin_catalogs_gives_each_failure_its_own_message(tmp_path, monkeypatch, error, expected) -> None:
+    manager = _make_manager(tmp_path)
+    _write_snapshot(manager)
+    _patch_plugin_fetch(monkeypatch, _NEW_CATALOGS)
+
+    async def failing(api, user_data):
+        raise error
+
+    monkeypatch.setattr(cloud_module, "_fetch_cloud_home_data_with_api", failing)
+    with pytest.raises(ValueError, match=expected) as raised:
+        asyncio.run(manager.refresh_plugin_catalogs())
+    if expected != "sign in again":
+        assert "sign in again" not in str(raised.value)
+
+
+def test_refresh_error_classifier_follows_the_cause_chain() -> None:
+    try:
+        try:
+            raise RoborockInvalidCredentials("expired")
+        except RoborockInvalidCredentials as inner:
+            raise RuntimeError("Failed to fetch cloud home_data: expired") from inner
+    except RuntimeError as outer:
+        assert "sign in again" in cloud_module._describe_refresh_error(outer)
