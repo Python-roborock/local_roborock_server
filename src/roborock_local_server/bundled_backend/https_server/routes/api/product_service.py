@@ -35,11 +35,9 @@ def build_product_response(ctx: ServerContext) -> dict[str, Any]:
             }
             card_spec = card_spec_for_category(category_name)
             if card_spec is not None:
-                # Required for the scene tiles. CategoryEntity declares both
-                # spellings; which one is the JSON name could not be decided
-                # from the bytecode, so both are sent.
+                # Required for the scene tiles. Like the cloud, a JSON string
+                # with the spec wrapped in {"data": ...}.
                 category_entry["cardspec"] = card_spec
-                category_entry["cardSpec"] = card_spec
             categories[category_name] = {
                 "category": category_entry,
                 "productList": [],
@@ -70,13 +68,15 @@ def build_product_response(ctx: ServerContext) -> dict[str, Any]:
             "agreements": [],
             # ProductEntity.sceneProduct() looks up the "scene_2.0" tag; without
             # it the scene tiles stay hidden. The app builds productTagsMap from
-            # this list itself.
+            # this list itself. Values as sent by the cloud: forceShow gates the
+            # tiles, requirePlugin/pluginLevel are only read when a scene entry
+            # opens the device plugin.
             "productTags": [
                 {
                     "name": "scene_2.0",
+                    "requirePlugin": True,
+                    "pluginLevel": 3000,
                     "forceShow": True,
-                    "pluginLevel": 0,
-                    "requirePlugin": False,
                 }
             ],
         }

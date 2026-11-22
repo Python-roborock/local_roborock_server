@@ -143,6 +143,10 @@ def test_string_product_id_uses_cloud_numeric_id_by_model(tmp_path: Path) -> Non
     assert product["rriotid"] == "30uADinyLKa3Qpga60B1Ke"
 
 
+def _labels(data_point: dict) -> dict[int, str]:
+    return {code: entry["desc"]["en"] for entry in data_point["value"] for code in entry["value"]}
+
+
 def test_product_entry_enables_scene_tiles(tmp_path: Path) -> None:
     data = _products_v5(tmp_path, [_DEVICE])
 
@@ -150,31 +154,69 @@ def test_product_entry_enables_scene_tiles(tmp_path: Path) -> None:
     [product] = category_detail["productList"]
     category = category_detail["category"]
 
-    # ProductEntity.sceneProduct() looks up exactly this tag.
-    assert {"name": "scene_2.0", "forceShow": True, "pluginLevel": 0, "requirePlugin": False} in product[
+    # ProductEntity.sceneProduct() looks up exactly this tag; values as the cloud sends them.
+    assert {"name": "scene_2.0", "requirePlugin": True, "pluginLevel": 3000, "forceShow": True} in product[
         "productTags"
     ]
-    # CardSpecV2 holds the four data points directly, without a "data" wrapper.
-    for key in ("cardspec", "cardSpec"):
-        card_spec = category[key]
-        assert set(card_spec) == {"state", "extra", "battery", "offline"}
-        assert card_spec["state"]["dps"] == 121
-        assert card_spec["battery"]["dps"] == 122
-        assert card_spec["extra"]["dps"] == 128
-        assert card_spec["offline"]["dps"] == 135
-        for entry in card_spec["state"]["value"]:
+    # Like the cloud: lower-case "cardspec" on the category, a JSON string
+    # holding the spec in a "data" wrapper (decoded by the app as CardSpecV2Data).
+    assert "cardSpec" not in category
+    assert isinstance(category["cardspec"], str)
+    wrapper = json.loads(category["cardspec"])
+    assert set(wrapper) == {"data"}
+    card_spec = wrapper["data"]
+    assert set(card_spec) == {"state", "extra", "battery", "offline", "offpeak"}
+    assert card_spec["state"]["dps"] == 121
+    assert card_spec["battery"] == {"dps": 122}
+    assert card_spec["extra"] == {"dps": 128}
+    assert card_spec["offline"]["dps"] == 135
+    assert card_spec["offpeak"] == {"dps": 133}
+    for data_point in (card_spec["state"], card_spec["offline"]):
+        for entry in data_point["value"]:
             assert set(entry) == {"desc", "value"}
             assert entry["desc"]["en"]
             assert all(isinstance(code, int) for code in entry["value"])
 
 
-def test_card_spec_is_not_shared_between_responses(tmp_path: Path) -> None:
-    first = _products_v5(tmp_path, [_DEVICE])
-    first["categoryDetailList"][0]["category"]["cardSpec"]["state"]["value"].clear()
+def test_vacuum_card_spec_matches_cloud_labels(tmp_path: Path) -> None:
+    data = _products_v5(tmp_path, [_DEVICE])
 
-    second = _products_v5(tmp_path, [_DEVICE])
+    card_spec = json.loads(data["categoryDetailList"][0]["category"]["cardspec"])["data"]
+    states = _labels(card_spec["state"])
+    offline = _labels(card_spec["offline"])
 
-    assert second["categoryDetailList"][0]["category"]["cardSpec"]["state"]["value"]
+    # Wording of the cloud's EU /api/v5/product answer (Nov 2026).
+    assert states[6] == "Returning to Dock"
+    assert states[15] == "Returning to Dock"
+    assert states[9] == "Charging Error"
+    assert states[26] == "Going to wash the mop"
+    assert offline[1] == "Powered Off Manually"
+    # Every state code of the cloud is mapped, plus the extra ones of the
+    # template bundled with the app.
+    cloud_codes = {2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 22, 23, 26, 28, 29, 32}
+    extra_codes = {13, 33, 34, 36, 37, 38, 39, 40, 101, 102, 103, 104, 108}
+    assert cloud_codes <= set(states)
+    assert set(states) == cloud_codes | extra_codes
+    assert {1, 34, 51, 103} <= set(offline)
+
+
+def test_card_spec_only_on_known_categories(tmp_path: Path) -> None:
+    other = dict(
+        _DEVICE,
+        duid="device-b",
+        name="Other",
+        model="roborock.other.b1",
+        product_id="iot-product-b",
+        category="other.category",
+    )
+
+    data = _products_v5(tmp_path, [_DEVICE, other])
+
+    categories = {entry["category"]["code"]: entry["category"] for entry in data["categoryDetailList"]}
+    assert set(categories) == {"robot.vacuum.cleaner", "other.category"}
+    assert isinstance(categories["robot.vacuum.cleaner"]["cardspec"], str)
+    assert "cardspec" not in categories["other.category"]
+    assert "cardSpec" not in categories["other.category"]
 
 
 def test_unknown_category_has_no_card_spec(tmp_path: Path) -> None:
