@@ -1,0 +1,672 @@
+{
+  "data": {
+    "extra": {
+      "dps": 128
+    },
+    "state": {
+      "dps": 121,
+      "desc": {
+        "en": "State",
+        "zh": "状态"
+      },
+      "value": [
+        {
+          "desc": {
+            "ar": "نوم",
+            "de": "Im Ruhezustand",
+            "en": "Sleeping",
+            "es": "En suspenso",
+            "fr": "En veille",
+            "he": "במצב שינה",
+            "id": "Tidur",
+            "it": "In standby",
+            "ja": "スリープ中",
+            "ko": "절전 중",
+            "ms": "Tidur",
+            "pl": "Uśpienie",
+            "pt": "Em Suspensão",
+            "ro": "Repaus",
+            "ru": "Спящий режим",
+            "th": "กำลังอยู่ในโหมดสลีป",
+            "tr": "Uyuyor",
+            "uk": "Сон",
+            "vi": "Đang ngủ",
+            "es-LA": "Suspendido",
+            "zh-Hans": "休眠",
+            "zh-Hant": "休眠"
+          },
+          "value": [
+            2
+          ]
+        },
+        {
+          "desc": {
+            "ar": "استعداد",
+            "de": "Bereit",
+            "en": "Ready",
+            "es": "Listo",
+            "fr": "Prêt",
+            "he": "מוכן",
+            "id": "Siap",
+            "it": "Pronto",
+            "ja": "準備完了",
+            "ko": "준비 완료",
+            "ms": "Sedia",
+            "pl": "Gotowy",
+            "pt": "Pronto",
+            "ro": "Pregătit",
+            "ru": "Готов",
+            "th": "พร้อมทำงาน",
+            "tr": "Hazır",
+            "uk": "Готовий",
+            "vi": "Sẵn sàng",
+            "es-LA": "Listo",
+            "zh-Hans": "等待指令",
+            "zh-Hant": "等待指令"
+          },
+          "value": [
+            3
+          ]
+        },
+        {
+          "desc": {
+            "ar": "تنظيف",
+            "de": "Gerät reinigt",
+            "en": "Cleaning",
+            "es": "Limpiando",
+            "fr": "Nettoyage en cours",
+            "he": "ניקוי",
+            "id": "Membersihkan",
+            "it": "Pulizia in corso",
+            "ja": "掃除中",
+            "ko": "청소",
+            "ms": "Membersihkan",
+            "pl": "Sprzątanie",
+            "pt": "A Limpar",
+            "ro": "Curățare",
+            "ru": "Уборка",
+            "th": "กำลังทำความสะอาด",
+            "tr": "Temizliyor",
+            "uk": "Прибирання",
+            "vi": "Đang làm sạch",
+            "es-LA": "Limpiando",
+            "zh-Hans": "清洁中",
+            "zh-Hant": "清掃中"
+          },
+          "value": [
+            5,
+            11,
+            17,
+            18
+          ]
+        },
+        {
+          "desc": {
+            "ar": "العودة إلى قاعدة الشحن",
+            "de": "Rückfahrt zur Ladestation",
+            "en": "Returning to Dock",
+            "es": "Volviendo a la estación",
+            "fr": "Retour à la station",
+            "he": "עגינה",
+            "id": "Penambatan",
+            "it": "Torna in carica",
+            "ja": "ドッキング",
+            "ko": "충전기로 돌아갑니다",
+            "ms": "Kembali ke Dok",
+            "pl": "Wracając do doku",
+            "pt": "A Regressar à Base",
+            "ro": "Andocare",
+            "ru": "Возврат к док-станции",
+            "th": "กำลังอยู่บนแท่นวาง",
+            "tr": "Şarj İstasyonuna Dönüyor",
+            "uk": "Заряджання через док-станцію",
+            "vi": "Đang sạc",
+            "es-LA": "Volviendo a la base",
+            "zh-Hans": "回充中",
+            "zh-Hant": "回充中"
+          },
+          "value": [
+            6
+          ]
+        },
+        {
+          "desc": {
+            "ar": "التحكم عن بُعد",
+            "de": "Fernsteuerung",
+            "en": "Remote Control",
+            "es": "Control remoto",
+            "fr": "Contrôle à distance",
+            "he": "שליטה מרחוק",
+            "id": "Kontrol jarak jauh",
+            "it": "Comando a distanza",
+            "ja": "リモート操作中",
+            "ko": "원격 제어",
+            "ms": "Kawalan Jauh",
+            "pl": "Zdalne sterowanie",
+            "pt": "Controlo Remoto",
+            "ro": "Telecomandă",
+            "ru": "Дистанционное управление",
+            "th": "รีโมทคอนโทรล",
+            "tr": "Uzaktan Kumanda",
+            "uk": "Дистанційне керування",
+            "vi": "Điều khiển từ xa",
+            "es-LA": "Control remoto",
+            "zh-Hans": "遥控中",
+            "zh-Hant": "正在遙控"
+          },
+          "value": [
+            7
+          ]
+        },
+        {
+          "desc": {
+            "ar": "الشحن",
+            "de": "Aufladen",
+            "en": "Charging",
+            "es": "Cargando",
+            "fr": "En charge",
+            "he": "טעינה",
+            "id": "Mengisi daya",
+            "it": "Ricarica",
+            "ja": "充電します",
+            "ko": "충전 중",
+            "ms": "Mengecas",
+            "pl": "Ładowanie",
+            "pt": "A Carregar",
+            "ro": "Încărcare",
+            "ru": "Зарядка",
+            "th": "กำลังชาร์จ",
+            "tr": "Şarj Ediliyor",
+            "uk": "Заряджання",
+            "vi": "Đang sạc",
+            "es-LA": "Cargando",
+            "zh-Hans": "充电中",
+            "zh-Hant": "充電中"
+          },
+          "value": [
+            8
+          ]
+        },
+        {
+          "desc": {
+            "ar": "خطأ في الشحن",
+            "de": "Ladefehler",
+            "en": "Charging Error",
+            "es": "Error de carga",
+            "fr": "Erreur de chargement",
+            "he": "שגיאת טעינה",
+            "id": "Kesalahan pengisian",
+            "it": "Errore di ricarica",
+            "ja": "充電エラー",
+            "ko": "충전 오류",
+            "ms": "Ralat Pengecasan",
+            "pl": "Błąd ładowania",
+            "pt": "Erro de Carregamento",
+            "ro": "Eroare de încărcare",
+            "ru": "Сбой зарядки",
+            "th": "เกิดข้อผิดพลาดขณะชาร์จ",
+            "tr": "Şarj Hatası",
+            "uk": "Помилка заряджання",
+            "vi": "Lỗi sạc",
+            "es-LA": "Error de carga",
+            "zh-Hans": "充电异常",
+            "zh-Hant": "充電錯誤"
+          },
+          "value": [
+            9
+          ]
+        },
+        {
+          "desc": {
+            "ar": "إيقاف مؤقت",
+            "de": "Pause",
+            "en": "Pause",
+            "es": "Pausar",
+            "fr": "Pause",
+            "he": "השהיה",
+            "id": "Jeda",
+            "it": "Pausa",
+            "ja": "一時停止中",
+            "ko": "청소 멈춤",
+            "ms": "Jeda",
+            "pl": "Pauza",
+            "pt": "Pausa",
+            "ro": "Pauză",
+            "ru": "Пауза",
+            "th": "หยุดชั่วคราว",
+            "tr": "Durakladı",
+            "uk": "Пауза",
+            "vi": "Tạm dừng",
+            "es-LA": "Pausa",
+            "zh-Hans": "暂停",
+            "zh-Hant": "暫停"
+          },
+          "value": [
+            10
+          ]
+        },
+        {
+          "desc": {
+            "ar": "خطأ",
+            "de": "Fehler",
+            "en": "Error",
+            "es": "Error",
+            "fr": "Erreur",
+            "he": "שגיאה",
+            "id": "Kesalahan",
+            "it": "Errore",
+            "ja": "エラー発生中",
+            "ko": "오류",
+            "ms": "Ralat",
+            "pl": "Błąd",
+            "pt": "Erro",
+            "ro": "Eroare",
+            "ru": "Ошибка",
+            "th": "เกิดข้อผิดพลาด",
+            "tr": "Hata",
+            "uk": "Помилка",
+            "vi": "Lỗi",
+            "es-LA": "Error",
+            "zh-Hans": "报错",
+            "zh-Hant": "通報錯誤"
+          },
+          "value": [
+            12
+          ]
+        },
+        {
+          "desc": {
+            "ar": "تحديث",
+            "de": "Aktualisierung",
+            "en": "Updating",
+            "es": "Actualizando",
+            "fr": "Mise à jour en cours",
+            "he": "מעדכן",
+            "id": "Memperbarui",
+            "it": "Aggiornamento",
+            "ja": "アップデート中",
+            "ko": "업데이트 중",
+            "ms": "Mengemas kini",
+            "pl": "Aktualizacja",
+            "pt": "A Atualizar",
+            "ro": "Se actualizează",
+            "ru": "Обновление",
+            "th": "กำลังอัปเดต",
+            "tr": "Güncelleniyor",
+            "uk": "Оновлення",
+            "vi": "Đang cập nhật",
+            "es-LA": "Actualizando",
+            "zh-Hans": "升级中",
+            "zh-Hant": "升級中"
+          },
+          "value": [
+            14
+          ]
+        },
+        {
+          "desc": {
+            "ar": "العودة إلى قاعدة الشحن",
+            "de": "Rückfahrt zur Ladestation",
+            "en": "Returning to Dock",
+            "es": "Volviendo a la estación",
+            "fr": "Retour à la station",
+            "he": "עגינה",
+            "id": "Penambatan",
+            "it": "Torna in carica",
+            "ja": "ドッキング",
+            "ko": "충전기로 돌아갑니다",
+            "ms": "Kembali ke Dok",
+            "pl": "Wracając do doku",
+            "pt": "A Regressar à Base",
+            "ro": "Andocare",
+            "ru": "Возврат к док-станции",
+            "th": "กำลังอยู่บนแท่นวาง",
+            "tr": "Şarj İstasyonuna Dönüyor",
+            "uk": "Заряджання через док-станцію",
+            "vi": "Đang sạc",
+            "es-LA": "Volviendo a la base",
+            "zh-Hans": "回充中",
+            "zh-Hant": "回充中"
+          },
+          "value": [
+            15
+          ]
+        },
+        {
+          "desc": {
+            "ar": "تحديد وتحرك",
+            "de": "Pin-and-Go",
+            "en": "Pin n Go",
+            "es": "Limpieza de puntos de destino",
+            "fr": "Épingler et y aller",
+            "he": "ציין מקום וצא",
+            "id": "Sematkan & Lanjutkan",
+            "it": "Contrassegna e via",
+            "ja": "目的地指定",
+            "ko": "청소 목표지점 설정",
+            "ms": "Pin dan Gerak",
+            "pl": "Wskaż miejsce",
+            "pt": "Pin n Go",
+            "ro": "Pin n Go (Fixare și Plecare)",
+            "ru": "Точки маршрута",
+            "th": "ตรงจุดไหน",
+            "tr": "Pin n Go",
+            "uk": "Прибирання з відзначеної точки",
+            "vi": "Ghim lại và bắt đầu",
+            "es-LA": "Pin n Go",
+            "zh-Hans": "指哪到哪",
+            "zh-Hant": "指哪到哪"
+          },
+          "value": [
+            16
+          ]
+        },
+        {
+          "desc": {
+            "ar": "تفريغ",
+            "de": "Entleeren",
+            "en": "Emptying",
+            "es": "Vaciando",
+            "fr": "Vidage",
+            "he": "אוסף אבק",
+            "id": "Mengosongkan",
+            "it": "Svuotando",
+            "ja": "ほこりを集める",
+            "ko": "먼지통 비우기",
+            "ms": "Mengosongkan Tong Sampah",
+            "pl": "Zbieranie kurzu",
+            "pt": "A Esvaziar",
+            "ro": "Golire",
+            "ru": "Уборка",
+            "th": "เก็บฝุ่น",
+            "tr": "Boşaltılıyor",
+            "uk": "Збір пилу",
+            "vi": "Thu gom bụi",
+            "es-LA": "Vaciando",
+            "zh-Hans": "集尘中",
+            "zh-Hant": "集塵中"
+          },
+          "value": [
+            22
+          ]
+        },
+        {
+          "desc": {
+            "ar": "غسيل الممسحة",
+            "de": "Wischtuch reinigen",
+            "en": "Washing the mop",
+            "es": "Lavado del paño en curso",
+            "fr": "Lavage de la serpillière",
+            "he": "שוטף את הסחבה",
+            "id": "Mencuci lap",
+            "it": "Lavaggio del panno",
+            "ja": "クロスの洗浄",
+            "ko": "천 세탁",
+            "ms": "Menbasuh kain",
+            "pl": "Pranie materiału",
+            "pt": "A lavar o pano",
+            "ro": "Spălare cârpă",
+            "ru": "Мытье тряпки",
+            "th": "กำลังซักผ้า",
+            "tr": "Bezi yıkama",
+            "uk": "Прання ганчірки",
+            "vi": "Giặt giẻ lau",
+            "es-LA": "Lavado del paño",
+            "zh-Hans": "拖布清洗中",
+            "zh-Hant": "洗抹布"
+          },
+          "value": [
+            23
+          ]
+        },
+        {
+          "desc": {
+            "ar": "الانتقال إلى غسل الممسحة",
+            "de": "Rückspülung",
+            "en": "Going to wash the mop",
+            "es": "Yendo a lavar el paño",
+            "fr": "Aller laver la serpillière",
+            "he": "הולך לשטוף את המגב",
+            "id": "Pergi untuk mencuci pel",
+            "it": "Controlavaggio",
+            "ja": "逆洗",
+            "ko": "충전기로 돌아가서 천 세탁",
+            "ms": "Akan mencuci mop",
+            "pl": "Idę do mycia mopa",
+            "pt": "A ir lavar a mopa",
+            "ro": "Merg să spăl mopul",
+            "ru": "Обратная промывка",
+            "th": "กำลังกลับไปที่แท่นเพื่อซักผ้า",
+            "tr": "paspas yıkamak için gidiyor",
+            "uk": "Збирається мити швабру",
+            "vi": "Chuẩn bị giặt khăn lau",
+            "es-LA": "Yendo a lavar el paño",
+            "zh-Hans": "回洗中",
+            "zh-Hant": "回洗中"
+          },
+          "value": [
+            26
+          ]
+        },
+        {
+          "desc": {
+            "ar": "التخطيط",
+            "de": "Wird kartiert",
+            "en": "Mapping",
+            "es": "Mapeando",
+            "fr": "Cartographie en cours",
+            "he": "מיפוי",
+            "id": "Pemetaan",
+            "it": "Mappatura in corso",
+            "ja": "マッピング",
+            "ko": "매핑 중",
+            "ms": "Pemetaan",
+            "pl": "Mapowanie",
+            "pt": "Mapeamento em curso",
+            "ro": "Cartografiere",
+            "ru": "Составление карты",
+            "th": "กำลังทำแผนที่",
+            "tr": "Harita Çıkarma",
+            "uk": "Створення карти",
+            "vi": "Vẽ bản đồ",
+            "es-LA": "Mapeando",
+            "zh-Hans": "建图中",
+            "zh-Hant": "地圖建立中"
+          },
+          "value": [
+            29
+          ]
+        },
+        {
+          "desc": {
+            "ar": "قيد الاتصال",
+            "de": "Im Gespräch",
+            "en": "In call",
+            "es": "Llamada en curso",
+            "fr": "Appel en cours",
+            "he": "בשיחה",
+            "id": "Sedang melakukan panggilan",
+            "it": "Chiamata in corso",
+            "ja": "通話中",
+            "ko": "통화 중",
+            "ms": "Sedang memanggil",
+            "pl": "Trwa połączenie",
+            "pt": "Em chamada",
+            "ro": "În apel",
+            "ru": "В процессе вызова",
+            "th": "กำลังโทร",
+            "tr": "Aramada",
+            "uk": "Виклик триває",
+            "vi": "Đang gọi",
+            "es-LA": "Llamando",
+            "zh-Hans": "通话中",
+            "zh-Hant": "正在通話中…"
+          },
+          "value": [
+            28
+          ]
+        },
+        {
+          "desc": {
+            "ar": "في رحلة",
+            "de": "Beim Umherfahren",
+            "en": "On cruise",
+            "es": "En recorrido",
+            "fr": "En patrouille",
+            "he": "מסייר",
+            "id": "Sedang menjelajah",
+            "it": "In viaggio",
+            "ja": "巡回中",
+            "ko": "주행 중",
+            "ms": "Hidupkan jelajah",
+            "pl": "W podróży",
+            "pt": "Em cruzeiro",
+            "ro": "În deplasare",
+            "ru": "Выполнятся осмотр",
+            "th": "กำลังตรวจตรา",
+            "tr": "Gezinmede",
+            "uk": "Робот переїжджає",
+            "vi": "Đang kiểm tra",
+            "es-LA": "En crucero",
+            "zh-Hans": "巡航中",
+            "zh-Hant": "巡航中"
+          },
+          "value": [
+            32
+          ]
+        }
+      ]
+    },
+    "battery": {
+      "dps": 122
+    },
+    "offline": {
+      "dps": 135,
+      "desc": {
+        "en": "Offline State",
+        "zh": "离线状态"
+      },
+      "value": [
+        {
+          "desc": {
+            "ar": "تم إيقاف التشغيل يدويًا",
+            "de": "Manuell ausgeschaltet",
+            "en": "Powered Off Manually ",
+            "es": "Se apagó manualmente",
+            "fr": "Éteintmanuellement",
+            "he": "כובה ידנית",
+            "id": "Dimatikan Secara Manual",
+            "it": "Spento manualmente",
+            "ja": "手動で電源オフになりました",
+            "ko": "수동으로 전원 꺼짐",
+            "ms": "Dimatikan Secara Manual",
+            "pl": "Zasilanie wyłączone ręcznie",
+            "pt": "Desligado manualmente",
+            "ro": "Închidere manuală",
+            "ru": "Отключение вручную",
+            "th": "ปิดแบบแมนนวล",
+            "tr": "Elle Kapatıldı",
+            "uk": "Живлення вимкнено вручну",
+            "vi": "Tắt nguồn Thủ công",
+            "es-LA": "Se apagó manualmente",
+            "zh-Hans": "手动关机",
+            "zh-Hant": "手動關機"
+          },
+          "value": [
+            1
+          ]
+        },
+        {
+          "desc": {
+            "ar": "وضع السكون وإيقاف التشغيل",
+            "de": "Schlafmodus & ausgeschaltet",
+            "en": "Sleep & Powered Off",
+            "es": "Suspensión y se apagó",
+            "fr": "En veille et éteint",
+            "he": "במצב שינה ומכובה",
+            "id": "Tidur & Dimatikan",
+            "it": "Sospensione e Spento",
+            "ja": "スリープ状態で、電源オフになりました",
+            "ko": "절전 모드로 전원 꺼짐",
+            "ms": "Tidur & Dimatikan",
+            "pl": "Uśpienie i zasilanie wyłączone",
+            "pt": "Suspensão e desligado",
+            "ro": "Hibernare și închidere",
+            "ru": "Спящий режим и отключение",
+            "th": "นอนหลับและปิดเครื่อง",
+            "tr": "Uyku Nedeniyle Kapatıldı",
+            "uk": "Перехід у режим сну, живлення вимкнено",
+            "vi": "Ngủ & Tắt nguồn",
+            "es-LA": "Suspendido y se apagó",
+            "zh-Hans": "休眠关机",
+            "zh-Hant": "休眠關機"
+          },
+          "value": [
+            34
+          ]
+        },
+        {
+          "desc": {
+            "ar": "بطارية منخفضة وإيقاف التشغيل",
+            "de": "Niedriger Akkustand & ausgeschaltet",
+            "en": "Low Battery & Powered Off",
+            "es": "Batería baja y se apagó",
+            "fr": "Batterie faible et éteint",
+            "he": "סוללה חלשה ומכובה",
+            "id": "Daya Baterai Rendah & Dimatikan",
+            "it": "Batteria scarica e Spento",
+            "ja": "バッテリ残量の低下で、電源オフになりました",
+            "ko": "배터리 잔량 부족으로 전원 꺼짐",
+            "ms": "Bateri Lemah & Dimatikan",
+            "pl": "Niski poziom baterii i zasilanie wyłączone",
+            "pt": "Bateria fraca e desligado",
+            "ro": "Închidere în caz de baterie descărcată",
+            "ru": "Низкий заряд аккумулятора и отключение",
+            "th": "แบตเตอรี่ต่ำและปิดเครื่อง",
+            "tr": "Düşük Pil Nedeniyle Kapatıldı",
+            "uk": "Низький заряд акумулятора, живлення вимкнено",
+            "vi": "Pin yếu & Tắt nguồn",
+            "es-LA": "Baja batería y se apagó",
+            "zh-Hans": "低电量关机",
+            "zh-Hant": "低電量關機"
+          },
+          "value": [
+            51
+          ]
+        },
+        {
+          "desc": {
+            "ar": "التحديث وإعادة التشغيل",
+            "de": "Aktualisierung & Neustart",
+            "en": "Updating & Restarting",
+            "es": "Actualización y reinicio en curso",
+            "fr": "Mise à jour et redémarrage",
+            "he": "מעדכן ומתחיל מחדש",
+            "id": "Memperbarui & Memulai ulang",
+            "it": "Aggiornamento e riavvio",
+            "ja": "アップデートおよび再起動中",
+            "ko": "업데이트 및 재시작 중...",
+            "ms": "Mengemas Kini dan Menghidupkan Semula",
+            "pl": "Aktualizowanie i ponowne uruchamianie",
+            "pt": "A atualizar e reiniciar",
+            "ro": "În curs de actualizare și de repornire",
+            "ru": "Обновление и перезапуск",
+            "th": "กำลังอัปเดตและรีสตาร์ท",
+            "tr": "Güncelleme ve Yeniden Başlatma",
+            "uk": "Виконується оновлення і повторний запуск",
+            "vi": "Cập nhật & Khởi động lại",
+            "es-LA": "Actualizando y reiniciando",
+            "zh-Hans": "升级重启中",
+            "zh-Hant": "升級重啟中"
+          },
+          "value": [
+            103
+          ]
+        }
+      ]
+    },
+    "offpeak": {
+      "dps": 133
+    }
+  }
+}
