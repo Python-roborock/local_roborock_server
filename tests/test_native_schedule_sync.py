@@ -128,7 +128,7 @@ class NativeCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             runtime_credentials=SimpleNamespace(resolve_device=lambda **kw: {"duid": "robot", "localkey": "test"}),
         )
         self.coordinator = sync.NativeScheduleSync(self.context)
-        self.robot = SimpleNamespace(timers=[["native-1", "off"]], calls=[], after_read=None, write_error=None, apply=True)
+        self.robot = SimpleNamespace(timers=[["native-1", "off"]], calls=[], after_read=None, write_error=None, apply=True, s6=False)
         robot = self.robot
 
         class Client:
@@ -145,7 +145,11 @@ class NativeCoordinatorTests(unittest.IsolatedAsyncioTestCase):
                     if robot.after_read:
                         await robot.after_read()
                     return result
-                if robot.apply:
+                if robot.apply and robot.s6:
+                    # An S6 MaxV only accepts the whole entry string it listed; a bare id answers ok and changes nothing.
+                    if params[0][0] == robot.timers[0][0]:
+                        robot.timers[0] = [params[0][0], *(["off"] if params[0][1] == "off" else []), 0]
+                elif robot.apply:
                     robot.timers[0][1] = params[0][1]
                 if robot.write_error:
                     raise robot.write_error
@@ -245,6 +249,55 @@ class NativeCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await task
         self.assertEqual(self.robot.calls[-1], "close")
+
+
+# Taken from an S6 MaxV (roborock.vacuum.a10, firmware 02.62.46): the entry is one string, and an
+# off timer carries "off" between the string and the trailing 0.
+S6_ID = "Y native-1 1 1 00 10 * * ? app_start"
+S6_ON = [[S6_ID, 0]]
+S6_OFF = [[S6_ID, "off", 0]]
+
+
+class S6TimerLayoutTests(NativeCoordinatorTests):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.robot.s6 = True
+        self.robot.timers = copy.deepcopy(S6_OFF)
+
+    def test_parses_both_layouts(self):
+        self.assertEqual(sync.timer_states(S6_ON), {"native-1": True})
+        self.assertEqual(sync.timer_states(S6_OFF), {"native-1": False})
+        self.assertEqual(sync.timer_states([["native-1", "on", 1], ["other", "off", 0]]), {"native-1": True, "other": False})
+        self.assertEqual(sync.timer_states([[S6_ID, 0], [S6_ID, "off", 0]]), {})
+
+    async def test_periodic_read_syncs_an_off_timer_into_the_job(self):
+        self.assertEqual(await self.coordinator.refresh("robot"), [701])
+        self.assertFalse(store.list_jobs(self.context, "robot")[0]["enabled"])
+
+    async def test_enable_sends_the_whole_entry_string_and_confirms_by_reading_back(self):
+        self.assertEqual(await sync.sync_timer(self.context, "robot", "native-1", True, check_current=lambda: None), "on")
+        self.assertEqual(self.robot.timers, S6_ON)
+        self.assertEqual(self.robot.calls.count("upd_server_timer"), 1)
+
+    async def test_disable_sends_the_whole_entry_string(self):
+        self.robot.timers = copy.deepcopy(S6_ON)
+        self.assertEqual(await sync.sync_timer(self.context, "robot", "native-1", False, check_current=lambda: None), "off")
+        self.assertEqual(self.robot.timers, S6_OFF)
+
+    def test_an_observed_enable_of_the_whole_entry_string_is_tied_to_the_job(self):
+        from roborock.protocol import create_mqtt_encoder
+        from roborock.roborock_message import RoborockMessage, RoborockMessageProtocol
+
+        context = SimpleNamespace(
+            http_jsonl=self.path.parent / "http.jsonl",
+            runtime_credentials=SimpleNamespace(resolve_device=lambda **kw: {"duid": "robot", "localkey": "testkey000000000"}),
+        )
+        coordinator = sync.NativeScheduleSync(context)
+        body = json.dumps({"id": 1, "method": "upd_server_timer", "params": [[S6_ID, "on"]]})
+        payload = json.dumps({"t": 1, "dps": {"101": body}}).encode()
+        frame = create_mqtt_encoder("testkey000000000")(RoborockMessage(protocol=RoborockMessageProtocol.RPC_REQUEST, payload=payload))
+        coordinator.observe_request("robot", frame)
+        self.assertIn("native-1", coordinator._enable_intent["robot"])
 
 
 if __name__ == "__main__":

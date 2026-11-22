@@ -35,6 +35,7 @@ from roborock.roborock_message import RoborockDataProtocol, RoborockMessage, Rob
 from roborock.roborock_typing import RoborockCommand
 
 from .context import ServerContext
+from .native_timers import parse_native_timers
 from .schedule_store import claimed_job_is_current
 
 __all__ = [
@@ -1138,9 +1139,8 @@ class RoutineRunner:
                     # cleaning, nor enqueue a start for an offline robot.
                     if not isinstance(timers, list):
                         raise RoutineExecutionError("Cannot verify native schedule timer state")
-                    matching = [entry for entry in timers if isinstance(entry, list) and len(entry) >= 2
-                                and entry[0] == timer_name]
-                    if len(matching) != 1 or matching[0][1] != "on":
+                    matching = [timer for timer in parse_native_timers(timers) if timer.name == timer_name]
+                    if len(matching) != 1 or matching[0].enabled is not True:
                         logger.info("Skipping schedule: robot timer is off, missing, or ambiguous")
                         continue
                 elif schedule_job is not None:

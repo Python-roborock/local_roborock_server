@@ -1106,3 +1106,40 @@ def test_dispatch_rechecks_job_and_deadline_after_waiting_for_the_robot(tmp_path
                                   steps=[_server_start_step(name="timer")], sync_scene_tids=False,
                                   schedule_job=job, schedule_deadline=deadline))
     assert sent == [routine_runner_module.SchedulerCommand.GET_SERVER_TIMER]
+
+
+# What an S6 MaxV (a10, 02.62.46) answers to get_server_timer: one string per timer, 0 at the end,
+# and "off" before the 0 when the timer is off.
+S6_TIMER_ON = [["Y 1765735413736 1 1 00 10 * * ? app_start", 0]]
+S6_TIMER_OFF = [["Y 1765735413736 1 1 00 10 * * ? app_start", "off", 0]]
+
+
+def _run_native_step_against(tmp_path: Path, monkeypatch, timers) -> list:
+    sent = []
+
+    class Client:
+        def __init__(self, *args): pass
+        async def connect(self): pass
+        async def close(self): pass
+        async def send_command(self, command, params=None):
+            sent.append(command)
+            if command == routine_runner_module.SchedulerCommand.GET_SERVER_TIMER:
+                return timers
+            return ["ok"]
+
+    monkeypatch.setattr(routine_runner_module, "_RoutineMqttClient", Client)
+    runner = RoutineRunner(_test_context(tmp_path))
+    scene = _scene(scene_id=1, device_id="6HL2zfniaoYYV01CkVuhkO", name="Schedule 1")
+    asyncio.run(runner._run_steps(scene=scene, steps=[_server_start_step(name="1765735413736")], sync_scene_tids=False))
+    return sent
+
+
+def test_a_native_schedule_starts_when_an_s6_style_timer_entry_is_on(tmp_path: Path, monkeypatch) -> None:
+    sent = _run_native_step_against(tmp_path, monkeypatch, S6_TIMER_ON)
+    assert sent == [routine_runner_module.SchedulerCommand.GET_SERVER_TIMER,
+                    routine_runner_module.SchedulerCommand.SERVER_SCHEDULED_START]
+
+
+def test_a_native_schedule_is_skipped_when_an_s6_style_timer_entry_is_off(tmp_path: Path, monkeypatch) -> None:
+    sent = _run_native_step_against(tmp_path, monkeypatch, S6_TIMER_OFF)
+    assert sent == [routine_runner_module.SchedulerCommand.GET_SERVER_TIMER]

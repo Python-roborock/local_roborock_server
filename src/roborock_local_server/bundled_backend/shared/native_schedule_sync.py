@@ -10,6 +10,7 @@ import time
 from typing import Any
 
 from .inventory_io import load_inventory
+from .native_timers import NativeTimer, native_timer_name as entry_timer_name, parse_native_timers
 from .schedule_store import SettingsError, list_jobs, native_timer_name, reconcile_native_enabled
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,15 +27,19 @@ class TimerCommand(StrEnum):
     UPDATE = "upd_server_timer"
 
 
-def _timer_state(timers: Any, name: str) -> str:
+def _timer_entry(timers: Any, name: str) -> NativeTimer:
     if not isinstance(timers, list):
         raise TimerSyncError("The vacuum did not return a usable timer list. Refresh schedules and retry.")
-    matches = [entry for entry in timers if isinstance(entry, list) and entry and entry[0] == name]
+    matches = [timer for timer in parse_native_timers(timers) if timer.name == name]
     if not matches:
         raise TimerSyncError("The linked robot timer is missing. Check this schedule in the Roborock app before retrying.", 409)
-    if len(matches) != 1 or len(matches[0]) < 2 or matches[0][1] not in ("on", "off"):
+    if len(matches) != 1 or matches[0].enabled is None:
         raise TimerSyncError("The linked robot timer is ambiguous. Check this schedule in the Roborock app before retrying.", 409)
-    return matches[0][1]
+    return matches[0]
+
+
+def _timer_state(timers: Any, name: str) -> str:
+    return "on" if _timer_entry(timers, name).enabled else "off"
 
 
 async def sync_timer(
@@ -58,13 +63,15 @@ async def sync_timer(
         async with asyncio.timeout(45):
             client = _RoutineMqttClient(context, device, logging.getLogger(__name__))
             await client.connect()
-            current = _timer_state(await client.send_command(TimerCommand.GET, []), name)
+            timer = _timer_entry(await client.send_command(TimerCommand.GET, []), name)
+            current = "on" if timer.enabled else "off"
             # Recheck the job after the network read, before changing the robot.
             check_current()
             if current != desired:
                 write_attempted = True
                 try:
-                    await client.send_command(TimerCommand.UPDATE, [[name, desired]])
+                    # Some firmware only accepts the full entry string it listed, not the bare name.
+                    await client.send_command(TimerCommand.UPDATE, [[timer.entry_id, desired]])
                 except Exception:
                     # A read-back can confirm a write whose acknowledgement was
                     # lost. It cannot confirm a refused or unapplied write.
@@ -98,15 +105,12 @@ def timer_states(timers: Any) -> dict[str, bool]:
     states: dict[str, bool] = {}
     seen: set[str] = set()
     invalid: set[str] = set()
-    for entry in timers:
-        if not isinstance(entry, list) or not entry or not isinstance(entry[0], str):
-            continue
-        name = entry[0]
-        if name in seen or len(entry) < 2 or entry[1] not in ("on", "off"):
-            invalid.add(name)
+    for timer in parse_native_timers(timers):
+        if timer.name in seen or timer.enabled is None:
+            invalid.add(timer.name)
         else:
-            states[name] = entry[1] == "on"
-        seen.add(name)
+            states[timer.name] = timer.enabled
+        seen.add(timer.name)
     return {name: enabled for name, enabled in states.items() if name not in invalid}
 
 
@@ -173,7 +177,7 @@ class NativeScheduleSync:
                 if (request.get("method") == "upd_server_timer" and isinstance(params, list)
                         and len(params) == 1 and isinstance(params[0], list)
                         and len(params[0]) == 2 and isinstance(params[0][0], str)):
-                    name, state = params[0]
+                    name, state = entry_timer_name(params[0][0]), params[0][1]
                     # A later off must invalidate an earlier on intent, too.
                     self._enable_intent.setdefault(duid, {}).pop(name, None)
                     if state == "on":
