@@ -186,6 +186,7 @@ def test_a_request_must_name_or_come_from_a_known_robot() -> None:
     assert matter_proxy.known_device(robots, {}, "10.0.0.7")
     assert not matter_proxy.known_device(robots, {}, "9.9.9.9")
     assert not matter_proxy.known_device([], {}, "10.0.0.7")
+    assert not matter_proxy.known_device(robots, {"device_id": ["d1"]}, "9.9.9.9")
 
 
 def _supervisor(tmp_path, monkeypatch, enabled: bool) -> ReleaseSupervisor:

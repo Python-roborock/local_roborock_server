@@ -39,7 +39,7 @@ RATE_LIMIT_REQUESTS = 10
 RATE_LIMIT_WINDOW_SECONDS = 60
 MAX_HEADER_VALUE = 2048
 _QUERY_KEY = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
-_DID_KEYS = ("did", "duid", "d", "device_id", "deviceId", "device_did", "deviceDid")
+_DID_KEYS = ("did", "duid")
 
 
 def matches(clean_path: str, method: str) -> bool:
