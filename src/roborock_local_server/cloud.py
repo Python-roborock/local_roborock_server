@@ -49,6 +49,8 @@ def summarize_plugin_catalogs(catalogs: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(catalog, dict):
             continue
         entry: dict[str, Any] = {"params": catalog.get("params") or catalog.get("json") or {}}
+        if catalog.get("fetched_at_utc"):
+            entry["fetched_at_utc"] = catalog["fetched_at_utc"]
         if "error" in catalog:
             entry["error"] = catalog["error"]
         data = catalog.get("data")
@@ -88,6 +90,8 @@ def _merge_plugin_catalogs(stored: dict[str, Any], fresh: dict[str, Any]) -> tup
         failed = isinstance(entry, dict) and "error" in entry
         if failed and isinstance(previous, dict) and "error" not in previous:
             kept.append(name)
+            # Stamp the kept entry with its real age so the new top-level stamp does not make it look fresh.
+            merged[name] = {"fetched_at_utc": stored.get("fetched_at_utc"), **previous}
             continue
         merged[name] = entry
     return merged, kept
@@ -298,7 +302,9 @@ class CloudImportManager:
         with self._snapshot_lock:
             snapshot = self._read_snapshot()
             current = snapshot.get("user_data")
-            if not isinstance(current, dict) or current.get("token") != user_data.token:
+            if not isinstance(current, dict) or not current.get("token"):
+                raise ValueError("The stored cloud login is missing or unreadable. Request a code and sign in again.")
+            if current.get("token") != user_data.token:
                 raise ValueError("A new sign-in finished while the refresh ran. Run the refresh again.")
             web_cache = snapshot.get("web_api_cache")
             if not isinstance(web_cache, dict):
