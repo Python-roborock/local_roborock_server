@@ -98,8 +98,8 @@ _BUCKET_MODELS: dict[str, tuple[str, ...]] = {
 _MODEL_BUCKETS = {
     model: bucket for bucket, models in _BUCKET_MODELS.items() for model in models
 }
-# These four keep the old "/<bucket>/app/voice-pkg/" layout.
-_LEGACY_LAYOUT_BUCKETS = {"tanosv", "rubyplus", "rubyse", "rubysc"}
+# These keep the old "/<bucket>/app/voice-pkg/" layout.
+_LEGACY_LAYOUT_BUCKETS = {"tanos", "tanose", "tanosv", "rubyplus", "rubyse", "rubysc"}
 
 _INFO_PATH = re.compile(
     r"^(?:/app/[a-z0-9_]{1,40}/voice-pkg/|/[a-z0-9_]{1,40}/app/voice-pkg/)(?:debug/)?info$"
