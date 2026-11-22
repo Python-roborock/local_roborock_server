@@ -1706,6 +1706,30 @@ def test_closing_an_old_connection_does_not_mark_a_reconnected_robot_offline(tmp
     assert store.get("DUID1")["offline_at"]
 
 
+def test_a_robot_logging_in_with_its_own_credentials_is_online_before_it_publishes(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+    proxy.runtime_credentials = type(
+        "Creds", (), {"resolve_device_by_mqtt_username": lambda self, name: {"did": "did-test-1", "duid": "DUID1"}}
+    )()
+    store.mark_seen("DUID1")
+    store.mark_offline("DUID1")
+
+    proxy._bind_authenticated_device_topic("5", "device_mqtt_user", "abc")
+
+    assert store.get("DUID1")["offline_at"] is None
+    assert proxy._conn_duids["5"] == {"DUID1"}
+    proxy._forget_conn_trace_state("5")
+    assert store.get("DUID1")["offline_at"]
+
+
+def test_an_app_login_is_not_marked_as_a_robot_coming_online(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+
+    proxy._bind_authenticated_device_topic("5", "app_user", "abc")
+
+    assert store.get("DUID1") is None
+
+
 def test_queued_packets_of_a_closed_connection_cannot_clear_its_offline_mark(tmp_path) -> None:
     from roborock_local_server.bundled_backend.mqtt_tls_proxy_server import server as proxy_module
 
@@ -1722,6 +1746,37 @@ def test_queued_packets_of_a_closed_connection_cannot_clear_its_offline_mark(tmp
 
     assert store.get("DUID1")["offline_at"]
     assert "1" not in proxy._conn_duids
+
+
+def test_b01_pushes_mark_the_robot_seen_but_do_not_fill_the_v1_status(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+    proxy._set_conn_device_topic("7", ROBOT_TOPIC)
+
+    proxy._observe_snapshot("7", "c2b", ROBOT_TOPIC, 102, {"version": "B01", "payload_utf8": '{"dps":{"121":8}}'}, b"")
+
+    entry = store.get("DUID1")
+    assert entry["last_seen_at"]
+    assert entry["status"] == {}
+    proxy._observe_snapshot("7", "c2b", ROBOT_TOPIC, 102, {"version": "1.0", **PUSH}, b"")
+    assert store.get("DUID1")["status"]["battery"] == 5
+
+
+def test_stop_flushes_updates_traced_while_the_worker_drains(tmp_path) -> None:
+    from roborock_local_server.bundled_backend.shared.device_snapshot_store import DeviceSnapshotStore
+
+    proxy, store = _snapshot_proxy(tmp_path)
+    store._flush_interval_s = 3600.0
+    store._last_flush = time.monotonic()
+    proxy._set_conn_device_topic("7", ROBOT_TOPIC)
+    proxy._trace_packet = lambda conn_id, direction, packet: proxy._observe_snapshot(  # type: ignore[method-assign]
+        conn_id, direction, ROBOT_TOPIC, 102, PUSH, packet
+    )
+    proxy._ensure_trace_worker()
+    proxy._trace_queue.put(("7", "c2b", b"queued"))
+
+    proxy.stop()
+
+    assert DeviceSnapshotStore(tmp_path).get("DUID1")["status"]["battery"] == 5
 
 
 def test_mower_pushes_do_not_fill_the_vacuum_status_fields(tmp_path) -> None:
