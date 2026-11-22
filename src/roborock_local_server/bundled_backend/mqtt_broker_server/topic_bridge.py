@@ -75,11 +75,14 @@ class MqttTopicBridge:
         inventory_path: Path | None = None,
         request_interceptor: Callable[[str, bytes], bytes | None] | None = None,
         request_observer: Callable[[str, bytes], None] | None = None,
+        response_rewriter: Callable[[str, bytes], bytes | None] | None = None,
     ) -> None:
         # Given (duid, payload) for each rr/m request; returns an encoded reply to
         # publish back to the requester instead of forwarding, or None to forward.
         self._request_interceptor = request_interceptor
         self._request_observer = request_observer
+        # Given (duid, payload) for each rr/d reply; returns a replacement payload, or None to keep it.
+        self._response_rewriter = response_rewriter
         self._host = host
         self._port = port
         self._logger = logger
@@ -383,10 +386,12 @@ class MqttTopicBridge:
             add_matches([next(iter(self._m_to_d))])
         return targets
 
-    async def _publish_mirror(self, client: aiomqtt.Client, message: aiomqtt.Message, target_topic: str) -> None:
+    async def _publish_mirror(
+        self, client: aiomqtt.Client, message: aiomqtt.Message, target_topic: str, payload: bytes | None = None,
+    ) -> None:
         qos = _extract_qos(message)
         retain = bool(getattr(message, "retain", False))
-        await client.publish(target_topic, message.payload, qos=qos, retain=retain)
+        await client.publish(target_topic, message.payload if payload is None else payload, qos=qos, retain=retain)
 
     async def _handle_cloud_message(
         self,
@@ -475,7 +480,13 @@ class MqttTopicBridge:
             self._m_to_d[cloud_topic] = device_topic
 
             target_topic = cloud_topic.topic_out
-            await self._publish_mirror(client, message, target_topic)
+            rewritten = None
+            if self._response_rewriter is not None and not bool(getattr(message, "retain", False)):
+                try:
+                    rewritten = self._response_rewriter(cloud_topic.duid, bytes(message.payload))
+                except Exception:  # noqa: BLE001
+                    self._logger.warning("MQTT response rewriter failed for %s", src_topic, exc_info=True)
+            await self._publish_mirror(client, message, target_topic, rewritten)
             self._logger.info(
                 "MQTT bridge d->m %s -> %s bytes=%d",
                 src_topic,

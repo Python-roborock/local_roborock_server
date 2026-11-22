@@ -11,6 +11,7 @@ from roborock.protocols.v1_protocol import decode_rpc_response
 from roborock.roborock_message import RoborockMessage, RoborockMessageProtocol
 from roborock_local_server.bundled_backend.mqtt_broker_server.topic_bridge import (
     CloudTopicKey,
+    DeviceTopicKey,
     MqttTopicBridge,
 )
 from shared import schedule_store, timer_rpc
@@ -152,12 +153,12 @@ def _decode_reply(reply):
     return decode_rpc_response(message)
 
 
-def test_interceptor_answers_get_timer_with_an_encrypted_rpc_response(ctx):
-    reply = timer_rpc.TimerRpcInterceptor(ctx)(DUID, _encode_request("get_timer", []))
+def test_interceptor_answers_upd_timer_with_an_encrypted_rpc_response(ctx):
+    reply = timer_rpc.TimerRpcInterceptor(ctx)(DUID, _encode_request("upd_timer", [["3549431", "off"]]))
     assert reply is not None
     response = _decode_reply(reply)
     assert response.request_id == 4242
-    assert [entry[0] for entry in response.data] == ["3549431", "3549434", "3878757"]
+    assert response.data == ["ok"]
 
 
 def test_interceptor_forwards_everything_that_is_not_a_timer_request(ctx):
@@ -241,7 +242,7 @@ def test_bridge_answers_timer_requests_locally_and_does_not_forward_them(ctx):
         request_interceptor=timer_rpc.TimerRpcInterceptor(ctx),
     )
     cloud = CloudTopicKey(rriot_u="u", mqtt_username="m", duid=DUID)
-    message = SimpleNamespace(payload=_encode_request("get_timer", []), qos=0, retain=False)
+    message = SimpleNamespace(payload=_encode_request("upd_timer", [["3549431", "off"]]), qos=0, retain=False)
     client = Client()
 
     asyncio.run(bridge._handle_cloud_message(client, message, cloud, cloud.topic_in))
@@ -312,3 +313,120 @@ def test_non_numeric_setting_is_rejected_and_nothing_is_saved(ctx):
     with pytest.raises(timer_rpc.TimerRequestError):
         timer_rpc.handle_timer_request(ctx, DUID, "set_timer", [["9", ["on", ["0 9 * * *", action]]]])
     assert schedule_store.list_jobs(ctx, DUID) == before
+
+
+# What the official app sends (tanos setTimerOnRobot): no status element, the action carries the settings.
+OFFICIAL_SET_TIMER = [
+    ["1765735413736", ["30 7 * * 1,2", ["start_clean", {"segments": "", "fan_power": 102, "water_box_mode": 202, "repeat": 1}]]]
+]
+OFFICIAL_PATROL_TIMER = [["1765735413800", ["0 9 * * *", ["app_start_patrol", {"repeat": 1, "source": 3}]]]]
+
+
+def _encode_robot_reply(request_id, result):
+    body = json.dumps({"id": request_id, "result": result})
+    payload = json.dumps({"t": 1790000000, "dps": {"102": body}}).encode()
+    return create_mqtt_encoder(LOCALKEY)(RoborockMessage(protocol=RoborockMessageProtocol.RPC_RESPONSE, payload=payload))
+
+
+def test_official_app_set_timer_layout_is_stored_enabled_with_its_settings(ctx):
+    assert timer_rpc.handle_timer_request(ctx, DUID, "set_timer", OFFICIAL_SET_TIMER) == ["ok"]
+
+    job = _job(ctx, "1765735413736")
+    assert job["cron"] == "30 7 * * 1,2"
+    assert job["enabled"] is True
+    entry = job["param"]["params"][0]
+    assert (entry["fan_power"], entry["water_box_mode"], entry["repeat"], entry["segments"]) == (102, 202, 1, "0")
+
+
+def test_interceptor_answers_the_official_set_timer_layout_with_ok(ctx):
+    reply = timer_rpc.TimerRpcInterceptor(ctx)(DUID, _encode_request("set_timer", OFFICIAL_SET_TIMER))
+    response = _decode_reply(reply)
+    assert response.api_error is None
+    assert response.data == ["ok"]
+
+
+def test_set_timer_layouts_with_a_status_still_work(ctx):
+    timer_rpc.handle_timer_request(ctx, DUID, "set_timer", [["a1", ["off", ["0 9 * * *", ["start_clean", {}]]]]])
+    timer_rpc.handle_timer_request(ctx, DUID, "set_timer", [["a2", "off", ["0 9 * * *", ["start_clean", {}]]]])
+    assert _job(ctx, "a1")["enabled"] is False
+    assert _job(ctx, "a2")["enabled"] is False
+
+
+def test_patrol_timers_go_to_the_robot_instead_of_being_stored_as_cleans(ctx):
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    assert interceptor(DUID, _encode_request("set_timer", OFFICIAL_PATROL_TIMER)) is None
+    assert all(str(j["id"]) != "1765735413800" for j in schedule_store.list_jobs(ctx, DUID))
+
+
+def test_upd_and_del_of_a_timer_the_store_does_not_own_go_to_the_robot(ctx):
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    assert interceptor(DUID, _encode_request("upd_timer", [["robot-own", "off"]])) is None
+    assert interceptor(DUID, _encode_request("del_timer", ["robot-own"])) is None
+    assert interceptor(DUID, _encode_request("del_timer", ["3549431"])) is not None
+
+
+def test_get_timer_is_forwarded_and_the_robots_own_timers_are_kept_in_the_reply(ctx):
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    assert interceptor(DUID, _encode_request("get_timer", [], request_id=77)) is None
+
+    own = ["robot-own", "on", ["0 6 * * *", ["start_clean", {"repeat": 1}]]]
+    merged = _decode_reply(interceptor.merge_response(DUID, _encode_robot_reply(77, [own])))
+    assert [entry[0] for entry in merged.data] == ["robot-own", "3549431", "3549434", "3878757"]
+    # The robot's reply to some other request is left alone.
+    assert interceptor.merge_response(DUID, _encode_robot_reply(78, [own])) is None
+
+
+def test_get_timer_reply_without_a_list_still_lists_the_stores_timers(ctx):
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    interceptor(DUID, _encode_request("get_timer", [], request_id=5))
+    merged = _decode_reply(interceptor.merge_response(DUID, _encode_robot_reply(5, None)))
+    assert [entry[0] for entry in merged.data] == ["3549431", "3549434", "3878757"]
+
+
+def test_get_timer_with_nothing_in_the_store_is_plain_forwarding(tmp_path):
+    (tmp_path / "web_api_inventory.json").write_text("{}", encoding="utf-8")
+    empty = SimpleNamespace(
+        http_jsonl=tmp_path / "http.jsonl", loggers={}, timezone="America/New_York",
+        runtime_credentials=SimpleNamespace(resolve_device=lambda duid="": {"localkey": LOCALKEY}), localkey="",
+    )
+    interceptor = timer_rpc.TimerRpcInterceptor(empty)
+    assert interceptor(DUID, _encode_request("get_timer", [], request_id=9)) is None
+    assert interceptor.merge_response(DUID, _encode_robot_reply(9, [])) is None
+
+
+def test_a_failed_save_is_reported_and_not_forwarded_to_the_robot(ctx, monkeypatch):
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(timer_rpc, "upsert_job", fail)
+    reply = timer_rpc.TimerRpcInterceptor(ctx)(DUID, _encode_request("set_timer", OFFICIAL_SET_TIMER))
+    assert reply is not None
+    assert _decode_reply(reply).api_error is not None
+
+
+def test_bridge_merges_the_robots_get_timer_reply_for_the_client(ctx):
+    interceptor = timer_rpc.TimerRpcInterceptor(ctx)
+    bridge = MqttTopicBridge(
+        host="127.0.0.1", port=1883, logger=logging.getLogger("test.timer_merge"),
+        request_interceptor=interceptor, response_rewriter=interceptor.merge_response,
+    )
+    device = DeviceTopicKey(did="robot-did", mqtt_usr="robot-user")
+    bridge._remember_device_seen(device)
+    cloud = CloudTopicKey(rriot_u="u", mqtt_username="m", duid=DUID)
+    sent = []
+
+    class Client:
+        async def publish(self, topic, payload, **kwargs):
+            sent.append((topic, payload))
+
+    async def exercise():
+        request = SimpleNamespace(payload=_encode_request("get_timer", [], request_id=31), qos=0, retain=False)
+        await bridge._handle_cloud_message(Client(), request, cloud, cloud.topic_in)
+        assert sent[-1][0] == device.topic_out
+        reply = SimpleNamespace(payload=_encode_robot_reply(31, []), qos=0, retain=False)
+        await bridge._handle_device_message(Client(), reply, device, device.topic_in)
+
+    asyncio.run(exercise())
+    topic, payload = sent[-1]
+    assert topic == cloud.topic_out
+    assert [entry[0] for entry in _decode_reply(payload).data] == ["3549431", "3549434", "3878757"]

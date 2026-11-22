@@ -2015,6 +2015,7 @@ class ReleaseSupervisor:
             self.runtime_state.set_service("mqtt_backend_broker", running=True, required=True, enabled=True)
 
         if self.config.broker.enable_topic_bridge:
+            timer_rpc = TimerRpcInterceptor(self.context, default_timezone=self.config.network.timezone)
             self._topic_bridge = MqttTopicBridge(
                 host=self.config.broker.host,
                 port=self.config.broker.port,
@@ -2022,10 +2023,8 @@ class ReleaseSupervisor:
                 runtime_state=self.runtime_state,
                 inventory_path=self.paths.inventory_path,
                 request_observer=self.schedule_sync.observe_request,
-                request_interceptor=TimerRpcInterceptor(
-                    self.context,
-                    default_timezone=self.config.network.timezone,
-                ),
+                request_interceptor=timer_rpc,
+                response_rewriter=timer_rpc.merge_response,
             )
             await self._topic_bridge.start()
             self.runtime_state.set_service("mqtt_topic_bridge", running=True, required=False, enabled=True)
