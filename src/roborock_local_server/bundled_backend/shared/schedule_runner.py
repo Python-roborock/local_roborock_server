@@ -65,7 +65,17 @@ class CronSpec:
         return dom_ok and dow_ok
 
 
-def _parse_field(text: str, low: int, high: int, *, name: str) -> tuple[frozenset[int], bool]:
+_MONTH_NAMES = {n: i for i, n in enumerate(("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), 1)}
+_WEEKDAY_NAMES = {n: i for i, n in enumerate(("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"))}
+
+
+def _parse_field(
+    text: str, low: int, high: int, *, name: str, names: dict[str, int] | None = None
+) -> tuple[frozenset[int], bool]:
+    def number(token: str) -> int:
+        token = token.strip()
+        return names[token.upper()] if names and token.upper() in names else int(token)
+
     text = text.strip()
     if text in ("*", "?"):
         return frozenset(range(low, high + 1)), False
@@ -88,12 +98,12 @@ def _parse_field(text: str, low: int, high: int, *, name: str) -> tuple[frozense
         elif "-" in part:
             first, _, last = part.partition("-")
             try:
-                start, end = int(first), int(last)
+                start, end = number(first), number(last)
             except ValueError as exc:
                 raise CronError(f"bad {name} range {part!r}") from exc
         else:
             try:
-                start = int(part)
+                start = number(part)
             except ValueError as exc:
                 raise CronError(f"bad {name} value {part!r}") from exc
             end = high if step != 1 else start
@@ -110,8 +120,8 @@ def parse_cron(expression: str) -> CronSpec:
     minutes, _ = _parse_field(fields[0], 0, 59, name="minute")
     hours, _ = _parse_field(fields[1], 0, 23, name="hour")
     dom, dom_restricted = _parse_field(fields[2], 1, 31, name="day-of-month")
-    months, _ = _parse_field(fields[3], 1, 12, name="month")
-    raw_dow, dow_restricted = _parse_field(fields[4], 0, 7, name="day-of-week")
+    months, _ = _parse_field(fields[3], 1, 12, name="month", names=_MONTH_NAMES)
+    raw_dow, dow_restricted = _parse_field(fields[4], 0, 7, name="day-of-week", names=_WEEKDAY_NAMES)
     dow = frozenset(0 if value == 7 else value for value in raw_dow)
     return CronSpec(
         minutes=tuple(sorted(minutes)),

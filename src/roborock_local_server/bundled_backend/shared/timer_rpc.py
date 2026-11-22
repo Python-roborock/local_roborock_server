@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -65,6 +66,10 @@ class ForwardToRobot(Exception):
 _PATROL_ACTIONS = frozenset({"app_start_patrol", "start_patrol"})
 _STATUS_WORDS = frozenset({"on", "off", "disable"})
 _PENDING_SECONDS = 30.0
+_NAME_RE = re.compile(r"[A-Za-z]{3}")
+_MONTH_NUMBERS = {name: number for number, name in enumerate(
+    ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), 1)}
+_DAY_NUMBERS = {name: number for number, name in enumerate(("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"))}
 
 
 class _SetTimer(NamedTuple):
@@ -89,6 +94,9 @@ def device_cron(cron: str) -> str | None:
     minute, hour, dom, month, dow = (field if field != "?" else "*" for field in fields)
     if (dom == "*") != (month == "*"):
         return None
+    # Robot clients read digits, so day and month names (MON-FRI) are written out as numbers.
+    month = _NAME_RE.sub(lambda m: str(_MONTH_NUMBERS[m.group(0).upper()]), month)
+    dow = _NAME_RE.sub(lambda m: str(_DAY_NUMBERS[m.group(0).upper()]), dow)
     return f"{minute} {hour} {dom} {month} {dow}"
 
 

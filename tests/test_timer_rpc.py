@@ -430,3 +430,9 @@ def test_bridge_merges_the_robots_get_timer_reply_for_the_client(ctx):
     topic, payload = sent[-1]
     assert topic == cloud.topic_out
     assert [entry[0] for entry in _decode_reply(payload).data] == ["3549431", "3549434", "3878757"]
+
+
+def test_get_timer_shows_day_names_as_numbers(ctx):
+    timer_rpc.handle_timer_request(ctx, DUID, "set_timer", [["named", ["on", ["0 8 * * MON-FRI", ["start_clean", {}]]]]])
+    listed = timer_rpc.handle_timer_request(ctx, DUID, "get_timer", None)
+    assert next(entry for entry in listed if entry[0] == "named")[2][0] == "0 8 * * 1-5"

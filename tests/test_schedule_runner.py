@@ -297,3 +297,24 @@ def test_ticks_do_not_reload_an_unchanged_inventory(tmp_path, monkeypatch):
     for second in range(5):
         runner.tick(_utc(2026, 9, 28, 14, 0, second * 10))
     assert len(loads) == 1
+
+
+@pytest.mark.parametrize(
+    ("named", "numbered"),
+    [
+        ("00 11 ? * MON", "00 11 ? * 1"),
+        ("00 11 ? * mon-fri", "00 11 ? * 1-5"),
+        ("00 11 ? * SUN,SAT", "00 11 ? * 0,6"),
+        ("00 11 ? * MON,WED,FRI", "00 11 ? * 1,3,5"),
+        ("00 11 1 JAN,JUL ?", "00 11 1 1,7 ?"),
+        ("00 11 ? * MON-FRI/2", "00 11 ? * 1-5/2"),
+    ],
+)
+def test_day_and_month_names_mean_the_same_as_numbers(named, numbered):
+    assert sr.parse_cron(named) == sr.parse_cron(numbered)
+
+
+@pytest.mark.parametrize("expression", ["00 11 ? * FUNDAY", "00 11 ? * MON-XYZ", "00 11 1 JANE ?"])
+def test_unknown_day_or_month_names_are_rejected(expression):
+    with pytest.raises(sr.CronError):
+        sr.parse_cron(expression)
