@@ -315,3 +315,61 @@ def test_a_close_that_raises_does_not_hide_the_result_and_releases_the_package(t
     monkeypatch.setattr(ota_install, "_RoutineMqttClient", ClosingBadly)
     assert _run_install(supervisor)["status"] == "IDLE"
     assert ota_dry_run._PINNED == {}
+
+
+def test_versions_written_differently_compare_as_the_same(tmp_path, monkeypatch) -> None:
+    from roborock_local_server import firmware_versions
+
+    assert firmware_versions.same("2.35.52", "02.35.52") and not firmware_versions.same("2.35.52", "02.35.53")
+    assert firmware_versions.same("beta", "beta") and not firmware_versions.same("beta", "02.35.52")
+    supervisor, _ = _prepare(tmp_path, monkeypatch, ["idle", "downloading", "installing", None, "idle"], report="2.16.00")
+    assert _run_install(supervisor)["status"] == "IDLE"  # the robot spells the target version without the leading zero
+
+
+def test_the_same_version_written_differently_is_not_a_downgrade_or_another_version(tmp_path, monkeypatch) -> None:
+    supervisor, _ = catalog_supervisor(tmp_path, monkeypatch, reported="2.35.52", extra="allow_downgrade = true\n")
+    installer = supervisor.ota_installer
+    assert installer._is_downgrade("02.35.52", "2.35.52") is False
+    assert "already runs" in asyncio.run(installer.start_version("robot", "02.35.52"))["reason"]
+
+
+def test_an_unparseable_version_needs_confirmation(tmp_path, monkeypatch) -> None:
+    supervisor, _ = catalog_supervisor(tmp_path, monkeypatch, reported="custom-build", extra="allow_downgrade = true\n")
+    installer = supervisor.ota_installer
+    installer.catalog.add(MODEL, "02.33.48", source="robot_reported", url=OLD_URL, md5=OLD_MD5)
+    assert installer._is_downgrade("beta-1", "02.35.52") is True and installer._is_downgrade("02.33.48", "custom-build") is True
+    refused = asyncio.run(installer.start_version("robot", "02.33.48"))
+    assert refused["started"] is False and refused["needs_confirmation"] is True
+
+
+def test_two_version_installs_race_and_only_one_starts(tmp_path, monkeypatch, robot) -> None:
+    supervisor, store = catalog_supervisor(tmp_path, monkeypatch, reported="02.35.52", extra="allow_downgrade = true\n")
+    catalog = supervisor.ota_installer.catalog
+    catalog.add(MODEL, "02.33.48", source="robot_reported", url=OLD_URL, md5=OLD_MD5)
+    catalog.add(MODEL, "02.35.52", source="install", url=OLD_URL.replace(OLD_MD5, "a" * 32), md5="a" * 32)
+    supervisor.cloud_manager.urls = {"02.33.48": OLD_URL, "02.35.52": OLD_URL.replace(OLD_MD5, "a" * 32)}
+    gate = asyncio.Event()
+    plain = supervisor.cloud_manager.iot_get
+
+    async def slow(path, params=None):
+        await gate.wait()
+        return await plain(path, params)
+
+    supervisor.cloud_manager.iot_get = slow
+    robot.fetch_from = supervisor.ota_dry_run
+    robot.states = ["idle", "downloading", "installing", None, "idle"]
+    robot.on_install = lambda params: setattr(store, "version", "02.33.48")
+
+    async def go():
+        first = asyncio.create_task(supervisor.ota_installer.start_version("robot", "02.33.48", True, "02.33.48"))
+        await asyncio.sleep(0)
+        second = await supervisor.ota_installer.start_version("robot", "02.33.48", True, "02.33.48")
+        gate.set()
+        started = await first
+        await asyncio.gather(*supervisor.ota_installer._running.values())
+        return started, second
+
+    started, second = asyncio.run(go())
+    assert started["started"] is True
+    assert second == {"started": False, "reason": ota_install.BUSY_REASON}
+    assert supervisor.ota_installer.live_status("robot")["status"] == "IDLE"

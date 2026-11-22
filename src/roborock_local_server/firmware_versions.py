@@ -17,6 +17,12 @@ def parse(version: str) -> tuple[int, ...] | None:
         return None
 
 
+def same(left: str, right: str) -> bool:
+    """True when two version strings name the same version, so 2.35.52 equals 02.35.52."""
+    a, b = parse(left), parse(right)
+    return a == b if a is not None and b is not None else str(left) == str(right)
+
+
 def at_least(reported: str, offered: str) -> bool:
     """True when the version the robot reports is the offered one or newer."""
     have, want = parse(reported), parse(offered)

@@ -208,7 +208,7 @@ class OtaInstaller:
         version = version or str((self.catalog.robot(duid) or {}).get("previous_version") or "")
         if not version:
             return {"started": False, "reason": "No previous version is remembered for this robot"}
-        if version == reported:
+        if firmware_versions.same(version, reported):
             return {"started": False, "reason": f"The robot already runs {version}"}
         entry = self.catalog.entry(model, version)
         if entry is None:
@@ -405,7 +405,7 @@ class OtaInstaller:
         """Gives the rebooted robot a while to report the version it now runs."""
         deadline = time.monotonic() + REPORT_WAIT_SECONDS
         store = self._supervisor.context.snapshot_store
-        while firmware_versions.reported_version(store, duid) != version and time.monotonic() < deadline:
+        while not firmware_versions.same(firmware_versions.reported_version(store, duid), version) and time.monotonic() < deadline:
             await asyncio.sleep(REPORT_POLL_SECONDS)
 
     async def _install(self, device: dict[str, str], package: dict[str, Any], *args: Any, **kwargs: Any) -> None:
@@ -445,7 +445,7 @@ class OtaInstaller:
         if not failure:
             await self._wait_for_version(duid, version)
         reported = firmware_versions.reported_version(supervisor.context.snapshot_store, duid) or None
-        if not failure and reported != version:
+        if not failure and not firmware_versions.same(reported or "", version):
             failure = f"The robot reports firmware {reported or 'nothing'} after the update, not {version}"
         self.results[duid] = {**result, "version": version, "firmware_version_reported": reported}
         self._write_record(duid, self.results[duid])
@@ -454,7 +454,7 @@ class OtaInstaller:
             self._set_live(duid, "IDLE", "100")
         else:
             self._set_live(duid, "FAILED", err_msg=failure, err_code=1)
-        changed = bool(reported) and bool(previous) and reported != previous
+        changed = bool(reported) and bool(previous) and not firmware_versions.same(reported or "", previous)
         if model and previous and previous != version and result.get("ran") and (succeeded or changed):
             self.catalog.remember_install(duid, model, previous, version)
         if succeeded:
