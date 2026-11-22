@@ -252,3 +252,97 @@ def test_fetch_stops_reading_past_the_size_cap() -> None:
     assert streamed is not None and "too large" in str(streamed)
     by_length = _serve_and_fetch(app(), "/declared.pkg", max_bytes=1024)
     assert by_length is not None and "too large: 4096" in str(by_length)
+
+
+def test_concurrent_requests_for_one_package_download_it_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import asyncio
+
+    from https_server.routes.plugin import voice_pkg
+
+    calls: list[str] = []
+
+    async def slow(url: str, *, max_bytes: int, timeout_s: float) -> bytes:
+        calls.append(url)
+        await asyncio.sleep(0.05)
+        return b"pkg-bytes"
+
+    monkeypatch.setattr(voice_pkg, "fetch_voice_bytes", slow)
+
+    async def run() -> list[bytes]:
+        results = await asyncio.gather(
+            *(
+                voice_pkg._voice_file_response(
+                    tmp_path, "us-app.roborock.com", "/a/voice-pkg/package/en.pkg"
+                )
+                for _ in range(4)
+            )
+        )
+        return [response.body for _, response in results]
+
+    bodies = asyncio.run(run())
+
+    assert bodies == [b"pkg-bytes"] * 4
+    assert len(calls) == 1
+    cache_dir = tmp_path / "voice_pkg_cache"
+    assert [p.suffix for p in cache_dir.iterdir()] == [".pkg"]
+
+
+def test_concurrent_info_requests_share_one_upstream_fetch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from https_server.routes.plugin import voice_pkg
+
+    calls: list[str] = []
+
+    async def slow(url: str, *, max_bytes: int, timeout_s: float) -> bytes:
+        calls.append(url)
+        await asyncio.sleep(0.05)
+        return json.dumps(INFO).encode()
+
+    monkeypatch.setattr(voice_pkg, "fetch_voice_bytes", slow)
+    ctx = SimpleNamespace(region="us", api_url=lambda: "https://api.example")
+
+    async def run() -> list[int]:
+        results = await asyncio.gather(
+            *(
+                voice_pkg._voice_info_response(
+                    ctx, tmp_path, "/app/beryllite/voice-pkg/info"
+                )
+                for _ in range(4)
+            )
+        )
+        return [response.status_code for _, response in results]
+
+    assert asyncio.run(run()) == [200] * 4
+    assert len(calls) == 1
+
+
+def test_package_cache_keeps_only_the_newest_files(tmp_path: Path, monkeypatch) -> None:
+    import os
+
+    from https_server.routes.plugin import voice_pkg
+
+    monkeypatch.setattr(voice_pkg, "VOICE_PKG_CACHE_MAX_FILES", 3)
+    for index in range(5):
+        path = tmp_path / f"{index}.pkg"
+        path.write_bytes(b"x")
+        os.utime(path, (1000 + index, 1000 + index))
+    stale_tmp = tmp_path / "old.pkg.abc.tmp"
+    stale_tmp.write_bytes(b"x")
+    os.utime(stale_tmp, (1, 1))
+    info = tmp_path / "info-x.json"
+    info.write_bytes(b"{}")
+
+    voice_pkg._evict_old_packages(tmp_path)
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "2.pkg",
+        "3.pkg",
+        "4.pkg",
+        "info-x.json",
+    ]

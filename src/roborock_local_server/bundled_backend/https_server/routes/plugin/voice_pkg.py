@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import json
+import os
 import re
-from collections.abc import Mapping
+import time
+import uuid
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import urlparse
 
 import aiohttp
@@ -19,6 +24,8 @@ VOICE_FILE_ROUTE_NAME = "voice_pkg_file"
 VOICE_PROXY_HEADER = "x-rr-voice-proxy"
 VOICE_PKG_MAX_BYTES = 64 * 1024 * 1024
 VOICE_INFO_MAX_BYTES = 2 * 1024 * 1024
+VOICE_PKG_CACHE_MAX_FILES = 64
+_STALE_TMP_SECONDS = 3600
 
 # The official plugin's areaServerMap: cosHost first (NewEndpoint robots), then the FDS host.
 _REGION_HOSTS: dict[str, tuple[str, ...]] = {
@@ -170,6 +177,50 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+_T = TypeVar("_T")
+_inflight: dict[str, asyncio.Task[Any]] = {}
+
+
+def _consume_exception(task: asyncio.Task[Any]) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+async def _single_flight(key: str, factory: Callable[[], Awaitable[_T]]) -> _T:
+    """Concurrent callers with the same key share one run of factory."""
+    task = _inflight.get(key)
+    if task is None:
+        task = asyncio.ensure_future(factory())
+        _inflight[key] = task
+        task.add_done_callback(lambda _t: _inflight.pop(key, None))
+        task.add_done_callback(_consume_exception)
+    return await asyncio.shield(task)
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    temp.write_bytes(data)
+    temp.replace(path)
+
+
+def _evict_old_packages(cache_dir: Path) -> None:
+    """Keeps the newest VOICE_PKG_CACHE_MAX_FILES packages and drops stale temp files."""
+    now = time.time()
+    packages: list[tuple[float, Path]] = []
+    for entry in cache_dir.iterdir():
+        try:
+            mtime = entry.stat().st_mtime
+            if entry.suffix == ".tmp" and now - mtime > _STALE_TMP_SECONDS:
+                entry.unlink()
+            elif entry.suffix == ".pkg":
+                packages.append((mtime, entry))
+        except OSError:
+            continue
+    packages.sort(key=lambda item: item[0], reverse=True)
+    for _, entry in packages[VOICE_PKG_CACHE_MAX_FILES:]:
+        entry.unlink(missing_ok=True)
+
+
 def _rewrite_info(
     info: dict[str, Any], *, info_host: str, api_url: str
 ) -> dict[str, Any]:
@@ -195,10 +246,9 @@ def _rewrite_info(
     return out
 
 
-async def _voice_info_response(
-    ctx: ServerContext, runtime_dir: Path, upstream_path: str
-) -> tuple[str, Response]:
-    cache_file = _cache_dir(runtime_dir) / f"info-{_digest(upstream_path)[:24]}.json"
+async def _fetch_info(
+    ctx: ServerContext, cache_file: Path, upstream_path: str
+) -> tuple[str, dict[str, Any]]:
     errors: list[str] = []
     for host in upstream_hosts(ctx.region):
         url = f"https://{host}{upstream_path}"
@@ -214,12 +264,27 @@ async def _voice_info_response(
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{host}: {exc}")
             continue
-        cache_file.write_text(
-            json.dumps({"host": host, "info": info}), encoding="utf-8"
+        _write_atomic(
+            cache_file, json.dumps({"host": host, "info": info}).encode("utf-8")
         )
-        body = _rewrite_info(info, info_host=host, api_url=ctx.api_url())
-        return url, JSONResponse(body, headers={"X-RR-Voice-Cache": "miss"})
-    if cache_file.exists():
+        return host, info
+    raise VoicePkgError(
+        "; ".join(errors) or "no upstream host", source_url=upstream_path
+    )
+
+
+async def _voice_info_response(
+    ctx: ServerContext, runtime_dir: Path, upstream_path: str
+) -> tuple[str, Response]:
+    cache_file = _cache_dir(runtime_dir) / f"info-{_digest(upstream_path)[:24]}.json"
+    try:
+        host, info = await _single_flight(
+            f"info:{ctx.region}:{cache_file}",
+            lambda: _fetch_info(ctx, cache_file, upstream_path),
+        )
+    except VoicePkgError:
+        if not cache_file.exists():
+            raise
         cached = json.loads(cache_file.read_text(encoding="utf-8"))
         body = _rewrite_info(
             cached["info"], info_host=cached["host"], api_url=ctx.api_url()
@@ -227,8 +292,9 @@ async def _voice_info_response(
         return f"https://{cached['host']}{upstream_path}", JSONResponse(
             body, headers={"X-RR-Voice-Cache": "stale"}
         )
-    raise VoicePkgError(
-        "; ".join(errors) or "no upstream host", source_url=upstream_path
+    body = _rewrite_info(info, info_host=host, api_url=ctx.api_url())
+    return f"https://{host}{upstream_path}", JSONResponse(
+        body, headers={"X-RR-Voice-Cache": "miss"}
     )
 
 
@@ -239,20 +305,26 @@ async def _voice_file_response(
     cache_file = _cache_dir(runtime_dir) / f"{_digest(source_url)}.pkg"
     headers = {"Cache-Control": "public, max-age=86400"}
     if cache_file.exists():
+        with contextlib.suppress(OSError):
+            os.utime(cache_file)
         return source_url, Response(
             cache_file.read_bytes(),
             media_type="application/octet-stream",
             headers={**headers, "X-RR-Voice-Cache": "hit"},
         )
-    try:
-        payload = await fetch_voice_bytes(
+
+    async def download() -> bytes:
+        data = await fetch_voice_bytes(
             source_url, max_bytes=VOICE_PKG_MAX_BYTES, timeout_s=120
         )
+        _write_atomic(cache_file, data)
+        _evict_old_packages(cache_file.parent)
+        return data
+
+    try:
+        payload = await _single_flight(f"pkg:{cache_file}", download)
     except Exception as exc:
         raise VoicePkgError(str(exc), source_url=source_url) from exc
-    temp = cache_file.with_suffix(".tmp")
-    temp.write_bytes(payload)
-    temp.replace(cache_file)
     return source_url, Response(
         payload,
         media_type="application/octet-stream",
