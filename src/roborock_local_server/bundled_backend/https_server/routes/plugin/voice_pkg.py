@@ -1,4 +1,5 @@
-"""Voice pack list and package passthrough for the app's voice Language page."""
+"""Voice pack list and package passthrough for clients that give our URL to the robot unchanged.
+The official app rebuilds the robot URL on its own res host and discards ours (see tests)."""
 
 from __future__ import annotations
 
@@ -224,7 +225,7 @@ def _evict_old_packages(cache_dir: Path) -> None:
 def _rewrite_info(
     info: dict[str, Any], *, info_host: str, api_url: str
 ) -> dict[str, Any]:
-    """Points every voice_pkg_url at this server, rehosted on the list's host as the plugin does."""
+    """Points every voice_pkg_url at this server and records the upstream URL as voice_pkg_source_url."""
     out = dict(info)
     for key in ("voice_list", "special_voice_list", "factory_test_list"):
         items = info.get(key)

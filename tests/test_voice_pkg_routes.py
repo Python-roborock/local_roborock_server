@@ -97,6 +97,33 @@ def test_inherited_configs_use_their_parents_bucket() -> None:
         )
 
 
+def _plugin_robot_url(res_host: str, voice_pkg_url: str) -> str:
+    """What the official plugin sends the robot: 'https://' + resHost + url.split('.com')[1]."""
+    return "https://" + res_host + voice_pkg_url.split(".com")[1]
+
+
+def test_official_plugin_discards_the_rewritten_host() -> None:
+    from https_server.routes.plugin.voice_pkg import _rewrite_info
+
+    def rewritten(api_url: str) -> str:
+        info = _rewrite_info(INFO, info_host="us-app.roborock.com", api_url=api_url)
+        return info["voice_list"][0]["voice_pkg_url"]
+
+    # No ".com" in our URL: the plugin falls back to the original path on Roborock's host.
+    plain = rewritten("https://home.lan")
+    assert _plugin_robot_url("us-app.roborock.com", plain) == (
+        "https://us-app.roborock.com/app/beryllite/voice-pkg/package/en.pkg"
+    )
+    # ".com" in our URL: the plugin cuts at the first one and the URL is garbled.
+    dotcom = rewritten("https://api-roborock.example.com")
+    assert _plugin_robot_url("us-app.roborock.com", dotcom) == (
+        "https://us-app.roborock.com/voice-pkg/files/us-app.roborock"
+    )
+    # Either way the robot never receives our host, so only clients that pass the URL
+    # through unchanged (LocalRock) install from this server.
+    assert "home.lan" not in _plugin_robot_url("us-app.roborock.com", plain)
+
+
 def test_info_is_fetched_from_the_region_host_and_urls_point_at_this_server(
     tmp_path: Path, monkeypatch
 ) -> None:
