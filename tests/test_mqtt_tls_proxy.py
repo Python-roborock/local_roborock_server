@@ -1651,6 +1651,7 @@ def _snapshot_proxy(tmp_path):
 
 def test_robot_status_push_updates_the_snapshot_and_remembers_the_connection(tmp_path) -> None:
     proxy, store = _snapshot_proxy(tmp_path)
+    proxy._set_conn_device_topic("7", "rr/d/i/did-test-1/abc")
 
     proxy._observe_snapshot(
         "7", "c2b", "rr/d/i/did-test-1/abc", 102, {"payload_utf8": '{"t":1,"dps":{"122":5}}'}, b"",
@@ -1662,6 +1663,7 @@ def test_robot_status_push_updates_the_snapshot_and_remembers_the_connection(tmp
 
 def test_get_status_answer_updates_the_snapshot(tmp_path) -> None:
     proxy, store = _snapshot_proxy(tmp_path)
+    proxy._set_conn_device_topic("7", "rr/d/i/did-test-1/abc")
 
     proxy._observe_snapshot(
         "7",
@@ -1697,3 +1699,63 @@ def test_a_request_with_a_nonce_is_remembered_for_its_map_reply(tmp_path) -> Non
     proxy._observe_snapshot("9", "c2b", "rr/m/i/user/abcd1234/DUID1", 101, {"payload_utf8": payload}, b"")
 
     assert store._nonces["DUID1"] == {"testep01": "00ff"}
+
+
+ROBOT_TOPIC = "rr/d/i/did-test-1/abc"
+PUSH = {"payload_utf8": '{"t":1,"dps":{"122":5}}'}
+
+
+def test_a_publish_from_a_login_not_bound_to_the_robot_topic_is_not_the_robot_speaking(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+    proxy._set_conn_device_topic("8", "rr/d/i/1103821560705/other")
+
+    proxy._observe_snapshot("9", "c2b", ROBOT_TOPIC, 102, PUSH, b"")
+    proxy._observe_snapshot("8", "c2b", ROBOT_TOPIC, 102, PUSH, b"")
+
+    assert store.get("DUID1") is None
+
+
+def test_closing_an_old_connection_does_not_mark_a_reconnected_robot_offline(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+    proxy._set_conn_device_topic("1", ROBOT_TOPIC)
+    proxy._set_conn_device_topic("2", ROBOT_TOPIC)
+    proxy._observe_snapshot("1", "c2b", ROBOT_TOPIC, 102, PUSH, b"")
+    proxy._observe_snapshot("2", "c2b", ROBOT_TOPIC, 102, PUSH, b"")
+
+    proxy._forget_conn_trace_state("1")
+
+    assert store.get("DUID1")["offline_at"] is None
+    proxy._forget_conn_trace_state("2")
+    assert store.get("DUID1")["offline_at"]
+
+
+def test_queued_packets_of_a_closed_connection_cannot_clear_its_offline_mark(tmp_path) -> None:
+    from roborock_local_server.bundled_backend.mqtt_tls_proxy_server import server as proxy_module
+
+    proxy, store = _snapshot_proxy(tmp_path)
+    proxy._set_conn_device_topic("1", ROBOT_TOPIC)
+    proxy._trace_packet = lambda conn_id, direction, packet: proxy._observe_snapshot(  # type: ignore[method-assign]
+        conn_id, direction, ROBOT_TOPIC, 102, PUSH, packet
+    )
+    proxy._trace_queue.put(("1", "c2b", b"queued"))
+    proxy._trace_queue.put(("1", proxy_module._CONN_CLOSED, b""))
+    proxy._trace_queue.put(None)
+
+    proxy._run_trace_worker()
+
+    assert store.get("DUID1")["offline_at"]
+    assert "1" not in proxy._conn_duids
+
+
+def test_mower_pushes_do_not_fill_the_vacuum_status_fields(tmp_path) -> None:
+    proxy, store = _snapshot_proxy(tmp_path)
+    proxy.runtime_credentials = type(
+        "Mower", (), {"resolve_device": lambda self, **kw: {"duid": "DUID1", "model": "roborock.mower.a1"}}
+    )()
+    proxy._set_conn_device_topic("7", ROBOT_TOPIC)
+
+    proxy._observe_snapshot("7", "c2b", ROBOT_TOPIC, 102, PUSH, b"")
+
+    entry = store.get("DUID1")
+    assert entry["last_seen_at"]
+    assert entry["status"] == {}
