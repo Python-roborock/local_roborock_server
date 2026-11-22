@@ -378,6 +378,23 @@ def test_the_version_list_marks_the_running_version_whatever_its_spelling(tmp_pa
     assert rows["02.35.52"]["current"] is True and rows["02.35.52"]["installable"] is False
 
 
+def test_a_slow_package_fetch_does_not_make_the_starting_install_read_as_failed(tmp_path, monkeypatch) -> None:
+    installer = button_supervisor(tmp_path, monkeypatch, enable=True).ota_installer
+    seen = {}
+
+    async def resolve(keep):
+        installer._live["robot"]["at"] -= installer.LIVE_SECONDS + 1  # the fetch took the whole window
+        return {"url": URL, "md5": MD5, "data": b"x"}
+
+    async def install(*args, **kwargs):
+        seen["live"] = installer.live_status("robot")
+
+    monkeypatch.setattr(installer, "_install", install)
+    installer._set_live("robot", "START")
+    asyncio.run(installer._prepare({"duid": "robot", "localkey": ""}, {}, "02.16.00", "02.16.01", resolve))
+    assert seen["live"]["status"] == "START"
+
+
 def test_an_unparseable_version_needs_confirmation(tmp_path, monkeypatch) -> None:
     supervisor, _ = catalog_supervisor(tmp_path, monkeypatch, reported="custom-build", extra="allow_downgrade = true\n")
     installer = supervisor.ota_installer

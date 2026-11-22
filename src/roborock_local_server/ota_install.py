@@ -292,6 +292,7 @@ class OtaInstaller:
             before = await self._learn(duid, model, reported, SOURCE_ROBOT) if model and reported and not firmware_versions.same(reported, version) else None
             keep = {f"{before['md5']}.pkg"} if self._keep_packages and before and before.get("md5") else set()
             package = await resolve(keep)
+            self._set_live(duid, "START")  # the fetch can use up the silence window, and the install is only starting
             data = package.get("data")
             size = data.stat().st_size if isinstance(data, Path) else len(data or b"")
             if model:
