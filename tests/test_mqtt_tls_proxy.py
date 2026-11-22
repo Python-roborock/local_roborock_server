@@ -1684,7 +1684,7 @@ PUSH = {"payload_utf8": '{"t":1,"dps":{"122":5}}'}
 
 def test_a_publish_from_a_login_not_bound_to_the_robot_topic_is_not_the_robot_speaking(tmp_path) -> None:
     proxy, store = _snapshot_proxy(tmp_path)
-    proxy._set_conn_device_topic("8", "rr/d/i/1103821560705/other")
+    proxy._set_conn_device_topic("8", "rr/d/i/did-test-2/other")
 
     proxy._observe_snapshot("9", "c2b", ROBOT_TOPIC, 102, PUSH, b"")
     proxy._observe_snapshot("8", "c2b", ROBOT_TOPIC, 102, PUSH, b"")
