@@ -283,6 +283,18 @@ async def _fetch_info(
     )
 
 
+def _read_cached_info(cache_file: Path) -> tuple[str, dict[str, Any]] | None:
+    """The cached info as (host, info), or None when it is missing or unreadable."""
+    try:
+        cached = json.loads(cache_file.read_text(encoding="utf-8"))
+        host, info = cached["host"], cached["info"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(host, str) or not isinstance(info, dict):
+        return None
+    return host, info
+
+
 async def _voice_info_response(
     ctx: ServerContext, runtime_dir: Path, upstream_path: str
 ) -> tuple[str, Response]:
@@ -297,14 +309,13 @@ async def _voice_info_response(
             lambda: _fetch_info(ctx, cache_file, upstream_path),
         )
     except VoicePkgError:
-        if not cache_file.exists():
+        cached = _read_cached_info(cache_file)
+        if cached is None:
             raise
-        cached = json.loads(cache_file.read_text(encoding="utf-8"))
-        body = _rewrite_info(
-            cached["info"], info_host=cached["host"], api_url=ctx.api_url()
-        )
-        return f"https://{cached['host']}{upstream_path}", JSONResponse(
-            body, headers={"X-RR-Voice-Cache": "stale"}
+        host, info = cached
+        return f"https://{host}{upstream_path}", JSONResponse(
+            _rewrite_info(info, info_host=host, api_url=ctx.api_url()),
+            headers={"X-RR-Voice-Cache": "stale"},
         )
     body = _rewrite_info(info, info_host=host, api_url=ctx.api_url())
     return f"https://{host}{upstream_path}", JSONResponse(

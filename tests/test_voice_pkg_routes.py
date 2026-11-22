@@ -457,3 +457,18 @@ def test_info_cache_is_kept_per_region(tmp_path: Path, monkeypatch) -> None:
         pass
     else:
         raise AssertionError("an eu request must not be answered from the us cache")
+
+
+def test_a_corrupt_cached_info_is_a_502_not_an_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    fds = "https://awsusor0.fds.api.xiaomi.com/app/beryllite/voice-pkg/info"
+    _fake_fetch(monkeypatch, {fds: json.dumps(INFO).encode()})
+    client = _client(tmp_path)
+    assert client.get("/app/beryllite/voice-pkg/info").status_code == 200
+    _fake_fetch(monkeypatch, {})
+    cache_files = list(tmp_path.rglob("info-*.json"))
+    assert len(cache_files) == 1
+    for content in (b"{not json", b"[]", b'{"host": "x"}', b'{"host": 1, "info": {}}'):
+        cache_files[0].write_bytes(content)
+        assert client.get("/app/beryllite/voice-pkg/info").status_code == 502
