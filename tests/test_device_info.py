@@ -182,6 +182,7 @@ def test_v2_header_signed_upload_updates_metadata(setup_v2_report):
 @pytest.mark.parametrize("change,outcome", [
     ("tampered", "invalid_signature"), ("other_key", "invalid_signature"), ("sha256", "invalid_signature"),
     ("bad_base64", "invalid_signature"), ("nonce", "invalid_signature"), ("timestamp", "invalid_signature"),
+    ("short_signature", "invalid_signature"), ("long_signature", "invalid_signature"),
     ("missing_v", "malformed_fields"), ("missing_n", "malformed_fields"), ("missing_t", "malformed_fields"),
     ("missing_s", "malformed_fields"), ("version", "malformed_fields"), ("duplicate", "malformed_fields"),
     ("wrong_did", "did_mismatch"), ("unsafe_value", "unsupported_values"), ("unknown_key", "missing_key"),
@@ -193,6 +194,9 @@ def test_unverifiable_v2_upload_acknowledged_without_writes(setup_v2_report, sig
     if change == "other_key": headers["s"] = _sign_v2(rsa.generate_private_key(public_exponent=65537, key_size=2048), params, headers)
     if change == "sha256": headers["s"] = _sign_v2(signing_key, params, headers, hashes.SHA256())
     if change == "bad_base64": headers["s"] = "!!!!"
+    # key.verify rejects a signature whose length differs from the key size.
+    if change == "short_signature": headers["s"] = base64.b64encode(base64.b64decode(headers["s"])[:-1]).decode()
+    if change == "long_signature": headers["s"] = base64.b64encode(base64.b64decode(headers["s"]) + b"\0").decode()
     if change == "nonce": headers["n"] = "q7Xk2Q"
     if change == "timestamp": headers["t"] = "1767225601"
     if change.startswith("missing_"): del headers[change.removeprefix("missing_")]
