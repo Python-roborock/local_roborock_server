@@ -249,6 +249,18 @@ def test_a_package_whose_hardware_is_missing_or_different_is_refused(tmp_path, m
     assert supervisor.ota_installer._running == {} and robot.downloads == []
 
 
+def test_a_robot_connection_that_cannot_be_built_still_unpins_the_package(tmp_path, monkeypatch) -> None:
+    supervisor, _ = _prepare(tmp_path, monkeypatch, ["idle"])
+
+    def broken(*args):
+        raise OSError("no certificates")
+
+    monkeypatch.setattr(ota_install, "_RoutineMqttClient", broken)
+    live = _run_install(supervisor)
+    assert live["status"] == "FAILED" and "no certificates" in live["errMsg"]
+    assert ota_dry_run._PINNED == {}
+
+
 def test_only_robots_in_the_inventory_are_owned(tmp_path, monkeypatch) -> None:
     supervisor = button_supervisor(tmp_path, monkeypatch, enable=True)
     assert supervisor.ota_installer.owns("robot") and not supervisor.ota_installer.owns("someone-elses")

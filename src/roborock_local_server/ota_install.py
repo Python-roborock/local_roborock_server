@@ -428,8 +428,9 @@ class OtaInstaller:
     ) -> None:
         supervisor = self._supervisor
         duid = device["duid"]
-        client = _RoutineMqttClient(supervisor.context, device, logger)
+        client = None
         try:
+            client = _RoutineMqttClient(supervisor.context, device, logger)
             await client.connect()
             result = await supervisor.ota_dry_run.run(
                 client, supervisor.context.api_url(), package, None, True,
@@ -441,7 +442,8 @@ class OtaInstaller:
             if isinstance(package.get("data"), Path):
                 release_package(package["data"].name)
             try:
-                await client.close()
+                if client is not None:
+                    await client.close()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Closing the robot connection failed: %s", exc)
         failure = self._failure(result)
