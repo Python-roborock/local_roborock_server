@@ -375,6 +375,20 @@ def test_package_cache_keeps_only_the_newest_files(tmp_path: Path, monkeypatch) 
     ]
 
 
+def test_v2_to_v5_model_strings_use_the_debug_path() -> None:
+    from https_server.routes.plugin.voice_pkg import voice_info_path_for_model
+
+    assert (
+        voice_info_path_for_model("roborock.vacuum.a245v4")
+        == "/app/beryllite/voice-pkg/debug/info"
+    )
+    assert (
+        voice_info_path_for_model("roborock.vacuum.t6v2")
+        == "/tanos/app/voice-pkg/debug/info"
+    )
+    assert voice_info_path_for_model("roborock.vacuum.zzzv2") == ""
+
+
 def test_cache_hit_that_vanishes_before_the_read_is_a_miss(
     tmp_path: Path, monkeypatch
 ) -> None:

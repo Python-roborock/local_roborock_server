@@ -130,17 +130,20 @@ def voice_info_path_for_model(model: str) -> str:
     """The plugin's soundPackageFilePath plus "info" for a model id like roborock.vacuum.a245."""
     full = model.strip().lower()
     short = full.rsplit(".", 1)[-1]
-    bucket = _MODEL_BUCKETS.get(short, "")
+    debug = full.endswith(("v2", "v3", "v4", "v5"))
+    # The plugin's model list also holds "<short>v2" to "<short>v5" (p223 L280750-280830).
+    bucket = _MODEL_BUCKETS.get(
+        short[:-2] if debug else short, ""
+    ) or _MODEL_BUCKETS.get(short, "")
     if not bucket:
         return ""
     if "a136" in full:
         bucket = "ppscouple"
-    debug = "debug/" if full.endswith(("v2", "v3", "v4", "v5")) else ""
     if bucket in _LEGACY_LAYOUT_BUCKETS:
         prefix = f"/{'rubysc1' if bucket == 'rubysc' else bucket}/app/voice-pkg/"
     else:
         prefix = f"/app/{bucket}/voice-pkg/"
-    return f"{prefix}{debug}info"
+    return f"{prefix}{'debug/' if debug else ''}info"
 
 
 def upstream_hosts(region: str) -> tuple[str, ...]:
