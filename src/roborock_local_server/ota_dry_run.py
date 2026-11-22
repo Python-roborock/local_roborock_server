@@ -20,7 +20,7 @@ from datetime import UTC
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from fastapi.responses import Response, StreamingResponse
 
@@ -36,6 +36,7 @@ INSTALL_TOKEN_TTL_SECONDS = 1800
 INSTALL_MIN_BATTERY = 80
 WAIT_INSTALL_STUCK_SECONDS = 60
 MAX_PACKAGE_BYTES = 400 * 1024 * 1024
+MAX_REDIRECTS = 3
 CHUNK_BYTES = 64 * 1024
 # CDN response headers that are not replayed: this server sets its own length, ranges and connection handling.
 _NOT_MIRRORED = {"content-length", "transfer-encoding", "connection", "keep-alive", "date", "content-encoding", "accept-ranges"}
@@ -309,7 +310,7 @@ async def _download_to_file(url: str, target: Path) -> tuple[str, dict[str, str]
     partial = target.with_name(target.name + ".part")
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as response:
+            async with await _open(session, "GET", url) as response:
                 if response.status != 200:
                     raise PackageUnavailable(f"The package server answered HTTP {response.status}")
                 headers = dict(response.headers)
@@ -364,7 +365,7 @@ async def _download(url: str) -> tuple[bytes, dict[str, str]]:
 
     timeout = aiohttp.ClientTimeout(total=600)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(url) as response:
+        async with await _open(session, "GET", url) as response:
             if response.status != 200:
                 raise PackageUnavailable(f"The package server answered HTTP {response.status}")
             if int(response.headers.get("Content-Length") or 0) > MAX_PACKAGE_BYTES:
@@ -372,12 +373,35 @@ async def _download(url: str) -> tuple[bytes, dict[str, str]]:
             return await response.read(), dict(response.headers)
 
 
+def package_url_allowed(url: Any) -> bool:
+    """True for plain https on a package host: default port, no userinfo."""
+    try:
+        parsed = urlparse(str(url or ""))
+        return parsed.scheme == "https" and (parsed.hostname or "") in PACKAGE_HOSTS and parsed.port in (None, 443) and "@" not in parsed.netloc
+    except ValueError:
+        return False
+
+
 def package_md5(url: Any) -> str:
-    """The checksum in a package address, or an empty string when the address is not https on a Roborock package host."""
-    match = _PACKAGE_MD5.search(str(url or ""))
-    if match is None or urlparse(str(url)).scheme != "https" or (urlparse(str(url)).hostname or "") not in PACKAGE_HOSTS:
+    """The checksum in the path of a package address, or an empty string when the address is not an allowed one."""
+    if not package_url_allowed(url):
         return ""
-    return match.group(1)
+    match = _PACKAGE_MD5.search(urlparse(str(url)).path)
+    return match.group(1) if match else ""
+
+
+async def _open(session: Any, method: str, url: str) -> Any:
+    """Sends the request and follows redirects by hand, refusing any hop that leaves the package hosts."""
+    for _ in range(MAX_REDIRECTS + 1):
+        response = await session.request(method, url, allow_redirects=False)
+        if response.status not in (301, 302, 303, 307, 308):
+            return response
+        target = urljoin(url, response.headers.get("Location", ""))
+        response.release()
+        if not package_url_allowed(target):
+            raise PackageRefused(f"The package server redirected to a host that is not allowed: {target}")
+        url = target
+    raise PackageRefused("The package server redirected too many times")
 
 
 def package_family(url: Any) -> str:
@@ -399,13 +423,12 @@ async def package_headers(url: str) -> tuple[str, int | None]:
     import aiohttp
 
     try:
-        async with (
-            aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session,
-            session.head(url, allow_redirects=True) as response,
-        ):
-            if response.status != 200:
-                return "", None
-            modified, length = response.headers.get("Last-Modified", ""), response.headers.get("Content-Length", "")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            response = await _open(session, "HEAD", url)
+            async with response:
+                if response.status != 200:
+                    return "", None
+                modified, length = response.headers.get("Last-Modified", ""), response.headers.get("Content-Length", "")
     except Exception:  # noqa: BLE001
         return "", None
     try:

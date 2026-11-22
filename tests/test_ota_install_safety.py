@@ -238,3 +238,56 @@ def test_a_downgrade_is_refused_when_the_hardware_of_the_current_package_is_unkn
     started = asyncio.run(supervisor.ota_installer.start_version("robot", "02.33.48", True, "02.33.48"))
     assert started["started"] is False and "hardware cannot be checked" in started["reason"]
     assert supervisor.ota_installer._running == {} and robot.downloads == []
+
+
+@pytest.mark.parametrize("url", [
+    f"https://files.roborock.com:8443/x.{MD5}.signed.pkg",
+    f"https://user:pw@files.roborock.com/x.{MD5}.signed.pkg",
+    f"https://files.roborock.com/x.pkg?name=x.{MD5}.signed.pkg",
+    f"https://files.roborock.com/x.pkg#x.{MD5}.signed.pkg",
+])
+def test_ports_userinfo_and_a_checksum_outside_the_path_are_refused(url) -> None:
+    assert ota_dry_run.package_md5(url) == ""
+    assert ota_dry_run.package_md5(f"https://files.roborock.com:443/x.{MD5}.signed.pkg") == MD5
+
+
+class _Reply:
+    def __init__(self, status, location=""):
+        self.status, self.headers, self.released = status, ({"Location": location} if location else {}), False
+
+    def release(self):
+        self.released = True
+
+
+class _Session:
+    def __init__(self, replies):
+        self.replies, self.asked = list(replies), []
+
+    async def request(self, method, url, allow_redirects=True):
+        assert allow_redirects is False
+        self.asked.append(url)
+        return self.replies.pop(0)
+
+
+def test_a_redirect_to_an_allowed_host_is_followed() -> None:
+    good = f"https://cdn.awsusor0.fds.api.mi-img.com/x.{MD5}.signed.pkg"
+    session = _Session([_Reply(302, good), _Reply(200)])
+    reply = asyncio.run(ota_dry_run._open(session, "GET", f"https://files.roborock.com/x.{MD5}.signed.pkg"))
+    assert reply.status == 200 and session.asked[-1] == good
+
+
+@pytest.mark.parametrize("location", [
+    "https://evil.example.com/x.pkg", "http://files.roborock.com/x.pkg", "https://files.roborock.com:81/x.pkg", "https://u@files.roborock.com/x.pkg",
+])
+def test_a_redirect_off_the_package_hosts_is_refused(location) -> None:
+    session = _Session([_Reply(302, location), _Reply(200)])
+    with pytest.raises(ota_dry_run.PackageRefused, match="not allowed"):
+        asyncio.run(ota_dry_run._open(session, "GET", f"https://files.roborock.com/x.{MD5}.signed.pkg"))
+    assert len(session.asked) == 1
+
+
+def test_a_redirect_loop_is_refused() -> None:
+    loop = f"https://files.roborock.com/x.{MD5}.signed.pkg"
+    session = _Session([_Reply(302, loop) for _ in range(10)])
+    with pytest.raises(ota_dry_run.PackageRefused, match="too many"):
+        asyncio.run(ota_dry_run._open(session, "GET", loop))
