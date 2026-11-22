@@ -20,7 +20,7 @@ from shared.io_utils import append_jsonl, payload_preview
 from shared.protocol_auth import ProtocolAuthStore
 from shared.runtime_credentials import RuntimeCredentialsStore, parse_mqtt_connect_packet
 from shared.runtime_state import RuntimeState
-from shared.device_snapshot_store import DeviceSnapshotStore, is_status_answer
+from shared.device_snapshot_store import DeviceSnapshotStore, is_mower_model, is_status_answer
 from shared.zone_ranges_store import ZoneRangesStore
 
 from .command_handlers import RpcCommandRegistry
@@ -611,7 +611,7 @@ class MqttTlsProxy:
     def _is_mower(self, duid: str) -> bool:
         # Mower dps 121/122 are not state/battery, so their pushes must not fill the vacuum fields.
         device = self.runtime_credentials.resolve_device(duid=duid) if self.runtime_credentials is not None else None
-        return str((device or {}).get("model") or "").lower().startswith("roborock.mower")
+        return is_mower_model((device or {}).get("model"))
 
     def _observe_snapshot(
         self,
