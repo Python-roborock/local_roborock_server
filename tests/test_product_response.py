@@ -179,26 +179,95 @@ def test_product_entry_enables_scene_tiles(tmp_path: Path) -> None:
             assert all(isinstance(code, int) for code in entry["value"])
 
 
-def test_vacuum_card_spec_matches_cloud_labels(tmp_path: Path) -> None:
+# Decoded cardspec of the robot.vacuum.cleaner category in the EU cloud's
+# GET /api/v5/product answer, fetched 2026-11-21 by @Hoeze (account without
+# devices; all 56 vacuum models share it). Posted in PR #208 and kept unchanged.
+CLOUD_VACUUM_CARD_SPEC_EU = json.loads(
+    (Path(__file__).parent / "fixtures" / "cloud_vacuum_cardspec_eu.json").read_text(encoding="utf-8")
+)
+
+# Deliberate differences of the built-in fallback from the cloud spec. The app's
+# bundled template (assets/cardSpec/robot.vacuum.cleaner.json, 4.60.06) maps
+# these extra codes; they only add labels for codes the cloud leaves unmapped.
+_TEMPLATE_ONLY_STATE_LABELS = {
+    13: "Washing the mop",
+    33: "Reinstalling mop cloth mounts",
+    34: "Detaching mop cloth mounts",
+    36: "Demo Mode",
+    37: "Demo Mode",
+    38: "Housework in progress",
+    39: "Remote Control",
+    40: "Emergency Stop",
+    101: "Positioning",
+    102: "Cleaning",
+    103: "Cleaning",
+    104: "Cleaning",
+    108: "Charge Pending",
+}
+# The template also maps the offline codes 2, 3, 4 to the labels of 34, 51, 103.
+_TEMPLATE_ONLY_OFFLINE_LABELS = {
+    2: "Sleep & Powered Off",
+    3: "Low Battery & Powered Off",
+    4: "Updating & Restarting",
+}
+
+
+def _en_labels(data_point: dict) -> dict[int, str]:
+    # The cloud's English label for offline code 1 has a trailing space
+    # ("Powered Off Manually "); the fallback drops it.
+    return {code: entry["desc"]["en"].strip() for entry in data_point["value"] for code in entry["value"]}
+
+
+def test_fallback_vacuum_card_spec_matches_cloud_fixture(tmp_path: Path) -> None:
     data = _products_v5(tmp_path, [_DEVICE])
 
-    card_spec = json.loads(data["categoryDetailList"][0]["category"]["cardspec"])["data"]
-    states = _labels(card_spec["state"])
-    offline = _labels(card_spec["offline"])
+    ours = json.loads(data["categoryDetailList"][0]["category"]["cardspec"])
+    cloud = CLOUD_VACUUM_CARD_SPEC_EU
+    assert set(ours) == set(cloud) == {"data"}
+    ours, cloud = ours["data"], cloud["data"]
 
-    # Wording of the cloud's EU /api/v5/product answer (Nov 2026).
-    assert states[6] == "Returning to Dock"
-    assert states[15] == "Returning to Dock"
-    assert states[9] == "Charging Error"
-    assert states[26] == "Going to wash the mop"
-    assert offline[1] == "Powered Off Manually"
-    # Every state code of the cloud is mapped, plus the extra ones of the
-    # template bundled with the app.
-    cloud_codes = {2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 22, 23, 26, 28, 29, 32}
-    extra_codes = {13, 33, 34, 36, 37, 38, 39, 40, 101, 102, 103, 104, 108}
-    assert cloud_codes <= set(states)
-    assert set(states) == cloud_codes | extra_codes
-    assert {1, 34, 51, 103} <= set(offline)
+    # Same data points with the same dps.
+    assert set(ours) == set(cloud)
+    for name in cloud:
+        assert ours[name]["dps"] == cloud[name]["dps"], name
+    for name in ("extra", "battery", "offpeak"):
+        assert ours[name] == cloud[name]
+    for name in ("state", "offline"):
+        assert ours[name]["desc"]["en"] == cloud[name]["desc"]["en"]
+
+    # Every code the cloud maps has the cloud's English label; the only extra
+    # codes are the documented template ones. Only English is built in; the
+    # cloud's 22 languages come from the snapshot when there is one.
+    cloud_states, our_states = _en_labels(cloud["state"]), _en_labels(ours["state"])
+    assert {code: our_states.get(code) for code in cloud_states} == cloud_states
+    assert {code: label for code, label in our_states.items() if code not in cloud_states} == (
+        _TEMPLATE_ONLY_STATE_LABELS
+    )
+    cloud_offline, our_offline = _en_labels(cloud["offline"]), _en_labels(ours["offline"])
+    assert {code: our_offline.get(code) for code in cloud_offline} == cloud_offline
+    assert {code: label for code, label in our_offline.items() if code not in cloud_offline} == (
+        _TEMPLATE_ONLY_OFFLINE_LABELS
+    )
+
+
+def test_cloud_fixture_card_spec_is_passed_through_with_all_languages(tmp_path: Path) -> None:
+    cloud_card_spec = json.dumps(CLOUD_VACUUM_CARD_SPEC_EU, ensure_ascii=False)
+    _write_cloud_product_snapshot(
+        tmp_path,
+        [
+            {
+                "category": {"id": 1, "code": "robot.vacuum.cleaner", "cardspec": cloud_card_spec},
+                "productList": [{"id": 101, "model": "roborock.vacuum.a15", "productTags": []}],
+            }
+        ],
+    )
+
+    data = _products_v5(tmp_path, [_DEVICE])
+
+    category = data["categoryDetailList"][0]["category"]
+    assert json.loads(category["cardspec"]) == CLOUD_VACUUM_CARD_SPEC_EU
+    languages = {lang for entry in json.loads(category["cardspec"])["data"]["state"]["value"] for lang in entry["desc"]}
+    assert len(languages) == 22
 
 
 def test_card_spec_only_on_known_categories(tmp_path: Path) -> None:
