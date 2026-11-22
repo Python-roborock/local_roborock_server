@@ -345,6 +345,23 @@ def test_seed_ignores_the_state_of_b01_robots(tmp_path: Path) -> None:
     assert entry["status"] == {}
 
 
+def test_seed_counts_only_publishes_on_a_topic_the_robot_would_own(tmp_path: Path) -> None:
+    push = {"protocol_value": 102, "payload_utf8": '{"dps":{"122":5}}'}
+    log = tmp_path / "decoded.jsonl"
+    log.write_text(
+        _log_line("2026-10-22T00:33:57+00:00", "c2b", "rr/d/i/did-test-1/abc", push)
+        + _log_line("2026-10-22T00:40:00+00:00", "c2b", "rr/d/i/did-test-1/someone-else", {**push, "payload_utf8": '{"dps":{"122":99}}'}),
+        encoding="utf-8",
+    )
+    store = _store(tmp_path / "state")
+
+    store.seed_from_mqtt_jsonl(log, lambda did: DUID, None, lambda topic: topic.endswith("/abc"))
+
+    entry = store.get(DUID)
+    assert entry["last_seen_at"] == "2026-10-22T00:33:57+00:00"
+    assert entry["status"]["battery"] == 5
+
+
 def test_a_failed_write_keeps_the_change_dirty_for_the_next_flush(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = DeviceSnapshotStore(tmp_path, flush_interval_s=3600.0, map_interval_s=0.0)
     monkeypatch.setattr(DeviceSnapshotStore, "_write", staticmethod(lambda path, content: False))

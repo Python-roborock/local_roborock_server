@@ -505,8 +505,14 @@ class ReleaseSupervisor:
             device = self.runtime_credentials.resolve_device(duid=duid)
             return is_mower_model(device.get("model") if device else "")
 
+        def is_own_topic(topic: str) -> bool:
+            # rr/d/i/<did>/<username>: the username must be the one the device with that did logs in with.
+            parts = topic.split("/")
+            device = self.runtime_credentials.resolve_device_by_mqtt_username(parts[4]) if len(parts) >= 5 else None
+            return device is not None and str(device.get("did") or "") == parts[3]
+
         try:
-            added = store.seed_from_mqtt_jsonl(self.paths.mqtt_jsonl_path, resolve_duid, is_mower)
+            added = store.seed_from_mqtt_jsonl(self.paths.mqtt_jsonl_path, resolve_duid, is_mower, is_own_topic)
         except Exception:
             self.root_logger.exception("Could not seed last-known device state from the MQTT log")
             return

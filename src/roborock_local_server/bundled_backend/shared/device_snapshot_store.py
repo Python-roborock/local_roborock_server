@@ -402,6 +402,7 @@ class DeviceSnapshotStore:
         mqtt_jsonl: Path,
         resolve_duid: Callable[[str], str],
         is_mower: Callable[[str], bool] | None = None,
+        is_own_topic: Callable[[str], bool] | None = None,
     ) -> int:
         """Fill in devices the store knows nothing about from the decoded MQTT log.
 
@@ -409,7 +410,7 @@ class DeviceSnapshotStore:
         store existed still gets its last status and map. A device that already has a snapshot is
         left alone. ``resolve_duid`` turns the short id in a robot's topic into its duid. Returns
         how many devices were added; it can take a while on a large log, so run it off the main
-        thread.
+        thread. With ``is_own_topic``, only publishes on a topic a robot's own login would use count.
         """
         with self._lock:
             known = set(self._data)
@@ -431,6 +432,8 @@ class DeviceSnapshotStore:
             if not duid or duid in known or not _SAFE_DUID.match(duid):
                 continue
             from_robot = topic.startswith("rr/d/i/") and entry.get("direction") == "c2b"
+            if from_robot and is_own_topic is not None and not is_own_topic(topic):
+                from_robot = False
             for message in entry.get("decoded_messages") or []:
                 if not isinstance(message, dict):
                     continue
