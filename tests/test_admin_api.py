@@ -1678,7 +1678,7 @@ def test_last_known_route_returns_the_stored_snapshot(tmp_path: Path) -> None:
     _seed_protocol_snapshot(paths.cloud_snapshot_path)
     supervisor = ReleaseSupervisor(config=config, paths=paths)
     client = TestClient(supervisor.app)
-    device_id = "6HL2zfniaoYYV01CkVuhkO"
+    device_id = "duid-test-2"
     path = f"/user/devices/{device_id}/last_known"
 
     from https_server.routes.user.devices.last_known import build as build_last_known
@@ -1705,7 +1705,7 @@ def test_last_known_route_names_each_room_of_the_robots_room_table(tmp_path: Pat
     paths = resolve_paths(config_file, config)
     _seed_protocol_snapshot(paths.cloud_snapshot_path)
     supervisor = ReleaseSupervisor(config=config, paths=paths)
-    device_id = "6HL2zfniaoYYV01CkVuhkO"
+    device_id = "duid-test-2"
     path = f"/user/devices/{device_id}/last_known"
 
     from https_server.routes.user.devices import last_known as route
