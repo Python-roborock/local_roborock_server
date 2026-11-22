@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 import aiomqtt
 
@@ -73,7 +73,20 @@ class MqttTopicBridge:
         fixed_device_mqtt_usr: str = "",
         runtime_state: Any | None = None,
         inventory_path: Path | None = None,
+        request_interceptor: Callable[[str, bytes], bytes | None] | None = None,
+        request_observer: Callable[[str, bytes], None] | None = None,
+        response_rewriter: Callable[[str, bytes], bytes | None] | None = None,
+        request_fallback: Callable[[str, bytes], tuple[float, Callable[[], bytes | None]] | None] | None = None,
     ) -> None:
+        # Given (duid, payload) for each rr/m request; returns an encoded reply to
+        # publish back to the requester instead of forwarding, or None to forward.
+        self._request_interceptor = request_interceptor
+        self._request_observer = request_observer
+        # Given (duid, payload) for each rr/d reply; returns a replacement payload, or None to keep it.
+        self._response_rewriter = response_rewriter
+        # Given (duid, payload) for a forwarded request; may return (delay, producer) for a reply to send if the robot stays silent.
+        self._request_fallback = request_fallback
+        self._fallback_tasks: set[asyncio.Task[None]] = set()
         self._host = host
         self._port = port
         self._logger = logger
@@ -377,10 +390,34 @@ class MqttTopicBridge:
             add_matches([next(iter(self._m_to_d))])
         return targets
 
-    async def _publish_mirror(self, client: aiomqtt.Client, message: aiomqtt.Message, target_topic: str) -> None:
+    async def _publish_mirror(
+        self, client: aiomqtt.Client, message: aiomqtt.Message, target_topic: str, payload: bytes | None = None,
+    ) -> None:
         qos = _extract_qos(message)
         retain = bool(getattr(message, "retain", False))
-        await client.publish(target_topic, message.payload, qos=qos, retain=retain)
+        await client.publish(target_topic, message.payload if payload is None else payload, qos=qos, retain=retain)
+
+    def _schedule_fallback(self, client: aiomqtt.Client, message: aiomqtt.Message, cloud_topic: CloudTopicKey) -> None:
+        if self._request_fallback is None or bool(getattr(message, "retain", False)):
+            return
+        try:
+            plan = self._request_fallback(cloud_topic.duid, bytes(message.payload))
+        except Exception:  # noqa: BLE001
+            return
+        if plan is None:
+            return
+        delay, produce = plan
+        qos = _extract_qos(message)
+
+        async def answer() -> None:
+            await asyncio.sleep(delay)
+            reply = produce()
+            if reply is not None:
+                await client.publish(cloud_topic.topic_out, reply, qos=qos)
+
+        task = asyncio.get_running_loop().create_task(answer())
+        self._fallback_tasks.add(task)
+        task.add_done_callback(self._fallback_tasks.discard)
 
     async def _handle_cloud_message(
         self,
@@ -389,6 +426,19 @@ class MqttTopicBridge:
         cloud_topic: CloudTopicKey,
         src_topic: str,
     ) -> None:
+        if self._request_interceptor is not None:
+            payload = message.payload
+            raw = payload if isinstance(payload, (bytes, bytearray)) else str(payload).encode()
+            try:
+                reply = self._request_interceptor(cloud_topic.duid, bytes(raw))
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning("MQTT request interceptor failed for %s: %s", src_topic, exc)
+                reply = None
+            if reply is not None:
+                await client.publish(cloud_topic.topic_out, reply, qos=_extract_qos(message))
+                self._logger.info("MQTT bridge answered %s locally -> %s", src_topic, cloud_topic.topic_out)
+                return
+
         device_topic = self._resolve_device_for_cloud(cloud_topic)
         if device_topic is None:
             if cloud_topic.duid not in self._warned_unmapped_duids:
@@ -416,7 +466,13 @@ class MqttTopicBridge:
         self._d_to_m[device_topic] = cloud_topic
 
         target_topic = device_topic.topic_out
+        if self._request_observer is not None and not bool(getattr(message, "retain", False)):
+            try:
+                self._request_observer(cloud_topic.duid, bytes(message.payload))
+            except Exception:  # Observation must never prevent forwarding.
+                self._logger.warning("MQTT request observer failed for %s", src_topic, exc_info=True)
         await self._publish_mirror(client, message, target_topic)
+        self._schedule_fallback(client, message, cloud_topic)
         self._logger.info(
             "MQTT bridge m->d %s -> %s bytes=%d",
             src_topic,
@@ -451,7 +507,13 @@ class MqttTopicBridge:
             self._m_to_d[cloud_topic] = device_topic
 
             target_topic = cloud_topic.topic_out
-            await self._publish_mirror(client, message, target_topic)
+            rewritten = None
+            if self._response_rewriter is not None and not bool(getattr(message, "retain", False)):
+                try:
+                    rewritten = self._response_rewriter(cloud_topic.duid, bytes(message.payload))
+                except Exception:  # noqa: BLE001
+                    self._logger.warning("MQTT response rewriter failed for %s", src_topic, exc_info=True)
+            await self._publish_mirror(client, message, target_topic, rewritten)
             self._logger.info(
                 "MQTT bridge d->m %s -> %s bytes=%d",
                 src_topic,

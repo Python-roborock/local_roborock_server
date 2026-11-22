@@ -62,6 +62,7 @@ nav:
     - Log Retention: logging.md
     - Last-Known State: last_known_state.md
     - Known Limitations: known_limitations.md
+    - Schedule Support (Experimental): schedules.md
     - Scene Validity Reports: scene_validity.md
     - Tested Vacuums: tested_vacuums.md
     - Compatibility Report Details: compatibility_reports.md

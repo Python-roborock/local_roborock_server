@@ -11,8 +11,6 @@ import threading
 from typing import Any
 from urllib.parse import parse_qs
 
-from roborock_local_server.log_retention import iter_log_lines
-
 from .data_helpers import utcnow_iso
 
 
@@ -701,53 +699,6 @@ class RuntimeCredentialsStore:
             ]
         pending.sort(key=lambda item: (item.get("name") or "", item.get("duid") or item.get("did") or ""))
         return pending
-
-    def backfill_device_mqtt_passwords(self, log_path: str | Path) -> int:
-        path = Path(log_path)
-        changed = 0
-        with self._lock:
-            pending_usernames = {
-                _clean_str(device.get("device_mqtt_usr"))
-                for device in self._devices
-                if _clean_str(device.get("device_mqtt_usr")) and not _clean_str(device.get("device_mqtt_pass"))
-            }
-        if not pending_usernames:
-            return 0
-
-        recovered_by_username: dict[str, str] = {}
-        for raw_line in iter_log_lines(path):
-            line = str(raw_line or "")
-            if " CONNECT " not in line or " hex=" not in line:
-                continue
-            hex_value = line.rsplit(" hex=", 1)[-1].strip()
-            if not hex_value:
-                continue
-            try:
-                packet = bytes.fromhex(hex_value)
-            except ValueError:
-                continue
-            parsed = parse_mqtt_connect_packet(packet)
-            if parsed is None:
-                continue
-            username = _clean_str(parsed.get("username"))
-            password = _clean_str(parsed.get("password"))
-            if username in pending_usernames and password:
-                recovered_by_username[username] = password
-
-        with self._lock:
-            for username, password in recovered_by_username.items():
-                for device in self._devices:
-                    if _clean_str(device.get("device_mqtt_usr")) != username:
-                        continue
-                    if _clean_str(device.get("device_mqtt_pass")):
-                        break
-                    device["device_mqtt_pass"] = password
-                    device["updated_at"] = utcnow_iso()
-                    changed += 1
-                    break
-            if changed:
-                self._save_locked()
-        return changed
 
     def sync_inventory(self) -> None:
         inventory_devices = self._load_inventory_devices()

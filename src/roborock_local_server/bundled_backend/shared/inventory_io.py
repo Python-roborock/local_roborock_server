@@ -22,11 +22,7 @@ _LOCKS_GUARD = threading.Lock()
 
 @contextmanager
 def inventory_transaction(path: Path):
-    """Serialize inventory read/modify/write within this server process.
-
-    Refuse to mutate corrupt existing inventory rather than replacing it with
-    an empty fallback. External writers must stop the server first.
-    """
+    """Serialize inventory read/modify/write in this process; a corrupt existing file is refused, not replaced."""
     path = path.resolve()
     with _LOCKS_GUARD:
         lock = _LOCKS.setdefault(path, threading.RLock())
@@ -73,6 +69,27 @@ def load_inventory(ctx: ServerContext) -> dict[str, Any]:
     except (json.JSONDecodeError, OSError):
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+class CachedInventory:
+    """Re-reads the inventory only when its size, mtime or file id changed; the shared dict is read-only."""
+
+    def __init__(self, ctx: ServerContext) -> None:
+        self._ctx = ctx
+        self._signature: tuple[int, int, int] | None = None
+        self._inventory: dict[str, Any] = {}
+
+    def read(self) -> dict[str, Any]:
+        path = self._ctx.http_jsonl.parent / WEB_API_INVENTORY_FILE
+        try:
+            stat = path.stat()
+            signature: tuple[int, int, int] | None = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        except OSError:
+            signature = None
+        if signature is None or signature != self._signature:
+            self._inventory = load_inventory(self._ctx)
+            self._signature = signature
+        return self._inventory
 
 
 def write_inventory(ctx: ServerContext, inventory: dict[str, Any]) -> bool:

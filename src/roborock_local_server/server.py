@@ -58,6 +58,10 @@ from .backend import (
 )
 from shared.inventory_io import atomic_write_inventory, inventory_transaction
 from shared.protocol_auth import ProtocolAuthStore
+from shared.schedule_runner import ScheduleRunner
+from shared.native_schedule_sync import NativeScheduleSync
+from shared.timer_rpc import TimerRpcInterceptor
+from https_server.routes.user.devices import jobs as schedule_jobs
 from https_server.routes.user.scene import validity as scene_validity
 from https_server.routes.auth.service import (
     build_login_data_response,
@@ -367,6 +371,8 @@ class ReleaseSupervisor:
         self._mqtt_proxy: MqttTlsProxy | None = None
         self._http_server: ManagedFastApiServer | None = None
         self._renew_task: asyncio.Task[None] | None = None
+        self._schedule_task: asyncio.Task[None] | None = None
+        self._schedule_sync_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
 
         self.certificate_manager = CertificateManager(config=config, paths=paths)
@@ -445,11 +451,6 @@ class ReleaseSupervisor:
             mqtt_backend_port=self.config.broker.port,
         )
         self.runtime_credentials.sync_inventory()
-        recovered_device_passwords = self.runtime_credentials.backfill_device_mqtt_passwords(
-            self.paths.runtime_dir / "mqtt_server.log"
-        )
-        if recovered_device_passwords:
-            self.root_logger.info("Recovered %d device MQTT password(s) from mqtt_server.log", recovered_device_passwords)
 
         # Recover legacy state before retention trims oversized files or removes
         # backups, including when the user lowers the configured limits.
@@ -498,6 +499,7 @@ class ReleaseSupervisor:
             target=self._seed_snapshots, args=(snapshot_store,), daemon=True, name="snapshot-seed",
         ).start()
         self.endpoint_rules = default_endpoint_rules()
+        self.schedule_sync = NativeScheduleSync(self.context)
         self.app = self._create_app()
 
     def _seed_snapshots(self, store: DeviceSnapshotStore) -> None:
@@ -1511,6 +1513,11 @@ class ReleaseSupervisor:
         )
         if ota_response is not None:
             route_name, response_payload = ota_response
+        elif schedule_jobs.match_update(clean_path, request.method):
+            route_name = "update_schedule"
+            response_payload = await schedule_jobs.build_update_synced(
+                self.context, query_params, body_params, clean_path, self.schedule_sync,
+            )
         else:
             route_name, response_payload = resolve_route(
                 rules=self.endpoint_rules,
@@ -2163,12 +2170,17 @@ class ReleaseSupervisor:
             self.runtime_state.set_service("mqtt_backend_broker", running=True, required=True, enabled=True)
 
         if self.config.broker.enable_topic_bridge:
+            timer_rpc = TimerRpcInterceptor(self.context, default_timezone=self.config.network.timezone)
             self._topic_bridge = MqttTopicBridge(
                 host=self.config.broker.host,
                 port=self.config.broker.port,
                 logger=self.loggers["mqtt"],
                 runtime_state=self.runtime_state,
                 inventory_path=self.paths.inventory_path,
+                request_observer=self.schedule_sync.observe_request,
+                request_interceptor=timer_rpc,
+                response_rewriter=timer_rpc.merge_response,
+                request_fallback=timer_rpc.request_fallback,
             )
             await self._topic_bridge.start()
             self.runtime_state.set_service("mqtt_topic_bridge", running=True, required=False, enabled=True)
@@ -2198,10 +2210,32 @@ class ReleaseSupervisor:
         if self._uses_local_tls() and self.config.tls.mode == "cloudflare_acme":
             self._renew_task = asyncio.create_task(self._renew_loop(), name="tls-renew-loop")
 
+        schedule_runner = ScheduleRunner(self.context, default_timezone=self.config.network.timezone)
+        self._schedule_sync_task = asyncio.create_task(
+            self.schedule_sync.run(self._stop_event), name="native-schedule-sync",
+        )
+        self._schedule_task = asyncio.create_task(
+            schedule_runner.run(self._stop_event),
+            name="schedule-runner",
+        )
+
     async def stop(self) -> None:
         self._stop_event.set()
         self._turn_relay.stop()
         self._refresh_turn_health()
+        if self._schedule_sync_task is not None:
+            self._schedule_sync_task.cancel()
+            try:
+                await self._schedule_sync_task
+            except asyncio.CancelledError:
+                pass
+            self._schedule_sync_task = None
+        if self._schedule_task is not None:
+            self._schedule_task.cancel()
+            try:
+                await self._schedule_task
+            except asyncio.CancelledError:
+                pass
         if self._renew_task is not None:
             self._renew_task.cancel()
             try:

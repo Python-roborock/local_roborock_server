@@ -20,6 +20,7 @@ from shared.inventory_io import (
     load_inventory,
     write_inventory,
 )
+from shared.schedule_runner import next_fire_time_utc
 _DEFAULT_DEVICE_NAME = "Vacuum 1"
 _MAX_DEVICE_NAME_LENGTH = 64
 _DEVICE_COLLECTIONS = ("devices", "receivedDevices", "received_devices")
@@ -758,6 +759,11 @@ def device_jobs_payload(ctx: ServerContext, device_id: str) -> list[dict[str, An
         payload["repeated"] = as_bool(get_value(raw, "repeated", default=True), True)
         payload["enabled"] = as_bool(get_value(raw, "enabled", default=True), True)
         payload["param"] = get_value(raw, "param", default={}) or {}
+        upcoming = next_fire_time_utc(payload, default_timezone=str(getattr(ctx, "timezone", "") or ""))
+        if upcoming is not None:
+            payload["nextFireTime"] = upcoming.strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
+        else:
+            payload.pop("nextFireTime", None)
         schedules.append(payload)
     return schedules
 
