@@ -41,7 +41,12 @@ If you manage certificates externally on the host (for example via `acme.sh` or 
 
 ### Certificate renewal
 
-The server watches the configured `cert_file` and `key_file` (every `tls.renew_check_seconds`, default 12 hours) and reloads its HTTPS and MQTT TLS listeners when either file changes, so an externally renewed certificate is picked up without restarting the container. Replace the key before or together with the certificate, and make the files readable by the container.
+The server checks the configured `cert_file` and `key_file` every `tls.renew_check_seconds` and loads a changed certificate into the running HTTPS and MQTT TLS listeners, so an externally renewed certificate is picked up without restarting the container.
+
+- **Delay:** a renewed certificate can take up to `renew_check_seconds` to be picked up (default `43200`, 12 hours; minimum `3600`). Restart the container if you need it immediately.
+- **No dropped connections:** the listeners keep running. Connected vacuums stay connected on the old certificate; only new connections get the new one.
+- **Half-written files are safe:** the new key must match the new certificate before anything is loaded. If it does not (for example the certificate was copied before the key), the old certificate stays in use and the files are checked again on the next interval.
+- **Mount the directory, not single files.** Tools like certbot and Caddy replace a file by writing a new one and renaming it over the old one. A single-file bind mount (`- /etc/letsencrypt/live/example.com/fullchain.pem:/data/certs/fullchain.pem:ro`) keeps pointing at the old file and never sees the renewal. Mount the containing directory instead, and make the files readable by the container.
 
 ## Related Docs
 

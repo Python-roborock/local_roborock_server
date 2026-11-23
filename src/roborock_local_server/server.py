@@ -259,6 +259,21 @@ class ManagedFastApiServer:
             await asyncio.sleep(0.05)
         raise RuntimeError("Timed out waiting for HTTPS server startup")
 
+    def reload_certificate(self, cert_file: Path, key_file: Path) -> None:
+        """Serve a new certificate to new connections without restarting the listener.
+
+        uvicorn hands its SSLContext to the asyncio server, which uses it for every new
+        handshake, so loading the new chain into that context takes effect at once.
+        Callers must pass a pair already checked with validate_certificate_pair: a failure
+        part-way through load_cert_chain can leave the context with a mismatched pair.
+        """
+        if not self._tls_enabled:
+            return
+        ssl_context = self._server.config.ssl if self._server is not None else None
+        if ssl_context is None:
+            raise RuntimeError("HTTPS server is not running")
+        ssl_context.load_cert_chain(str(cert_file), str(key_file))
+
     async def stop(self) -> None:
         if self._server is not None:
             self._server.should_exit = True
@@ -1989,27 +2004,33 @@ class ReleaseSupervisor:
         self.runtime_state.set_service("mqtt_tls_proxy", running=True, required=True, enabled=True)
 
     async def reload_tls_services(self) -> None:
-        self.root_logger.info("Reloading TLS listeners after certificate update")
-        if self._http_server is not None:
-            self.runtime_state.set_service("https_server", running=False, required=True, enabled=True)
-            await self._http_server.stop()
-            self._http_server = None
-        if self._mqtt_proxy is not None:
-            self.runtime_state.set_service("mqtt_tls_proxy", running=False, required=True, enabled=True)
-            self._mqtt_proxy.stop()
-            self._mqtt_proxy = None
-        await self._start_http_server()
-        self._start_mqtt_proxy()
+        """Load the current certificate into the running HTTPS and MQTT TLS listeners.
+
+        The listeners keep running and keep their established connections (vacuums
+        reconnect slowly); only new handshakes get the new certificate. The cert/key pair
+        is validated first, so an invalid or half-written pair leaves the old one in place
+        and the change is retried on the next check.
+        """
+        with self.certificate_manager.certificate_snapshot() as snapshot:
+            if self._http_server is not None:
+                self._http_server.reload_certificate(snapshot.cert_file, snapshot.key_file)
+            if self._mqtt_proxy is not None:
+                self._mqtt_proxy.reload_certificate(snapshot.cert_file, snapshot.key_file)
+        self.certificate_manager.mark_certificate_applied()
+        self.root_logger.info("Reloaded TLS certificate for HTTPS and MQTT listeners")
+
+    async def _check_certificate(self) -> None:
+        try:
+            if self.certificate_manager.ensure_certificate():
+                await self.reload_tls_services()
+        except Exception as exc:  # noqa: BLE001
+            self.root_logger.warning("TLS certificate check failed; keeping the current certificate: %s", exc)
 
     async def _renew_loop(self) -> None:
         interval = max(3600, self.config.tls.renew_check_seconds)
         while not self._stop_event.is_set():
             await asyncio.sleep(interval)
-            try:
-                if self.certificate_manager.ensure_certificate():
-                    await self.reload_tls_services()
-            except Exception as exc:  # noqa: BLE001
-                self.root_logger.warning("TLS renewal check failed: %s", exc)
+            await self._check_certificate()
 
     async def start(self) -> None:
         for path in (self.paths.data_dir, self.paths.runtime_dir, self.paths.state_dir, self.paths.certs_dir, self.paths.acme_dir):
