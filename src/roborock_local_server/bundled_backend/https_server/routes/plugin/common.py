@@ -11,7 +11,7 @@ import aiohttp
 from fastapi.responses import Response
 
 from shared.context import ServerContext
-from shared.data_helpers import cloud_region_from_base_url, known_cloud_region
+from shared.data_helpers import as_int, cloud_region_from_base_url, known_cloud_region
 from shared.device_plugin_catalog import FALLBACK_REGION, DevicePluginCatalog, catalog_for_region
 from ..auth.service import load_cloud_full_snapshot
 
@@ -143,13 +143,12 @@ def built_in_catalog(ctx: ServerContext) -> DevicePluginCatalog:
     return catalog_for_region(server_cloud_region(ctx))
 
 
+def _plugin_catalogs(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return _dict_value(_dict_value(snapshot, "web_api_cache"), "plugin_catalogs")
+
+
 def _snapshot_plugin_catalogs(ctx: ServerContext) -> dict[str, Any]:
-    snapshot = load_cloud_full_snapshot(ctx) or {}
-    web_cache = snapshot.get("web_api_cache")
-    if not isinstance(web_cache, dict):
-        return {}
-    catalogs = web_cache.get("plugin_catalogs")
-    return catalogs if isinstance(catalogs, dict) else {}
+    return _plugin_catalogs(load_cloud_full_snapshot(ctx) or {})
 
 
 def _catalog_data(catalogs: dict[str, Any], name: str) -> Any:
@@ -167,6 +166,24 @@ def _dict_records(value: Any) -> list[dict[str, Any]]:
 
 def snapshot_plugin_catalog_data(ctx: ServerContext, catalog_name: str) -> Any:
     return _catalog_data(_snapshot_plugin_catalogs(ctx), catalog_name)
+
+
+def snapshot_plugin_record_owners(ctx: ServerContext) -> dict[int, str | None]:
+    """Map the product id of each Android and iOS snapshot plugin record to its model.
+
+    The model comes from the products of the snapshot's home data, else it is None.
+    """
+    snapshot = load_cloud_full_snapshot(ctx) or {}
+    catalogs = _plugin_catalogs(snapshot)
+    records = [
+        record for name in ("appplugin", "appplugin_ios") for record in _dict_records(_catalog_data(catalogs, name))
+    ]
+    models = {
+        as_int(product.get("id"), 0): str(product.get("model") or "").strip().lower()
+        for product in _dict_records(_dict_value(snapshot, "home_data").get("products"))
+    }
+    product_ids = {as_int(record.get("productid"), 0) for record in records} - {0}
+    return {product_id: models.get(product_id) or None for product_id in product_ids}
 
 
 def snapshot_plugin_records(

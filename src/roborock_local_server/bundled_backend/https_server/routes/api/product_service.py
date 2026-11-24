@@ -6,7 +6,7 @@ from shared.context import ServerContext
 from shared.data_helpers import default_product_name, model_product_ids
 from shared.device_plugin_catalog import DevicePluginCatalog, product_fields, resolve_product_ids
 
-from ..plugin.common import built_in_catalog, snapshot_plugin_catalog_data
+from ..plugin.common import built_in_catalog, snapshot_plugin_catalog_data, snapshot_plugin_record_owners
 
 from ..user.homes.service import home_payload
 
@@ -17,7 +17,8 @@ def _served_products(ctx: ServerContext, catalog: DevicePluginCatalog) -> list[t
     products = products_value if isinstance(products_value, list) else []
     products = [product for product in products if isinstance(product, dict)]
     cloud_product_ids = model_product_ids(snapshot_plugin_catalog_data(ctx, "product"))
-    return list(zip(products, resolve_product_ids(products, cloud_product_ids, catalog)))
+    product_ids = resolve_product_ids(products, cloud_product_ids, catalog, snapshot_plugin_record_owners(ctx))
+    return list(zip(products, product_ids))
 
 
 def served_models_by_product_id(ctx: ServerContext, catalog: DevicePluginCatalog) -> dict[int, set[str]]:

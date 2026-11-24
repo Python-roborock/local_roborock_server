@@ -126,34 +126,46 @@ def product_fields(product: Mapping[str, Any]) -> tuple[str, str, str]:
 
 
 def resolve_product_ids(
-    products: Sequence[Mapping[str, Any]], import_ids: Mapping[str, int], catalog: DevicePluginCatalog
+    products: Sequence[Mapping[str, Any]],
+    import_ids: Mapping[str, int],
+    catalog: DevicePluginCatalog,
+    record_owners: Mapping[int, str | None],
 ) -> list[int]:
     """Return the numeric product id that /api/v5/product gives each home data product.
 
-    The app requests the device plugin with this id. A snapshot record matches
-    only the id of the cloud import, and /api/v1/appplugin finds a built-in
-    record by the model that holds the id. So each id must name one model.
-    Product ids differ by cloud region. So a model gets the id of the
-    account's cloud import (model -> id) first, then a numeric id in home
-    data, then its built-in id, then a hashed id. Newer models (e.g. a226)
-    have a string id in home data.
+    The app requests the device plugin with this id. /api/v1/appplugin matches
+    a snapshot record by the id alone, and it finds a built-in record by the
+    model that holds the id. So each id must name one model. Product ids
+    differ by cloud region. So a model gets the id of the account's cloud
+    import (model -> id) first, then a numeric id in home data, then its
+    built-in id, then a hashed id. Newer models (e.g. a226) have a string id
+    in home data. record_owners maps the product id of each snapshot plugin
+    record to its model.
     """
     fields = [product_fields(product) for product in products]
     model_keys = [model.strip().lower() for model, _, _ in fields]
     fixed_ids = [import_ids.get(key) or as_int(raw_id, 0) for key, (_, raw_id, _) in zip(model_keys, fields)]
-    holders: dict[int, set[str]] = {}
+    holders: dict[int, set[str | None]] = {}
     for key, product_id in [*import_ids.items(), *zip(model_keys, fixed_ids)]:
         if product_id:
             holders.setdefault(product_id, set()).add(key)
+    # A snapshot record also holds its id. This matters if the import has no
+    # product list, because the import then fetched the records by the home
+    # data ids. A device holds no id here if it has not paired with the
+    # server or has left the inventory. Its record still holds the id for the
+    # model that the snapshot's home data names. None stands for a model that
+    # the snapshot does not name.
+    for product_id, owner in record_owners.items():
+        holders.setdefault(product_id, {owner})
     product_ids: list[int] = []
     for key, fixed_id, (_, raw_id, category) in zip(model_keys, fixed_ids, fields):
         built_in_id = catalog.product_ids.get(key)
         if fixed_id:
             product_ids.append(fixed_id)
         # Product ids differ by cloud region. Another model can hold the
-        # built-in id in the import or in home data, like the a199 holds 199
-        # in the US cloud and the a226 in the EU cloud. Then the id would name
-        # two models.
+        # built-in id in the import, in home data or by a snapshot record,
+        # like the a199 holds 199 in the US cloud and the a226 in the EU
+        # cloud. Then the id would name two models.
         elif built_in_id and holders.get(built_in_id, set()) <= {key}:
             product_ids.append(built_in_id)
         else:

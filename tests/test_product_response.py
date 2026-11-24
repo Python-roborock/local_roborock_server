@@ -626,3 +626,60 @@ def test_snapshot_catalog_error_gets_the_built_in_id_and_record(tmp_path: Path, 
 
     assert product["id"] == 263
     assert _plugin_sources(tmp_path, 263) == [(263, _built_in_source("roborock.vacuum.a307"))]
+
+
+def _write_snapshot_without_product_list(
+    tmp_path: Path, catalog_name: str, records: list[dict], home_products: list[dict]
+) -> None:
+    # The import has no product list, so it fetched the plugins by the numeric
+    # home data ids. The snapshot keeps the cloud's home data.
+    catalogs = {"product": _PRODUCT_CATALOG_ERROR, catalog_name: {"data": records}}
+    snapshot = {"home_data": {"products": home_products}, "web_api_cache": {"plugin_catalogs": catalogs}}
+    (tmp_path / "web_api_inventory_full_snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+
+_A199_RECORD = {"version": 1, "url": "https://app-files.roborock.com/iot/plugin/a199.zip", "productid": 199}
+
+
+@pytest.mark.parametrize(
+    "home_products", [[{"id": "199", "model": "roborock.vacuum.a199"}], []], ids=["named_model", "unknown_model"]
+)
+@pytest.mark.parametrize("catalog_name", ["appplugin", "appplugin_ios"])
+@pytest.mark.parametrize("product_list", [_v5_product_list, _legacy_product_list], ids=["api_v5", "legacy"])
+def test_built_in_id_of_a_snapshot_record_without_inventory_device_is_skipped(
+    tmp_path: Path, product_list, catalog_name: str, home_products: list[dict]
+) -> None:
+    from shared.data_helpers import stable_int
+
+    # The a199 had 199, as in the US cloud, and has left the inventory since.
+    # The snapshot's home data names it or not. The built-in id of the a226
+    # comes from the EU cloud, and it is 199.
+    _write_snapshot_without_product_list(tmp_path, catalog_name, [_A199_RECORD], home_products)
+
+    [product] = product_list(tmp_path, _A226)
+
+    assert product["id"] == stable_int(_A226["product_id"]) % 1_000_000
+
+
+def test_device_next_to_a_snapshot_record_without_inventory_device_gets_its_built_in_record(tmp_path: Path) -> None:
+    home_products = [{"id": "199", "model": "roborock.vacuum.a199"}]
+    _write_snapshot_without_product_list(tmp_path, "appplugin", [_A199_RECORD], home_products)
+
+    [product] = _v5_product_list(tmp_path, _A226)
+
+    assert _plugin_sources(tmp_path, product["id"]) == [(product["id"], _built_in_source("roborock.vacuum.a226"))]
+
+
+def test_device_of_the_model_that_the_snapshot_names_keeps_the_built_in_id_and_the_record(tmp_path: Path) -> None:
+    # The cloud a15 had 23 in home data and has not paired with the server.
+    # The paired a15 has the string id that local onboarding writes. Its
+    # built-in id is 23 too.
+    a15_record = {"version": 1, "url": "https://app-files.roborock.com/iot/plugin/a15.zip", "productid": 23}
+    home_products = [{"id": "23", "model": "roborock.vacuum.a15"}]
+    _write_snapshot_without_product_list(tmp_path, "appplugin", [a15_record], home_products)
+    device = dict(_DEVICE, product_id="1YYW18rpgyAJTISwb1NM91")
+
+    [product] = _v5_product_list(tmp_path, device)
+
+    assert product["id"] == 23
+    assert _plugin_sources(tmp_path, 23) == [(23, a15_record["url"])]

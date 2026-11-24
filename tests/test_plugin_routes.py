@@ -496,12 +496,14 @@ ANDROID_23_ZIP = "https://app-files.roborock.com/iot/plugin/android-23.zip"
 
 def _ios_app_plugin_client(tmp_path: Path) -> TestClient:
     # Product 199 is in both catalogs, and 300 is only in the iOS catalog. Products 23
-    # and 4242 are only in the Android catalog. The built-in list also has 23, which
-    # the paired a15 gets.
+    # and 4242 are only in the Android catalog. The import gives 23 to the paired
+    # a15, and the built-in list also has 23.
     supervisor = _build_supervisor(tmp_path)
+    a15_product = {"id": 23, "model": "roborock.vacuum.a15"}
     _write_app_plugin_snapshot(
         supervisor,
         {
+            "product": {"data": {"categoryDetailList": [{"productList": [a15_product]}]}},
             "appplugin": {
                 "data": [
                     _app_plugin_record(199, ANDROID_ZIP),

@@ -94,7 +94,7 @@ from .routes.api.v1.user import match_get_url_by_email as _match_get_url_by_emai
 from .routes.api.v1.user import match_logout as _match_logout_v1
 from .routes.api.v1.user import match_user_info as _match_user_info_v1
 from .routes.api.v1.user import match_user_roles as _match_user_roles_v1
-from .routes.plugin.common import built_in_catalog, snapshot_plugin_catalog_data
+from .routes.plugin.common import built_in_catalog, snapshot_plugin_catalog_data, snapshot_plugin_record_owners
 from .routes.user.app.info import build as _build_post_app_info
 from .routes.user.app.info import match as _match_post_app_info
 from .routes.user.inbox.latest import build as _build_get_inbox_latest
@@ -511,7 +511,9 @@ def _build_product_response(ctx: ServerContext, home_data: dict[str, Any]) -> di
     products = products_value if isinstance(products_value, list) else []
     products = [product for product in products if isinstance(product, dict)]
     cloud_product_ids = model_product_ids(snapshot_plugin_catalog_data(ctx, "product"))
-    product_ids = resolve_product_ids(products, cloud_product_ids, built_in_catalog(ctx))
+    product_ids = resolve_product_ids(
+        products, cloud_product_ids, built_in_catalog(ctx), snapshot_plugin_record_owners(ctx)
+    )
     categories: dict[str, dict[str, Any]] = {}
     for product, product_id in zip(products, product_ids):
         model, _, category_name = product_fields(product)
