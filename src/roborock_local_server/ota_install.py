@@ -156,6 +156,9 @@ class OtaInstaller:
         vacuum = self._vacuum(duid)
         if vacuum is None:
             return {"started": False, "reason": f"Unknown device {duid!r}"}
+        unsupported = self._unsupported_protocol(vacuum)
+        if unsupported:
+            return {"started": False, "reason": unsupported}
         reported = firmware_versions.reported_version(supervisor.context.snapshot_store, duid)
         try:
             # The cloud's own idea of the current version is stale after any local install.
@@ -173,6 +176,14 @@ class OtaInstaller:
             )
 
         return await self._launch(duid, vacuum, reported, str(version), resolve)
+
+    @staticmethod
+    def _unsupported_protocol(vacuum: dict[str, Any]) -> str:
+        """Why a robot that does not speak the V1 protocol (pv other than 1.0, e.g. B01) cannot be installed on; empty when it can or pv is unknown."""
+        pv = str(vacuum.get("pv") or "").strip()
+        if not pv or pv == "1.0":
+            return ""
+        return f"This robot uses protocol {pv}; firmware install only supports V1 (1.0) robots, so nothing was downloaded"
 
     @property
     def other_versions_allowed(self) -> bool:
@@ -202,6 +213,9 @@ class OtaInstaller:
         vacuum = self._vacuum(duid)
         if vacuum is None:
             return {"started": False, "reason": f"Unknown device {duid!r}"}
+        unsupported = self._unsupported_protocol(vacuum)
+        if unsupported:
+            return {"started": False, "reason": unsupported}
         model = self.model_of(duid, vacuum)
         reported = firmware_versions.reported_version(supervisor.context.snapshot_store, duid)
         if not model or not reported:

@@ -435,3 +435,51 @@ def test_two_version_installs_race_and_only_one_starts(tmp_path, monkeypatch, ro
     assert started["started"] is True
     assert second == {"started": False, "reason": ota_install.BUSY_REASON}
     assert supervisor.ota_installer.live_status("robot")["status"] == "IDLE"
+
+
+class _CountingCloud(UpdatableCloud):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.calls = []
+
+    async def firmware_update_info(self, duid, *, lang="en"):
+        self.calls.append("info")
+        return await super().firmware_update_info(duid, lang=lang)
+
+    async def iot_get(self, path, params=None):
+        self.calls.append("iot_get")
+        return await super().iot_get(path, params)
+
+
+@pytest.mark.parametrize("pv", ["B01", "A01", "L01"])
+def test_a_non_v1_robot_is_refused_before_any_cloud_call(tmp_path, monkeypatch, pv) -> None:
+    supervisor = button_supervisor(tmp_path, monkeypatch, enable=True)
+    cloud = _CountingCloud(current="02.16.00")
+    monkeypatch.setattr(supervisor, "cloud_manager", cloud)
+    monkeypatch.setattr(supervisor, "_vacuums_payload", lambda: {"vacuums": [{"duid": "robot", "local_key": "k", "pv": pv, "model": "m"}]})
+    installer = supervisor.ota_installer
+    monkeypatch.setattr(type(installer), "other_versions_allowed", True)
+
+    result = asyncio.run(installer.start("robot"))
+    assert result["started"] is False and pv in result["reason"] and "V1" in result["reason"]
+    again = asyncio.run(installer.start_version("robot", "02.15.26", True, "02.15.26"))
+    assert again["started"] is False and pv in again["reason"]
+    assert cloud.calls == []
+    assert installer.live_status("robot") is None
+
+
+def test_a_v1_robot_still_starts(tmp_path, monkeypatch) -> None:
+    supervisor, _robot = _prepare(tmp_path, monkeypatch, ["idle", "downloading", "installing", None, "idle"])
+    monkeypatch.setattr(supervisor, "_vacuums_payload", lambda: {"vacuums": [{"duid": "robot", "local_key": "k", "pv": "1.0"}]})
+    assert _run_install(supervisor)["status"] == "IDLE"
+
+
+def test_the_inventory_rows_carry_the_protocol_version(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from roborock_local_server.inventory import _extract_inventory_vacuums
+
+    context = SimpleNamespace(resolve_device_localkey=lambda **kw: "k", runtime_credentials=None)
+    inventory = {"devices": [{"duid": "a", "pv": "B01"}, {"duid": "b"}]}
+    rows = {row["duid"]: row for row in _extract_inventory_vacuums(context, inventory)}
+    assert rows["a"]["pv"] == "B01" and rows["b"]["pv"] == ""
