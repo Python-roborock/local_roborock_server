@@ -464,7 +464,7 @@ async def resolve_package(
         info = firmware_versions.apply_reported(await cloud.firmware_update_info(duid), reported)
         current = info.get("currentVersion") if isinstance(info, dict) else None
         offered = info.get("version") if isinstance(info, dict) and info.get("updatable") is True else None
-        if not version or (current != version and not (allow_update and offered == version)):
+        if not version or (not firmware_versions.same(str(current or ""), version) and not (allow_update and firmware_versions.same(str(offered or ""), version))):
             source = "the robot reports" if reported else "the cloud says"
             raise PackageRefused(f"Only the robot's current version can be used ({source} {current!r}, asked for {version!r})")
         reply = await cloud.iot_get(f"/user/devices/{duid}/fw", {"version": version})

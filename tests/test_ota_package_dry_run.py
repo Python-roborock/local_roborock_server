@@ -228,3 +228,18 @@ def test_a_known_address_skips_the_version_gate_but_not_the_checks() -> None:
     assert cloud.asked == []
     with pytest.raises(PackageRefused, match="not in the expected form"):
         asyncio.run(resolve_package(cloud, "duid", "02.33.48", serve=False, known_url="http://x/y.pkg"))
+
+
+def test_the_gate_ignores_how_the_version_is_padded() -> None:
+    cloud = FakeCloud(current="2.33.48")
+    assert asyncio.run(resolve_package(cloud, "duid", "02.33.48", serve=False))["md5"] == MD5
+    assert asyncio.run(resolve_package(cloud, "duid", "02.35.52", serve=False, reported="2.35.52"))["md5"] == MD5
+
+
+def test_an_offered_version_is_matched_without_regard_to_padding() -> None:
+    class Offering(FakeCloud):
+        async def firmware_update_info(self, duid, *, lang="en"):
+            return {"currentVersion": "02.15.26", "version": "2.16.00", "updatable": True}
+
+    package = asyncio.run(resolve_package(Offering(), "duid", "02.16.00", serve=False, allow_update=True))
+    assert package["md5"] == MD5
