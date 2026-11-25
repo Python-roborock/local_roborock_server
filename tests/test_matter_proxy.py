@@ -298,3 +298,10 @@ def test_an_extra_id_key_cannot_create_a_robot_through_the_address_fallback(tmp_
     TestClient(supervisor.app, client=("10.0.0.7", 5000)).get(PATH + "?d=ghost")
     assert "ghost" not in _ghost_ids(supervisor)
     assert [e["did"] for e in supervisor.runtime_state.recent_events() if e.get("route") == "matter_key_proxy"] == ["D1"]
+
+
+def test_the_in_memory_event_has_no_signed_query_with_the_proxy_off(tmp_path, monkeypatch) -> None:
+    supervisor = _supervisor(tmp_path, monkeypatch, False)
+    TestClient(supervisor.app).get(PATH + "?did=d1&signature=QUERYSECRET")
+    events = [e for e in supervisor.runtime_state.recent_events() if e.get("path") == PATH]
+    assert events and all("QUERYSECRET" not in json.dumps(e) for e in supervisor.runtime_state.recent_events())
