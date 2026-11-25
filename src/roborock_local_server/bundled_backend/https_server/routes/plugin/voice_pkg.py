@@ -17,7 +17,7 @@ from typing import Any, TypeVar
 from urllib.parse import urlparse
 
 import aiohttp
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 from shared.context import ServerContext
 
 VOICE_INFO_ROUTE_NAME = "voice_pkg_info"
@@ -208,13 +208,13 @@ def _write_atomic(path: Path, data: bytes) -> None:
     temp.replace(path)
 
 
-def _touch(path: Path) -> bool:
-    """Marks a cached file as just used; False when it is missing or was evicted."""
+def _read_cached_package(path: Path) -> bytes | None:
+    """Marks a cached file as just used and returns it; None when missing or evicted."""
     try:
         os.utime(path)
+        return path.read_bytes()
     except OSError:
-        return False
-    return True
+        return None
 
 
 def _write_and_evict(path: Path, data: bytes) -> None:
@@ -345,9 +345,10 @@ async def _voice_file_response(
     source_url = f"https://{host}{path}"
     cache_file = _cache_dir(runtime_dir) / f"{_digest(source_url)}.pkg"
     headers = {"Cache-Control": "public, max-age=86400"}
-    if await asyncio.to_thread(_touch, cache_file):
-        return source_url, FileResponse(
-            cache_file,
+    cached = await asyncio.to_thread(_read_cached_package, cache_file)
+    if cached is not None:
+        return source_url, Response(
+            cached,
             media_type="application/octet-stream",
             headers={**headers, "X-RR-Voice-Cache": "hit"},
         )

@@ -423,6 +423,37 @@ def test_cache_hit_that_vanishes_before_it_is_served_is_a_miss(
     assert response.headers["X-RR-Voice-Cache"] == "miss"
 
 
+def test_cache_hit_removed_after_the_touch_still_answers(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import asyncio
+    import os
+
+    from https_server.routes.plugin import voice_pkg
+
+    source = "https://us-app.roborock.com/a/voice-pkg/package/en.pkg"
+    _fake_fetch(monkeypatch, {source: b"fresh"})
+    cache_dir = tmp_path / "voice_pkg_cache"
+    cache_dir.mkdir()
+    path = cache_dir / (voice_pkg._digest(source) + ".pkg")
+    path.write_bytes(b"old")
+    real = os.utime
+
+    def touch_then_evict(target, *args, **kwargs):
+        real(target, *args, **kwargs)
+        if str(target).endswith(".pkg"):
+            os.remove(target)
+
+    monkeypatch.setattr(voice_pkg.os, "utime", touch_then_evict)
+    _, response = asyncio.run(
+        voice_pkg._voice_file_response(
+            tmp_path, "us-app.roborock.com", "/a/voice-pkg/package/en.pkg"
+        )
+    )
+    assert response.body == b"fresh"
+    assert response.headers["X-RR-Voice-Cache"] == "miss"
+
+
 def test_package_cache_is_bounded_by_total_bytes(tmp_path: Path, monkeypatch) -> None:
     import os
 
