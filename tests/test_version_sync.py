@@ -46,3 +46,11 @@ def test_beta_addon_requires_a_separate_opt_in_installation() -> None:
     assert beta["stage"] == "experimental"
     assert beta["boot"] == "manual"
     assert Version(beta["version"]).is_prerelease
+
+
+def test_addon_turn_defaults_to_disabled_without_reserving_udp_ports() -> None:
+    addon = yaml.safe_load(Path("roborock_local_server_addon/config.yaml").read_text(encoding="utf-8"))
+    assert addon["schema"]["turn_mode"] == "list(disabled|provided|external)?"
+    assert addon["options"]["turn_mode"] == "disabled"
+    assert addon["ports"]["3478/udp"] is None
+    assert all(addon["ports"][f"{port}/udp"] is None for port in range(49160, 49180))

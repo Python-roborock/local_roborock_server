@@ -8,7 +8,7 @@ from typing import Any
 from shared.constants import DEFAULT_HOME_NAME
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, as_int, default_home_id, get_value, stable_int
-from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory, write_inventory
+from shared.inventory_io import WEB_API_INVENTORY_FILE, inventory_mutation, load_inventory, write_inventory
 
 from ..devices.service import _home_data as _base_home_data
 from ..devices.service import enrich_home_data_with_cloud_snapshot
@@ -40,6 +40,7 @@ def extract_home_id_from_rooms_path(ctx: ServerContext, clean_path: str) -> int:
     return as_int(match.group(1), default_home_id(ctx))
 
 
+@inventory_mutation
 def upsert_inventory_room(ctx: ServerContext, *, home_id: int, room_name: str) -> tuple[dict[str, Any], bool]:
     inventory = load_inventory(ctx)
     if not isinstance(inventory, dict):
@@ -58,7 +59,11 @@ def upsert_inventory_room(ctx: ServerContext, *, home_id: int, room_name: str) -
         None,
     )
     if existing_room is not None:
-        room_payload = {"id": as_int(existing_room.get("id"), 0), "name": str(existing_room.get("name") or normalized_name)}
+        # The match ignores case so a room isn't created twice. A name that differs only in case
+        # is a correction to that room's spelling, so store it; otherwise the first spelling could
+        # never be changed, since nothing else renames a room.
+        existing_room["name"] = normalized_name
+        room_payload = {"id": as_int(existing_room.get("id"), 0), "name": normalized_name}
         created = False
     else:
         next_room_id = max((as_int(room.get("id"), 0) for room in rooms if isinstance(room, dict)), default=0) + 1

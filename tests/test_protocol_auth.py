@@ -102,6 +102,23 @@ def _build_supervisor_with_protocol_toggle(
     return supervisor, paths
 
 
+def test_hawk_auth_failures_record_the_reason(tmp_path: Path) -> None:
+    supervisor, paths = _build_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    unauth_inbox = client.get("/user/inbox/latest")
+    assert unauth_inbox.status_code == 401
+    assert unauth_inbox.json()["data"]["reason"] == "missing_authorization"
+
+    log_entries = [
+        json.loads(line)
+        for line in paths.http_jsonl_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    failure = next(entry for entry in log_entries if entry.get("route") == "hawk_auth_failed")
+    assert failure["auth_reason"] == "missing_authorization"
+
+
 def test_protected_routes_require_native_token_and_hawk_auth(tmp_path: Path) -> None:
     supervisor, paths = _build_supervisor(tmp_path)
     client = TestClient(supervisor.app)
@@ -330,6 +347,29 @@ def test_protocol_code_login_rejects_wrong_email_and_wrong_pin(tmp_path: Path) -
     assert wrong_pin.json()["data"]["reason"] == "invalid_login_pin"
 
 
+def test_legacy_login_with_code_accepts_python_roborock_lowercase_verifycode(tmp_path: Path) -> None:
+    """python-roborock's legacy ``RoborockApiClient.code_login`` posts the PIN as the
+    query parameter ``verifycode`` (lowercase c) to ``/api/v1/loginWithCode``; the
+    lookup is case-sensitive, so only ``verifyCode`` matched before this test."""
+    supervisor, _paths = _build_supervisor(tmp_path, with_snapshot=False)
+    client = TestClient(supervisor.app)
+
+    response = client.post(
+        "/api/v1/loginWithCode",
+        params={"username": "user@example.com", "verifycode": "123456"},
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["code"] == 200
+    assert response.json()["data"]["rriot"]["r"]["a"] == supervisor.context.api_url()
+
+    wrong_pin = client.post(
+        "/api/v1/loginWithCode",
+        params={"username": "user@example.com", "verifycode": "654321"},
+    )
+    assert wrong_pin.status_code == 401
+    assert wrong_pin.json()["data"]["reason"] == "invalid_login_pin"
+
+
 def test_protocol_password_login_is_rejected(tmp_path: Path) -> None:
     supervisor, _paths = _build_supervisor(tmp_path)
     client = TestClient(supervisor.app)
@@ -503,3 +543,52 @@ def test_local_issued_and_imported_sessions_coexist(tmp_path: Path) -> None:
         },
     )
     assert imported_hawk_response.status_code == 200
+
+
+def test_long_lived_session_survives_many_later_app_logins(tmp_path: Path) -> None:
+    supervisor, paths = _build_supervisor(tmp_path)
+    base_user_data = load_cloud_user_data(supervisor.context) or {}
+
+    # An integration logs in once and keeps its MQTT session for a long time.
+    integration_session = supervisor.protocol_auth.issue_local_session(base_user_data, source="integration")
+    integration_user = next(
+        user
+        for user in supervisor.protocol_auth.availability().users
+        if user.token == integration_session["token"]
+    )
+
+    # The app logs in again after every reinstall.
+    for index in range(12):
+        supervisor.protocol_auth.issue_local_session(base_user_data, source=f"app_login_{index}")
+
+    auth_store = ProtocolAuthStore(
+        paths.cloud_snapshot_path,
+        session_store_path=paths.protocol_auth_sessions_path,
+    )
+    accepted, reason, _user = auth_store.verify_user_mqtt_credentials(
+        integration_user.mqtt_username,
+        integration_user.mqtt_password,
+    )
+    assert accepted, reason
+
+
+def test_persisted_sessions_are_still_capped(tmp_path: Path) -> None:
+    supervisor, paths = _build_supervisor(tmp_path)
+    base_user_data = load_cloud_user_data(supervisor.context) or {}
+    auth_store = ProtocolAuthStore(
+        paths.cloud_snapshot_path,
+        session_store_path=paths.protocol_auth_sessions_path,
+        max_persisted_sessions=3,
+    )
+
+    for index in range(5):
+        auth_store.issue_local_session(base_user_data, source=f"login_{index}")
+
+    assert len(auth_store.persisted_sessions()) == 3
+
+
+def test_agreement_latest_is_readable_before_login_on_both_paths() -> None:
+    # The route that answers is /api/v4/app/agreement/latest; it must be as public as the older path.
+    assert ReleaseSupervisor._required_protocol_auth("/api/v4/agreement/latest") is None
+    assert ReleaseSupervisor._required_protocol_auth("/api/v4/app/agreement/latest") is None
+    assert ReleaseSupervisor._required_protocol_auth("/api/v4/app/agreement/latest/") is None

@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -7,9 +8,31 @@ from roborock.data import HomeData
 
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
+from roborock_local_server.config import TurnConfig
 from roborock_local_server.server import ReleaseSupervisor, resolve_route
 from shared.constants import DEFAULT_PRODUCT_SCHEMA
 from shared.protocol_auth import ProtocolAuthStore, build_hawk_authorization
+
+
+def test_camera_bootstrap_preserves_firmware_contract_and_redacts_persisted_password(tmp_path):
+    config_file = write_release_config(tmp_path)
+    config = replace(load_config(config_file), turn=TurnConfig(mode="external", host="turn.example.com",
+        username="viewer", password="camera-test-secret", realm="turn.example.com"))
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+    response = client.post("/iot.roborock.com/fwapi/createca", json={})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] == payload["result"]
+    assert payload["data"]["pwd"] == payload["data"]["credential"] == "camera-test-secret"
+    log = supervisor.context.http_jsonl.read_text()
+    assert "camera-test-secret" not in log
+    entry = json.loads(log.splitlines()[-1])
+    assert entry["response_json"]["data"]["pwd"] == "<redacted>"
+    assert entry["response_json"]["data"]["credential"] == "<redacted>"
+    assert entry["response_json"]["result"]["pwd"] == "<redacted>"
+    assert entry["response_json"]["result"]["credential"] == "<redacted>"
 
 
 def _scene_zone_step(
@@ -482,6 +505,7 @@ def test_admin_onboarding_endpoints_require_auth_and_manage_session(tmp_path: Pa
     devices_payload = devices.json()
     assert [item["duid"] for item in devices_payload["devices"]] == ["cloud-q7-a"]
     assert devices_payload["devices"][0]["name"] == "Q7 Upstairs"
+    assert devices_payload["devices"][0]["model"] == "roborock.vacuum.sc05"
     assert devices_payload["devices"][0]["onboarding"]["has_public_key"] is True
     assert devices_payload["devices"][0]["onboarding"]["key_state"]["query_samples"] == 2
 
@@ -1549,3 +1573,152 @@ def test_execute_scene_hydrates_missing_zone_ranges_from_mqtt(tmp_path: Path) ->
     persisted_outer = json.loads(scene["param"])
     persisted_step = json.loads(persisted_outer["action"]["items"][0]["param"])
     assert persisted_step["params"]["data"][0]["zones"][0]["range"] == [32800, 22750, 34550, 25350]
+
+
+def test_create_room_returns_bare_id_in_result_and_object_in_data(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps({"home": {"id": 1316433, "name": "My Home", "rooms": [{"id": 10283928, "name": "Kitchen"}]}}) + "\n",
+        encoding="utf-8",
+    )
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    path = "/user/homes/1316433/rooms"
+    response = client.post(
+        path,
+        data={"name": "Study"},
+        headers=_hawk_headers(paths.cloud_snapshot_path, path, form_values={"name": "Study"}),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["result"], int)
+    assert body["data"]["id"] == body["result"]
+    assert body["data"]["name"] == "Study"
+    assert body["data"]["created"] is True
+
+
+def test_create_room_with_new_capitalization_updates_existing_room(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    paths.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    rooms = [{"id": 11100, "name": "Master bedroom"}, {"id": 11101, "name": "Hallway"}]
+    paths.inventory_path.write_text(
+        json.dumps({"home": {"id": 1316433, "name": "My Home", "rooms": rooms}, "rooms": rooms}) + "\n",
+        encoding="utf-8",
+    )
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    path = "/user/homes/1316433/rooms"
+    response = client.post(
+        path,
+        data={"name": "Master Bedroom"},
+        headers=_hawk_headers(paths.cloud_snapshot_path, path, form_values={"name": "Master Bedroom"}),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"] == 11100
+    assert body["data"]["name"] == "Master Bedroom"
+    assert body["data"]["created"] is False
+
+    stored_inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
+    for stored_rooms in (stored_inventory["home"]["rooms"], stored_inventory["rooms"]):
+        assert stored_rooms == [{"id": 11100, "name": "Master Bedroom"}, {"id": 11101, "name": "Hallway"}]
+
+
+def test_admin_plugin_catalog_endpoints_require_auth_and_report_the_snapshot(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+
+    assert client.get("/admin/api/cloud/plugins").status_code == 401
+    assert client.post("/admin/api/cloud/refresh-plugins", json={}).status_code == 401
+
+    assert client.post("/admin/api/login", json={"password": "correct horse battery staple"}).status_code == 200
+    assert client.get("/admin/api/cloud/plugins").json() == {"success": True}
+
+    paths.cloud_snapshot_path.write_text(
+        json.dumps(
+            {
+                "web_api_cache": {
+                    "plugin_catalogs": {
+                        "appplugin": {"json": {"type": 2}, "data": [{"productid": 110, "version": 7006, "url": "https://files.roborock.com/a.zip"}]},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    stored = client.get("/admin/api/cloud/plugins").json()
+    assert stored["appplugin"]["plugins"] == [{"productid": 110, "version": 7006, "url": "https://files.roborock.com/a.zip"}]
+
+    refused = client.post("/admin/api/cloud/refresh-plugins", json={})
+    assert refused.status_code == 400
+    assert refused.json()["step"] == "plugin_refresh_failed"
+    assert "No cloud login" in refused.json()["error"]
+
+
+def test_last_known_route_returns_the_stored_snapshot(tmp_path: Path) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    client = TestClient(supervisor.app)
+    device_id = "duid-test-2"
+    path = f"/user/devices/{device_id}/last_known"
+
+    from https_server.routes.user.devices.last_known import build as build_last_known
+
+    assert build_last_known(supervisor.context, {}, {}, path)["data"] == {"duid": device_id, "known": False}
+
+    store = supervisor.context.snapshot_store
+    store.record_dps(device_id, json.dumps({"dps": {"122": 5, "121": 12}}))
+    store.mark_offline(device_id)
+
+    known = client.get(path, headers=_hawk_headers(paths.cloud_snapshot_path, path))
+    assert known.status_code == 200
+    data = known.json()["data"]
+    assert data["known"] is True
+    assert data["status"]["battery"] == 5
+    assert data["offline_at"]
+    assert data["has_map"] is False
+    assert "map" not in data
+
+
+def test_last_known_route_names_each_room_of_the_robots_room_table(tmp_path: Path, monkeypatch) -> None:
+    config_file = write_release_config(tmp_path)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    _seed_protocol_snapshot(paths.cloud_snapshot_path)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    device_id = "duid-test-2"
+    path = f"/user/devices/{device_id}/last_known"
+
+    from https_server.routes.user.devices import last_known as route
+
+    monkeypatch.setattr(route, "home_rooms_payload", lambda ctx: [{"id": 1, "name": "Living Room"}, {"id": 4, "name": "Kitchen"}])
+    store = supervisor.context.snapshot_store
+    store.record_dps(device_id, json.dumps({"dps": {"122": 5}}))
+    store.record_room_mapping(device_id, [[21, "1", 6], [19, "4", 14], [18, "999", 1]])
+
+    rooms = route.build(supervisor.context, {}, {}, path)["data"]["rooms"]
+
+    assert rooms == [
+        {"segment": 21, "iot_id": "1", "tag": 6, "name": "Living Room"},
+        {"segment": 19, "iot_id": "4", "tag": 14, "name": "Kitchen"},
+        {"segment": 18, "iot_id": "999", "tag": 1, "name": None},
+    ]

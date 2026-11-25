@@ -15,6 +15,7 @@ from .device_key_recovery import DeviceKeyCache
 from .http_helpers import pick_first
 from .runtime_credentials import RuntimeCredentialsStore
 from .runtime_state import RuntimeState
+from .device_snapshot_store import DeviceSnapshotStore
 from .zone_ranges_store import ZoneRangesStore
 
 _DEVICE_ID_KEYS = ("did", "d", "duid", "device_id", "deviceId", "device_did", "deviceDid")
@@ -70,7 +71,16 @@ class ServerContext:
     runtime_state: RuntimeState | None = None
     runtime_credentials: RuntimeCredentialsStore | None = None
     zone_ranges_store: ZoneRangesStore | None = None
+    snapshot_store: DeviceSnapshotStore | None = None
     timezone: str | None = None
+    # TURN/STUN advertised to the robot for camera sessions (see routes/fw/createca.py).
+    turn_enabled: bool = False
+    turn_host: str = ""
+    turn_port: int = 3478
+    turn_username: str = ""
+    turn_password: str = ""
+    turn_realm: str = ""
+    turn_ttl: int = 86400
     _bootstrap_encryptor: BootstrapEncryptor | None = field(init=False, default=None, repr=False)
     _device_key_cache: DeviceKeyCache | None = field(init=False, default=None, repr=False)
 

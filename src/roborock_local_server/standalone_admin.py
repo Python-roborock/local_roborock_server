@@ -154,11 +154,20 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
             container.appendChild(card);
           }}
         }}
+        // The page refreshes every 2 seconds. Until Save is pressed, a changed checkbox keeps the
+        // user's choice instead of snapping back to the saved setting.
+        let connectionsEdited = false;
+        document.getElementById("newConnectionsEnabled").addEventListener("change", () => {{
+          connectionsEdited = true;
+          document.getElementById("authMeta").textContent = "Unsaved change: press Save to apply it.";
+        }});
         function renderAuth(auth) {{
           const enabled = Boolean(auth.new_connections_enabled);
-          document.getElementById("newConnectionsEnabled").checked = enabled;
-          document.getElementById("authMeta").textContent =
-            `New connections: ${{enabled ? "Allowed" : "Blocked"}}. Persisted sessions: ${{Number(auth.protocol_session_count || 0)}}.`;
+          if (!connectionsEdited) {{
+            document.getElementById("newConnectionsEnabled").checked = enabled;
+            document.getElementById("authMeta").textContent =
+              `New connections: ${{enabled ? "Allowed" : "Blocked"}}. Persisted sessions: ${{Number(auth.protocol_session_count || 0)}}.`;
+          }}
           const sessionSecret = String(auth.admin_session_secret || "");
           document.getElementById("adminSessionSecret").value = sessionSecret;
           document.getElementById("syncSecretMeta").textContent = sessionSecret
@@ -266,6 +275,11 @@ def _admin_dashboard_html(project_support: dict[str, Any]) -> str:
                 new_connections_enabled: document.getElementById("newConnectionsEnabled").checked
               }})
             }});
+            // Only a choice the server now holds stops being unsaved; a change made while Save
+            // was in flight stays unsaved.
+            if (document.getElementById("newConnectionsEnabled").checked === Boolean(payload.new_connections_enabled)) {{
+              connectionsEdited = false;
+            }}
             renderAuth(payload);
             await refresh();
           }} catch (error) {{
@@ -476,5 +490,20 @@ def register_standalone_admin_routes(
             supervisor.refresh_inventory_state()
         except Exception as exc:  # noqa: BLE001
             result = {"success": False, "step": "code_submit_failed", "error": str(exc)}
+        supervisor.runtime_state.record_cloud_request(result)
+        return JSONResponse(result, status_code=200 if result.get("success") else 400)
+
+    @app.get("/admin/api/cloud/plugins")
+    async def admin_cloud_plugins(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        return JSONResponse({"success": True, **supervisor.cloud_manager.plugin_catalogs()})
+
+    @app.post("/admin/api/cloud/refresh-plugins")
+    async def admin_cloud_refresh_plugins(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            result = await supervisor.cloud_manager.refresh_plugin_catalogs()
+        except Exception as exc:  # noqa: BLE001
+            result = {"success": False, "step": "plugin_refresh_failed", "error": str(exc)}
         supervisor.runtime_state.record_cloud_request(result)
         return JSONResponse(result, status_code=200 if result.get("success") else 400)

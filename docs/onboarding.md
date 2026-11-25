@@ -177,6 +177,40 @@ Everything in "What To Expect" above still applies. Some vacuums need 2-4 cycles
 - **The UI is stuck on "Polling...".** Give it the full five-minute timeout. Some vacuums are especially slow on the final cycle after the public key is already ready. If nothing changes, check the log pane for errors, then click Retry or Pick another vacuum.
 - **Server stalls or hangs during key recovery without errors.** Check your container host's resource usage. If running with tight CPU/memory limits, cryptographic recovery can max out resources and hang. Ensure the container has at least 1 CPU core and 1 GB RAM allocated. On lower resource machines, be prepared to wait longer for the public key to be determined.
 
+### Network and resource checks
+
+Successful Wi-Fi association or ping does not prove that the robot can resolve
+or reach the server. Recent reports identified these distinct setup problems:
+
+- **DNS from the robot's VLAN:** check the resolver's query log. In
+  [#156](https://github.com/Python-roborock/local_roborock_server/issues/156),
+  Pi-hole ignored queries from a routed IoT subnet. Allow queries from the intended
+  LAN/VLAN, keeping the resolver inaccessible from the Internet.
+- **Public DNS bypass:** Saros 20X and Saros 20 Neo reporters saw no useful local
+  traffic until WAN access was blocked before onboarding. The Saros 20X tried
+  `8.8.8.8` directly. Keep local DNS, time service and the server reachable while
+  isolating the robot. See [#114](https://github.com/Python-roborock/local_roborock_server/issues/114)
+  and [#139](https://github.com/Python-roborock/local_roborock_server/issues/139).
+- **Inconsistent answers or routes:** ensure the onboarding computer and robot
+  resolve the API hostname to the intended endpoint. Check MQTT as well as HTTPS
+  across VLANs. [#237](https://github.com/Python-roborock/local_roborock_server/issues/237)
+  had both DNS forwarding/wildcard mistakes and blocked MQTT. In #156 the computer
+  needed a hosts-file entry and route adjustment while connected to the hotspot.
+- **Key-recovery resources:** watch CPU and memory rather than repeatedly starting
+  over. Increasing constrained Podman resources helped #114. A zero query-sample
+  counter is not itself a failure on firmware using header signatures; watch key
+  recovery and NC/MQTT progress as well.
+- **TLS closes before HTTP or MQTT:** verify the exact served hostname and full
+  certificate chain against the model/firmware report. A completed TLS handshake
+  can still be followed by a client-side rejection before application traffic;
+  [PR #65](https://github.com/Python-roborock/local_roborock_server/pull/65)
+  reports this on S7 Pro Ultra. An empty HTTP log alone cannot identify the cause.
+
+Use the [report details](compatibility_reports.md) to compare firmware, chain and
+deployment, rather than assuming the same retail model name implies identical
+behavior. Prefer another Wi-Fi pairing cycle when prompted; successful reports
+with several cycles do not imply that a full factory reset is required.
+
 ---
  
 ## Alternative: Onboarding Via LocalRock
@@ -199,3 +233,12 @@ If you have a smartphone, you can use [LocalRock](roborock_app.md#localrock-thir
 - [Tested vacuums](tested_vacuums.md)
 - [Home Assistant](home_assistant.md)
 - [Mobile App Options](roborock_app.md)
+
+## Confirm the destination network and allow slow reconnects
+
+Before sending, the GUI displays the destination Wi-Fi SSID. Check it is the
+network intended for the vacuum; use **Change Wi-Fi/settings** to correct it.
+After five minutes without progress, **Keep waiting** monitors the same session
+without sending another Wi-Fi packet or requiring another pairing cycle. Use
+**Run another cycle** when another send is intended. See [Camera](camera.md)
+for the firmware-specific bootstrap check performed after device selection.

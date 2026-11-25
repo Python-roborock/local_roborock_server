@@ -1,8 +1,10 @@
+import asyncio
 import json
 import urllib.parse
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
@@ -126,6 +128,172 @@ def test_app_plugin_endpoints_return_proxied_urls(tmp_path: Path) -> None:
         assert str(item["url"]).startswith("https://api-roborock.example.com/plugin/proxy/")
 
 
+def _app_plugin_product_ids(payload: dict) -> list[int]:
+    assert payload["code"] == 200
+    return [item["productid"] for item in payload["data"]]
+
+
+def test_app_plugin_answers_only_requested_product_ids(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    # The app posts this JSON body and installs the first record it gets back.
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23], "type": 2})
+
+    assert response.status_code == 200
+    assert _app_plugin_product_ids(response.json()) == [23]
+    [record] = response.json()["data"]
+    assert record["url"].startswith("https://api-roborock.example.com/plugin/proxy/")
+
+
+def test_app_plugin_reads_product_ids_from_form_body(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    repeated = client.post("/api/v1/appplugin", data={"type": "2", "productids": ["23", "10001"]})
+    joined = client.post("/api/v1/appplugin", data={"type": "2", "productids": "23,10001"})
+
+    assert _app_plugin_product_ids(repeated.json()) == [23, 10001]
+    assert _app_plugin_product_ids(joined.json()) == [23, 10001]
+
+
+def _write_android_app_plugin_snapshot(supervisor: ReleaseSupervisor, records: list[dict]) -> None:
+    _write_app_plugin_snapshot(supervisor, {"appplugin": {"data": records}})
+
+
+_SNAPSHOT_APP_PLUGIN_RECORD = {
+    "version": 7777,
+    "url": "https://rrpkg-us.roborock.com/iot/plugin/cloud-only.zip",
+    "pluginLevel": 3001,
+    "productid": 4242,
+    "apilevel": 10043,
+}
+
+# Run each case once with the built-in list and once with a cloud snapshot catalog.
+_APP_PLUGIN_CATALOGS = pytest.mark.parametrize(
+    "snapshot_records",
+    [None, [_SNAPSHOT_APP_PLUGIN_RECORD]],
+    ids=["built_in", "snapshot"],
+)
+
+
+@_APP_PLUGIN_CATALOGS
+def test_app_plugin_answers_full_list_without_product_ids(tmp_path: Path, snapshot_records: list[dict] | None) -> None:
+    from https_server.routes.plugin import common as plugin_common
+
+    supervisor = _build_supervisor(tmp_path)
+    if snapshot_records is not None:
+        _write_android_app_plugin_snapshot(supervisor, snapshot_records)
+    client = TestClient(supervisor.app)
+    full_list = [record["productid"] for record in snapshot_records or plugin_common.APPPLUGIN_LIST]
+
+    no_body = client.post("/api/v1/appplugin")
+    no_ids = client.post("/api/v1/appplugin", json={"apilevel": 10046, "type": 2})
+    empty_ids = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [], "type": 2})
+
+    assert _app_plugin_product_ids(no_body.json()) == full_list
+    assert _app_plugin_product_ids(no_ids.json()) == full_list
+    assert _app_plugin_product_ids(empty_ids.json()) == full_list
+
+
+@_APP_PLUGIN_CATALOGS
+def test_app_plugin_answers_no_plugin_for_unmatched_product_ids(
+    tmp_path: Path, snapshot_records: list[dict] | None
+) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    if snapshot_records is not None:
+        _write_android_app_plugin_snapshot(supervisor, snapshot_records)
+    client = TestClient(supervisor.app)
+
+    # The app would install the first record of a full list, which is the plugin of another model.
+    unknown_id = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [659231], "type": 2})
+    # Ids that are no valid product ids match nothing either.
+    invalid_ids = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": ["abc", 0], "type": 2})
+    invalid_form_id = client.post("/api/v1/appplugin", data={"productids": "abc"})
+
+    assert _app_plugin_product_ids(unknown_id.json()) == []
+    assert _app_plugin_product_ids(invalid_ids.json()) == []
+    assert _app_plugin_product_ids(invalid_form_id.json()) == []
+
+
+def test_app_plugin_filters_cloud_snapshot_catalog(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    snapshot = {
+        "web_api_cache": {
+            "plugin_catalogs": {
+                "appplugin": {
+                    "data": [
+                        {
+                            "version": 8888,
+                            "url": "https://rrpkg-us.roborock.com/iot/plugin/cloud-first.zip",
+                            "pluginLevel": 3001,
+                            "productid": 110,
+                            "apilevel": 10043,
+                        },
+                        {
+                            "version": 7777,
+                            "url": "https://rrpkg-us.roborock.com/iot/plugin/cloud-second.zip",
+                            "pluginLevel": 3002,
+                            "productid": 4242,
+                            "apilevel": 10043,
+                        },
+                    ]
+                },
+            }
+        }
+    }
+    supervisor.paths.cloud_snapshot_path.write_text(json.dumps(snapshot) + "\n", encoding="utf-8")
+    client = TestClient(supervisor.app)
+
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [4242], "type": 2})
+
+    [record] = response.json()["data"]
+    assert record["version"] == 7777
+    assert _source_from_proxied_url(record["url"]) == "https://rrpkg-us.roborock.com/iot/plugin/cloud-second.zip"
+
+
+def test_app_plugin_falls_back_to_built_in_list_for_ids_missing_from_snapshot(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    # A device added after the snapshot import has no record in the snapshot.
+    _write_android_app_plugin_snapshot(supervisor, [_SNAPSHOT_APP_PLUGIN_RECORD])
+    client = TestClient(supervisor.app)
+
+    missing = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23], "type": 2})
+    mixed = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23, 4242], "type": 2})
+
+    [record] = missing.json()["data"]
+    assert record["productid"] == 23
+    assert record["version"] == 5208
+    assert _source_from_proxied_url(record["url"]) == (
+        "https://cdn.awsusor0.fds.api.mi-img.com/resources/iot/plugin/7cf4eb4c705c420483741189be389927.zip"
+    )
+    # Snapshot records come first, built-in records after them.
+    assert _app_plugin_product_ids(mixed.json()) == [4242, 23]
+
+
+def test_app_plugin_prefers_snapshot_record_over_built_in_record(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    _write_android_app_plugin_snapshot(
+        supervisor,
+        [
+            {
+                "version": 9999,
+                "url": "https://rrpkg-us.roborock.com/iot/plugin/cloud-23.zip",
+                "pluginLevel": 3001,
+                "productid": 23,
+                "apilevel": 10043,
+            }
+        ],
+    )
+    client = TestClient(supervisor.app)
+
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23, 10001], "type": 2})
+
+    records = response.json()["data"]
+    assert [(item["productid"], item["version"]) for item in records] == [(23, 9999), (10001, 90)]
+    assert _source_from_proxied_url(records[0]["url"]) == "https://rrpkg-us.roborock.com/iot/plugin/cloud-23.zip"
+
+
 def test_plugin_category_zip_uses_expected_source_and_cache(tmp_path: Path, monkeypatch) -> None:
     from https_server.routes.plugin import common as plugin_common
 
@@ -189,3 +357,175 @@ def test_non_plugin_routes_still_resolve_to_same_handlers(tmp_path: Path) -> Non
     )
     assert route_name == "user_info"
     assert payload["code"] == 200
+
+
+class _FakePluginResponse:
+    def __init__(self, payload: bytes) -> None:
+        self.status = 200
+        self.headers = {"Content-Type": "application/zip"}
+        self._payload = payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc) -> None:
+        return None
+
+    async def read(self) -> bytes:
+        return self._payload
+
+
+def _fake_client_session(payload: bytes):
+    class _FakeClientSession:
+        def __init__(self, *args, **kwargs) -> None:
+            _ = args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc) -> None:
+            return None
+
+        def get(self, *_args, **_kwargs) -> _FakePluginResponse:
+            return _FakePluginResponse(payload)
+
+    return _FakeClientSession
+
+
+def test_download_plugin_zip_accepts_large_device_plugin(monkeypatch) -> None:
+    from https_server.routes.plugin import common as plugin_common
+
+    # Real device plugins have grown past the former 32 MB limit (~55 MB seen).
+    payload = b"\0" * (55 * 1024 * 1024)
+    monkeypatch.setattr(plugin_common.aiohttp, "ClientSession", _fake_client_session(payload))
+
+    data, content_type = asyncio.run(plugin_common.download_plugin_zip("https://files.roborock.com/plugin.zip"))
+
+    assert len(data) == len(payload)
+    assert content_type == "application/zip"
+
+
+def test_download_plugin_zip_still_rejects_oversized_payload(monkeypatch) -> None:
+    from https_server.routes.plugin import common as plugin_common
+
+    monkeypatch.setattr(plugin_common, "PLUGIN_PROXY_MAX_BYTES", 1024)
+    monkeypatch.setattr(plugin_common.aiohttp, "ClientSession", _fake_client_session(b"\0" * 1025))
+
+    with pytest.raises(RuntimeError, match="plugin too large"):
+        asyncio.run(plugin_common.download_plugin_zip("https://files.roborock.com/plugin.zip"))
+
+
+def _write_app_plugin_snapshot(supervisor: ReleaseSupervisor, catalogs: dict) -> None:
+    snapshot = {"web_api_cache": {"plugin_catalogs": catalogs}}
+    supervisor.paths.cloud_snapshot_path.write_text(json.dumps(snapshot) + "\n", encoding="utf-8")
+
+
+def _app_plugin_catalog(url: str) -> dict:
+    return {"data": [{"version": 6846, "url": url, "pluginLevel": 3002, "productid": 199, "apilevel": 10030}]}
+
+
+ANDROID_ZIP = "https://app-files.roborock.com/iot/plugin/android.zip"
+IOS_ZIP = "https://app-files.roborock.com/iot/plugin/ios.zip"
+
+
+@pytest.mark.parametrize(("app_type", "expected"), [(1, IOS_ZIP), (2, ANDROID_ZIP)])
+def test_app_plugin_answers_per_platform_type(tmp_path: Path, app_type: int, expected: str) -> None:
+    # The cloud serves a different zip for the same plugin version to iOS (type 1)
+    # and Android (type 2); the iOS app cannot load the Android one.
+    supervisor = _build_supervisor(tmp_path)
+    _write_app_plugin_snapshot(
+        supervisor,
+        {"appplugin": _app_plugin_catalog(ANDROID_ZIP), "appplugin_ios": _app_plugin_catalog(IOS_ZIP)},
+    )
+    client = TestClient(supervisor.app)
+
+    response = client.post("/api/v1/appplugin", json={"type": app_type, "apilevel": "40740", "productids": [199]})
+
+    [record] = response.json()["data"]
+    assert _source_from_proxied_url(record["url"]) == expected
+
+
+def test_app_plugin_ios_falls_back_to_android_catalog_from_older_imports(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    _write_app_plugin_snapshot(supervisor, {"appplugin": _app_plugin_catalog(ANDROID_ZIP)})
+    client = TestClient(supervisor.app)
+
+    response = client.post("/api/v1/appplugin", json={"type": 1, "productids": [199]})
+
+    [record] = response.json()["data"]
+    assert _source_from_proxied_url(record["url"]) == ANDROID_ZIP
+
+
+def _app_plugin_record(product_id: int, url: str) -> dict:
+    return {"version": 6846, "url": url, "pluginLevel": 3002, "productid": product_id, "apilevel": 10030}
+
+
+IOS_ONLY_ZIP = "https://app-files.roborock.com/iot/plugin/ios-only.zip"
+ANDROID_ONLY_ZIP = "https://app-files.roborock.com/iot/plugin/android-only.zip"
+ANDROID_23_ZIP = "https://app-files.roborock.com/iot/plugin/android-23.zip"
+
+
+def _ios_app_plugin_client(tmp_path: Path) -> TestClient:
+    # Product 199 is in both catalogs, and 300 is only in the iOS catalog. Products 23
+    # and 4242 are only in the Android catalog. The built-in list also has 23.
+    supervisor = _build_supervisor(tmp_path)
+    _write_app_plugin_snapshot(
+        supervisor,
+        {
+            "appplugin": {
+                "data": [
+                    _app_plugin_record(199, ANDROID_ZIP),
+                    _app_plugin_record(23, ANDROID_23_ZIP),
+                    _app_plugin_record(4242, ANDROID_ONLY_ZIP),
+                ]
+            },
+            "appplugin_ios": {"data": [_app_plugin_record(199, IOS_ZIP), _app_plugin_record(300, IOS_ONLY_ZIP)]},
+        },
+    )
+    return TestClient(supervisor.app)
+
+
+def _app_plugin_sources(payload: dict) -> list[tuple[int, str]]:
+    assert payload["code"] == 200
+    return [(item["productid"], _source_from_proxied_url(item["url"])) for item in payload["data"]]
+
+
+def test_app_plugin_ios_answers_requested_ids_from_ios_catalog(tmp_path: Path) -> None:
+    client = _ios_app_plugin_client(tmp_path)
+
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [199], "type": 1})
+
+    assert _app_plugin_sources(response.json()) == [(199, IOS_ZIP)]
+
+
+def test_app_plugin_ios_ignores_android_catalog_if_ios_catalog_exists(tmp_path: Path) -> None:
+    from https_server.routes.plugin import common as plugin_common
+
+    client = _ios_app_plugin_client(tmp_path)
+    [built_in_23] = [record for record in plugin_common.APPPLUGIN_LIST if record["productid"] == 23]
+
+    # The iOS catalog replaces the whole Android catalog. So an id that only the
+    # Android catalog has gets the built-in record, or nothing.
+    android_only = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [4242], "type": 1})
+    built_in = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23], "type": 1})
+
+    assert _app_plugin_sources(android_only.json()) == []
+    assert _app_plugin_sources(built_in.json()) == [(23, built_in_23["url"])]
+
+
+def test_app_plugin_ios_answers_no_plugin_for_unmatched_product_ids(tmp_path: Path) -> None:
+    client = _ios_app_plugin_client(tmp_path)
+
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [659231], "type": 1})
+
+    assert _app_plugin_sources(response.json()) == []
+
+
+def test_app_plugin_ios_answers_full_ios_catalog_without_product_ids(tmp_path: Path) -> None:
+    client = _ios_app_plugin_client(tmp_path)
+
+    no_ids = client.post("/api/v1/appplugin", json={"apilevel": 10046, "type": 1})
+    empty_ids = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [], "type": 1})
+
+    assert _app_plugin_sources(no_ids.json()) == [(199, IOS_ZIP), (300, IOS_ONLY_ZIP)]
+    assert _app_plugin_sources(empty_ids.json()) == [(199, IOS_ZIP), (300, IOS_ONLY_ZIP)]

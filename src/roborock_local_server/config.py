@@ -44,6 +44,22 @@ class StorageConfig:
 
 
 @dataclass(frozen=True)
+class LoggingConfig:
+    max_size_mb: int = 10
+    backup_count: int = 3
+
+    def __post_init__(self) -> None:
+        for name, minimum, maximum in (("max_size_mb", 1, 1024), ("backup_count", 0, 20)):
+            value = getattr(self, name)
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ValueError(f"logging.{name} must be an integer between {minimum} and {maximum}")
+
+    @property
+    def max_bytes(self) -> int:
+        return self.max_size_mb * 1024 * 1024
+
+
+@dataclass(frozen=True)
 class TlsConfig:
     mode: str
     base_domain: str
@@ -72,12 +88,31 @@ class AdminConfig:
 
 
 @dataclass(frozen=True)
+class TurnConfig:
+    """TURN/STUN server advertised to the robot for camera (live video) sessions.
+
+    ``provided`` starts coturn in the container; ``external`` advertises an
+    existing relay. ``disabled`` leaves the camera route on its catchall.
+    """
+
+    mode: str = "disabled"
+    host: str = ""
+    port: int = 3478
+    username: str = ""
+    password: str = ""
+    realm: str = ""
+    ttl: int = 86400
+
+
+@dataclass(frozen=True)
 class AppConfig:
     network: NetworkConfig
     broker: BrokerConfig
     storage: StorageConfig
     tls: TlsConfig
     admin: AdminConfig
+    turn: TurnConfig = TurnConfig()
+    logging: LoggingConfig = LoggingConfig()
 
 
 @dataclass(frozen=True)
@@ -221,8 +256,11 @@ def load_config(path: str | Path) -> AppConfig:
     network = _get_section(parsed, "network")
     broker = _get_section(parsed, "broker")
     storage = _get_section(parsed, "storage")
+    logging = _get_section(parsed, "logging")
     tls = _get_section(parsed, "tls")
     admin = _get_section(parsed, "admin")
+    turn = _get_section(parsed, "turn")
+    turn_mode = str(turn.get("mode", "external" if _as_bool(turn.get("enabled"), False) else "disabled")).strip().lower()
     broker_mode = str(broker.get("mode", "embedded")).strip().lower()
     if broker_mode not in {"embedded", "external"}:
         raise ValueError("broker.mode must be 'embedded' or 'external'")
@@ -286,6 +324,10 @@ def load_config(path: str | Path) -> AppConfig:
         storage=StorageConfig(
             data_dir=str(storage.get("data_dir", "/data")).strip() or "/data",
         ),
+        logging=LoggingConfig(
+            max_size_mb=logging.get("max_size_mb", LoggingConfig.max_size_mb),
+            backup_count=logging.get("backup_count", LoggingConfig.backup_count),
+        ),
         tls=TlsConfig(
             mode=tls_mode,
             base_domain=(
@@ -317,6 +359,15 @@ def load_config(path: str | Path) -> AppConfig:
                 "admin.protocol_login_pin_hash",
             ),
         ),
+        turn=TurnConfig(
+            mode=turn_mode,
+            host=str(turn.get("host", "")).strip(),
+            port=_as_port(turn.get("port"), "turn.port", 3478),
+            username=str(turn.get("username", "") or ("roborock" if turn_mode == "provided" else "")).strip(),
+            password=str(turn.get("password", "")).strip(),
+            realm=str(turn.get("realm", "") or turn.get("host", "")).strip(),
+            ttl=_as_int(turn.get("ttl"), "turn.ttl", 86400),
+        ),
     )
 
     if len(config.admin.session_secret) < 24:
@@ -326,6 +377,20 @@ def load_config(path: str | Path) -> AppConfig:
 
     if config.broker.mode == "external":
         _require_non_empty(config.broker.host, "broker.host")
+
+    if config.turn.mode not in {"disabled", "provided", "external"}:
+        raise ValueError("turn.mode must be 'disabled', 'provided', or 'external'")
+    if config.turn.mode != "disabled":
+        _require_non_empty(config.turn.host, "turn.host")
+        _require_non_empty(config.turn.username, "turn.username")
+        _require_non_empty(config.turn.password, "turn.password")
+        _require_non_empty(config.turn.realm, "turn.realm")
+        if config.turn.ttl <= 0:
+            raise ValueError("turn.ttl must be greater than 0")
+    if config.turn.mode == "provided":
+        for name in ("username", "password", "realm"):
+            if any(character in getattr(config.turn, name) for character in "\r\n:="):
+                raise ValueError(f"turn.{name} cannot contain newlines, colons, or equals signs in provided mode")
 
     # In external_tls the proxy terminates TLS and presents the cert to clients,
     # so the server itself needs no certificate material.

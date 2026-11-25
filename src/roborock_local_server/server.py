@@ -30,6 +30,8 @@ from .product_registry import resolve_product_metadata
 from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIRED_ONBOARDING_STEPS
 from .cloud import CloudImportManager
 from .config import AppConfig, AppPaths, load_config, resolve_paths
+from .log_retention import configure_jsonl_logging
+from .turn_relay import EmbeddedTurnRelay
 from .standalone_admin import register_standalone_admin_routes
 from .backend import (
     MqttTlsProxy,
@@ -50,13 +52,20 @@ from .backend import (
     start_broker,
     strip_roborock_prefix,
 )
+from shared.inventory_io import atomic_write_inventory, inventory_transaction
 from shared.protocol_auth import ProtocolAuthStore
+from shared.schedule_runner import ScheduleRunner
+from shared.native_schedule_sync import NativeScheduleSync
+from shared.timer_rpc import TimerRpcInterceptor
+from https_server.routes.user.devices import jobs as schedule_jobs
+from https_server.routes.user.scene import validity as scene_validity
 from https_server.routes.auth.service import (
     build_login_data_response,
     cloud_login_data_required_response,
     load_cloud_full_snapshot,
     with_current_server_urls,
 )
+from .bundled_backend.shared.device_snapshot_store import DeviceSnapshotStore, is_mower_model
 from .bundled_backend.shared.zone_ranges_store import ZoneRangesStore
 from .security import AdminSessionManager, verify_password
 
@@ -353,10 +362,13 @@ class ReleaseSupervisor:
             self.root_logger.addHandler(handler)
 
         self._broker: Any | None = None
+        self._turn_relay = EmbeddedTurnRelay(config.turn, paths.state_dir / "turn_relay")
         self._topic_bridge: MqttTopicBridge | None = None
         self._mqtt_proxy: MqttTlsProxy | None = None
         self._http_server: ManagedFastApiServer | None = None
         self._renew_task: asyncio.Task[None] | None = None
+        self._schedule_task: asyncio.Task[None] | None = None
+        self._schedule_sync_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
 
         self.certificate_manager = CertificateManager(config=config, paths=paths)
@@ -373,7 +385,6 @@ class ReleaseSupervisor:
             session_store_path=self.paths.protocol_auth_sessions_path,
         )
 
-        self.loggers = self._setup_loggers()
         if not self.paths.device_key_state_path.exists():
             self.paths.device_key_state_path.parent.mkdir(parents=True, exist_ok=True)
             self.paths.device_key_state_path.write_text('{"devices":{}}\n', encoding="utf-8")
@@ -434,12 +445,18 @@ class ReleaseSupervisor:
             mqtt_backend_port=self.config.broker.port,
         )
         self.runtime_credentials.sync_inventory()
-        recovered_device_passwords = self.runtime_credentials.backfill_device_mqtt_passwords(
-            self.paths.runtime_dir / "mqtt_server.log"
-        )
-        if recovered_device_passwords:
-            self.root_logger.info("Recovered %d device MQTT password(s) from mqtt_server.log", recovered_device_passwords)
 
+        # Recover legacy state before retention trims oversized files or removes
+        # backups, including when the user lowers the configured limits.
+        zone_ranges_store = self._init_zone_ranges_store()
+        self.loggers = self._setup_loggers()
+        for path in (self.paths.http_jsonl_path, self.paths.mqtt_jsonl_path):
+            configure_jsonl_logging(
+                path, max_bytes=self.config.logging.max_bytes,
+                backup_count=self.config.logging.backup_count,
+            )
+
+        snapshot_store = DeviceSnapshotStore(self.paths.http_jsonl_path.parent)
         self.context = ServerContext(
             api_host=self.config.network.stack_fqdn,
             mqtt_host=self.config.network.stack_fqdn,
@@ -460,11 +477,47 @@ class ReleaseSupervisor:
             bootstrap_encryption_enabled=True,
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
-            zone_ranges_store=self._init_zone_ranges_store(),
+            zone_ranges_store=zone_ranges_store,
+            snapshot_store=snapshot_store,
             timezone=self.config.network.timezone or None,
+            turn_enabled=self.config.turn.mode != "disabled",
+            turn_host=self.config.turn.host or self.config.network.stack_fqdn,
+            turn_port=self.config.turn.port,
+            turn_username=self.config.turn.username,
+            turn_password=self.config.turn.password,
+            turn_realm=self.config.turn.realm or self.config.turn.host or self.config.network.stack_fqdn,
+            turn_ttl=self.config.turn.ttl,
         )
+        # A robot that went quiet before this store existed still has its last words in the MQTT log.
+        threading.Thread(
+            target=self._seed_snapshots, args=(snapshot_store,), daemon=True, name="snapshot-seed",
+        ).start()
         self.endpoint_rules = default_endpoint_rules()
+        self.schedule_sync = NativeScheduleSync(self.context)
         self.app = self._create_app()
+
+    def _seed_snapshots(self, store: DeviceSnapshotStore) -> None:
+        def resolve_duid(did: str) -> str:
+            device = self.runtime_credentials.resolve_device(did=did)
+            return str(device.get("duid") or "") if device else ""
+
+        def is_mower(duid: str) -> bool:
+            device = self.runtime_credentials.resolve_device(duid=duid)
+            return is_mower_model(device.get("model") if device else "")
+
+        def is_own_topic(topic: str) -> bool:
+            # rr/d/i/<did>/<username>: the username must be the one the device with that did logs in with.
+            parts = topic.split("/")
+            device = self.runtime_credentials.resolve_device_by_mqtt_username(parts[4]) if len(parts) >= 5 else None
+            return device is not None and str(device.get("did") or "") == parts[3]
+
+        try:
+            added = store.seed_from_mqtt_jsonl(self.paths.mqtt_jsonl_path, resolve_duid, is_mower, is_own_topic)
+        except Exception:
+            self.root_logger.exception("Could not seed last-known device state from the MQTT log")
+            return
+        if added:
+            self.root_logger.info("Seeded last-known state for %d device(s) from the MQTT log", added)
 
     def _init_zone_ranges_store(self) -> ZoneRangesStore:
         store = ZoneRangesStore(self.paths.http_jsonl_path.parent)
@@ -477,12 +530,12 @@ class ReleaseSupervisor:
     def _setup_loggers(self) -> dict[str, logging.Logger]:
         self.paths.runtime_dir.mkdir(parents=True, exist_ok=True)
         return {
-            "api": setup_file_logger("api", self.paths.runtime_dir / "api_server.log"),
-            "iot": setup_file_logger("iot", self.paths.runtime_dir / "iot_server.log"),
-            "wood": setup_file_logger("wood", self.paths.runtime_dir / "wood_server.log"),
-            "https": setup_file_logger("https", self.paths.runtime_dir / "https_server.log"),
-            "mqtt": setup_file_logger("mqtt", self.paths.runtime_dir / "mqtt_server.log"),
-            "unknown": setup_file_logger("unknown", self.paths.runtime_dir / "unknown_server.log"),
+            name: setup_file_logger(
+                name, self.paths.runtime_dir / f"{name}_server.log",
+                max_bytes=self.config.logging.max_bytes,
+                backup_count=self.config.logging.backup_count,
+            )
+            for name in ("api", "iot", "wood", "https", "mqtt", "unknown")
         }
 
     def _derive_bootstrap_credentials(self) -> dict[str, str]:
@@ -649,6 +702,7 @@ class ReleaseSupervisor:
             "/api/v1/appplugin",
             "/api/v1/plugins",
             "/api/v4/agreement/latest",
+            "/api/v4/app/agreement/latest",
         }
 
     @classmethod
@@ -923,6 +977,7 @@ class ReleaseSupervisor:
                 body_params,
                 "code",
                 "verifyCode",
+                "verifycode",
                 "emailCode",
                 "smsCode",
             )
@@ -1215,7 +1270,10 @@ class ReleaseSupervisor:
             if not authenticated:
                 route_name = f"{required_auth}_auth_failed"
                 status_code, response_payload = self._protocol_auth_failure_response(auth_reason, required_auth)
+                if scene_validity.match(clean_path, request.method):
+                    response_payload = scene_validity.error_response(unauthorized=True)
                 entry["route"] = route_name
+                entry["auth_reason"] = auth_reason
                 entry["response_json"] = response_payload
                 try:
                     self.runtime_state.record_http_event(
@@ -1234,11 +1292,12 @@ class ReleaseSupervisor:
                     logger.warning("runtime_state record_http_event failed: %s", exc)
                 append_jsonl(self.context.http_jsonl, entry)
                 logger.info(
-                    "%s %s host=%s route=%s status=%d body_sha256=%s",
+                    "%s %s host=%s route=%s reason=%s status=%d body_sha256=%s",
                     request.method,
                     clean_path,
                     host or "-",
                     route_name,
+                    auth_reason,
                     status_code,
                     body_sha256[:16],
                 )
@@ -1325,16 +1384,30 @@ class ReleaseSupervisor:
             )
             return response
 
-        route_name, response_payload = resolve_route(
-            rules=self.endpoint_rules,
-            context=self.context,
-            clean_path=clean_path,
-            query_params=query_params,
-            body_params=body_params,
-            method=request.method,
-        )
+        if schedule_jobs.match_update(clean_path, request.method):
+            route_name = "update_schedule"
+            response_payload = await schedule_jobs.build_update_synced(
+                self.context, query_params, body_params, clean_path, self.schedule_sync,
+            )
+        else:
+            route_name, response_payload = resolve_route(
+                rules=self.endpoint_rules,
+                context=self.context,
+                clean_path=clean_path,
+                query_params=query_params,
+                body_params=body_params,
+                method=request.method,
+            )
         entry["route"] = route_name
-        entry["response_json"] = response_payload
+        if route_name == "fw_createca":
+            # Persist metadata, but retain the exact credential response sent to firmware.
+            entry["response_json"] = {
+                key: ({field: "<redacted>" if field in {"pwd", "credential"} else value
+                       for field, value in part.items()} if isinstance(part, dict) else part)
+                for key, part in response_payload.items()
+            }
+        else:
+            entry["response_json"] = response_payload
         try:
             self.runtime_state.record_http_event(
                 event_time=str(entry["time"]),
@@ -1370,15 +1443,27 @@ class ReleaseSupervisor:
             route_name,
             body_sha256[:16],
         )
-        return JSONResponse(response_payload)
+        status_code = 400 if route_name == "put_scene_validity" and response_payload.get("status") == "BAD_REQUEST" else 200
+        return JSONResponse(response_payload, status_code=status_code)
+
+    def _refresh_turn_health(self) -> None:
+        if self.config.turn.mode != "provided":
+            return
+        self.runtime_state.set_service(
+            "turn_relay", running=self._turn_relay.running,
+            required=self.config.turn.mode == "provided", enabled=self.config.turn.mode == "provided",
+            detail=f"udp:{self.config.turn.host}:{self.config.turn.port}",
+        )
 
     def _status_payload(self) -> dict[str, Any]:
+        self._refresh_turn_health()
         health = self.runtime_state.health_snapshot()
         merged_vacuums = self._vacuums_payload()["vacuums"]
         health["all_vacuums"] = merged_vacuums
         health["connected_vacuums"] = [vac for vac in merged_vacuums if vac.get("connected")]
         return {
             "health": health,
+            "turn": {"mode": self.config.turn.mode, "host": self.config.turn.host, "port": self.config.turn.port},
             "auth": self._auth_payload(),
             "pairing": self.runtime_state.pairing_snapshot(),
             "support": PROJECT_SUPPORT,
@@ -1410,6 +1495,7 @@ class ReleaseSupervisor:
                     "duid": str(vac.get("duid") or "").strip(),
                     "did": str(vac.get("did") or "").strip(),
                     "name": str(vac.get("name") or vac.get("duid") or "").strip(),
+                    "model": str(vac.get("model") or "").strip(),
                     "connected": bool(vac.get("connected")),
                     "onboarding": {
                         "has_public_key": bool(onboarding.get("has_public_key")),
@@ -1643,97 +1729,130 @@ class ReleaseSupervisor:
         product_id: str,
         local_key: str,
     ) -> bool:
-        inventory_id = (duid or did).strip()
-        if not inventory_id:
-            return False
-        inventory = _load_inventory(self.paths.inventory_path)
-        devices = inventory.get("devices")
-        if not isinstance(devices, list):
-            devices = []
-        identifiers = {value for value in (inventory_id, did, duid) if value}
-        meta = resolve_product_metadata(
-            model=model,
-            custom_name=name,
-            custom_registry_path=self.paths.runtime_dir / "product_registry.custom.json",
-        )
-        resolved_name = meta["product_name"]
-        resolved_model = meta["model"]
-        resolved_category = meta["category"]
-        resolved_product_id = product_id or meta["product_id"]
-        resolved_schema = meta["schema"]
-
-        for existing in devices:
-            if not isinstance(existing, dict):
-                continue
-            existing_ids = {
-                str(existing.get(key) or "").strip()
-                for key in ("duid", "did", "device_id", "deviceId")
-            }
-            if identifiers & existing_ids:
-                if existing.get("source") != "onboarding":
-                    # Cloud-imported records are authoritative; never rewrite them here.
-                    return False
-                changed = False
-                if name and (not existing.get("name") or existing.get("name") in identifiers):
-                    existing["name"] = resolved_name
-                    changed = True
-                if not existing.get("product_name"):
-                    existing["product_name"] = resolved_name
-                    changed = True
-                if model and not existing.get("model"):
-                    existing["model"] = resolved_model
-                    changed = True
-                if not existing.get("schema"):
-                    existing["schema"] = resolved_schema
-                    changed = True
-                if not existing.get("category"):
-                    existing["category"] = resolved_category
-                    changed = True
-                if changed:
-                    self.paths.inventory_path.write_text(
-                        json.dumps(inventory, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
+        with inventory_transaction(self.paths.inventory_path):
+            inventory_id = (duid or did).strip()
+            if not inventory_id:
                 return False
-        # Unify the runtime-credentials record so its duid matches the inventory id while
-        # keeping the already-minted localKey. sync_inventory matches on duid only, so an
-        # unset duid would otherwise make it create a duplicate device with a fresh key.
-        self.runtime_credentials.ensure_device(
-            did=did,
-            duid=inventory_id,
-            name=resolved_name,
-            model=resolved_model,
-            product_id=resolved_product_id,
-            assign_localkey=False,
-        )
-        devices.append(
-            {
-                "duid": inventory_id,
-                "did": did,
-                "name": resolved_name,
-                "product_name": resolved_name,
-                "model": resolved_model,
-                "category": resolved_category,
-                "product_id": resolved_product_id,
-                "local_key": local_key,
-                "source": "onboarding",
-                "schema": resolved_schema,
-            }
-        )
-        inventory["devices"] = devices
-        if not isinstance(inventory.get("home"), dict):
-            inventory["home"] = {"name": "Local Home", "rooms": [{"id": 1, "name": "Living Room"}]}
-        self.paths.inventory_path.write_text(
-            json.dumps(inventory, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        self.root_logger.info(
-            "persisted onboarded 'new vacuum' to inventory: id=%s did=%s model=%s",
-            inventory_id,
-            did or "-",
-            model or "unknown",
-        )
-        return True
+            inventory = _load_inventory(self.paths.inventory_path)
+            devices = inventory.get("devices")
+            if not isinstance(devices, list):
+                devices = []
+            identifiers = {value for value in (inventory_id, did, duid) if value}
+            meta = resolve_product_metadata(
+                model=model,
+                custom_name=name,
+                custom_registry_path=self.paths.runtime_dir / "product_registry.custom.json",
+            )
+            resolved_name = meta["product_name"]
+            resolved_model = meta["model"]
+            resolved_category = meta["category"]
+            resolved_product_id = product_id or meta["product_id"]
+            resolved_schema = meta["schema"]
+
+            for existing in devices:
+                if not isinstance(existing, dict):
+                    continue
+                existing_ids = {
+                    str(existing.get(key) or "").strip()
+                    for key in ("duid", "did", "device_id", "deviceId")
+                }
+                if identifiers & existing_ids:
+                    if existing.get("source") != "onboarding":
+                        # Cloud-imported records are authoritative; never rewrite them here.
+                        return False
+                    changed = False
+                    if name and (not existing.get("name") or existing.get("name") in identifiers):
+                        existing["name"] = resolved_name
+                        changed = True
+                    if not existing.get("product_name"):
+                        existing["product_name"] = resolved_name
+                        changed = True
+                    if model and not existing.get("model"):
+                        existing["model"] = resolved_model
+                        changed = True
+                    if not existing.get("schema"):
+                        existing["schema"] = resolved_schema
+                        changed = True
+                    if not existing.get("category"):
+                        existing["category"] = resolved_category
+                        changed = True
+                    if changed:
+                        atomic_write_inventory(self.paths.inventory_path, inventory)
+                    return False
+            # Unify the runtime-credentials record so its duid matches the inventory id while
+            # keeping the already-minted localKey. sync_inventory matches on duid only, so an
+            # unset duid would otherwise make it create a duplicate device with a fresh key.
+            self.runtime_credentials.ensure_device(
+                did=did,
+                duid=inventory_id,
+                name=resolved_name,
+                model=resolved_model,
+                product_id=resolved_product_id,
+                assign_localkey=False,
+            )
+            devices.append(
+                {
+                    "duid": inventory_id,
+                    "did": did,
+                    "name": resolved_name,
+                    "product_name": resolved_name,
+                    "model": resolved_model,
+                    "category": resolved_category,
+                    "product_id": resolved_product_id,
+                    "local_key": local_key,
+                    "source": "onboarding",
+                    "schema": resolved_schema,
+                }
+            )
+            inventory["devices"] = devices
+            if not isinstance(inventory.get("home"), dict):
+                inventory["home"] = {"name": "Local Home", "rooms": [{"id": 1, "name": "Living Room"}]}
+            atomic_write_inventory(self.paths.inventory_path, inventory)
+            self.root_logger.info(
+                "persisted onboarded 'new vacuum' to inventory: id=%s did=%s model=%s",
+                inventory_id,
+                did or "-",
+                model or "unknown",
+            )
+            return True
+
+    def record_reported_firmware(self, device_id: str, firmware_version: str) -> bool:
+        """Store the firmware version a blind-onboarded vacuum reports over MQTT.
+
+        Onboarded records have no cloud ``fv``, so home data would otherwise fall back to a
+        placeholder. Cloud-imported records stay authoritative and are never rewritten here.
+        """
+        normalized_id = str(device_id or "").strip()
+        normalized_version = str(firmware_version or "").strip()
+        if not normalized_id or not normalized_version:
+            return False
+        with inventory_transaction(self.paths.inventory_path):
+            inventory = _load_inventory(self.paths.inventory_path)
+            devices = inventory.get("devices")
+            if not isinstance(devices, list):
+                return False
+            for existing in devices:
+                if not isinstance(existing, dict):
+                    continue
+                existing_ids = {
+                    str(existing.get(key) or "").strip()
+                    for key in ("duid", "did", "device_id", "deviceId")
+                }
+                if normalized_id not in existing_ids:
+                    continue
+                if existing.get("source") != "onboarding":
+                    return False
+                if str(existing.get("fv") or "").strip() == normalized_version:
+                    return False
+                existing["fv"] = normalized_version
+                atomic_write_inventory(self.paths.inventory_path, inventory)
+                self.root_logger.info(
+                    "recorded firmware %s reported by onboarded device id=%s",
+                    normalized_version,
+                    normalized_id,
+                )
+                return True
+        return False
 
     def clear_onboarding_session(self, *, session_id: str) -> dict[str, Any]:
         snapshot = self.runtime_state.onboarding_session_snapshot()
@@ -1759,6 +1878,7 @@ class ReleaseSupervisor:
                 "last_cloud_request": None,
                 "note": "Runtime state tracking is disabled.",
             }
+        self._refresh_turn_health()
         return runtime_state.health_snapshot()
 
     def _ui_vacuums_payload(self) -> dict[str, Any]:
@@ -1860,8 +1980,10 @@ class ReleaseSupervisor:
             runtime_state=self.runtime_state,
             runtime_credentials=self.runtime_credentials,
             zone_ranges_store=self.context.zone_ranges_store,
+            snapshot_store=self.context.snapshot_store,
             tls_enabled=self._uses_local_tls(),
             on_onboarding_credentials_learned=self.persist_active_onboarding_device,
+            on_device_firmware_reported=self.record_reported_firmware,
         )
         self._mqtt_proxy.start()
         self.runtime_state.set_service("mqtt_tls_proxy", running=True, required=True, enabled=True)
@@ -1897,6 +2019,15 @@ class ReleaseSupervisor:
             self.certificate_manager.ensure_certificate()
         self.refresh_inventory_state()
 
+        if self.config.turn.mode == "provided":
+            try:
+                self._turn_relay.start()
+                self.root_logger.info("Embedded TURN relay listening on UDP %d", self.config.turn.port)
+            except Exception as exc:
+                self._turn_relay.stop()
+                self.root_logger.warning("Embedded TURN relay failed for %s:%d: %s; HTTPS and MQTT will continue", self.config.turn.host, self.config.turn.port, exc)
+        self._refresh_turn_health()
+
         if self.config.broker.mode == "embedded":
             self._broker = await start_broker(
                 self.config.broker.port,
@@ -1910,12 +2041,17 @@ class ReleaseSupervisor:
             self.runtime_state.set_service("mqtt_backend_broker", running=True, required=True, enabled=True)
 
         if self.config.broker.enable_topic_bridge:
+            timer_rpc = TimerRpcInterceptor(self.context, default_timezone=self.config.network.timezone)
             self._topic_bridge = MqttTopicBridge(
                 host=self.config.broker.host,
                 port=self.config.broker.port,
                 logger=self.loggers["mqtt"],
                 runtime_state=self.runtime_state,
                 inventory_path=self.paths.inventory_path,
+                request_observer=self.schedule_sync.observe_request,
+                request_interceptor=timer_rpc,
+                response_rewriter=timer_rpc.merge_response,
+                request_fallback=timer_rpc.request_fallback,
             )
             await self._topic_bridge.start()
             self.runtime_state.set_service("mqtt_topic_bridge", running=True, required=False, enabled=True)
@@ -1945,8 +2081,32 @@ class ReleaseSupervisor:
         if self._uses_local_tls() and self.config.tls.mode == "cloudflare_acme":
             self._renew_task = asyncio.create_task(self._renew_loop(), name="tls-renew-loop")
 
+        schedule_runner = ScheduleRunner(self.context, default_timezone=self.config.network.timezone)
+        self._schedule_sync_task = asyncio.create_task(
+            self.schedule_sync.run(self._stop_event), name="native-schedule-sync",
+        )
+        self._schedule_task = asyncio.create_task(
+            schedule_runner.run(self._stop_event),
+            name="schedule-runner",
+        )
+
     async def stop(self) -> None:
         self._stop_event.set()
+        self._turn_relay.stop()
+        self._refresh_turn_health()
+        if self._schedule_sync_task is not None:
+            self._schedule_sync_task.cancel()
+            try:
+                await self._schedule_sync_task
+            except asyncio.CancelledError:
+                pass
+            self._schedule_sync_task = None
+        if self._schedule_task is not None:
+            self._schedule_task.cancel()
+            try:
+                await self._schedule_task
+            except asyncio.CancelledError:
+                pass
         if self._renew_task is not None:
             self._renew_task.cancel()
             try:
@@ -1957,6 +2117,8 @@ class ReleaseSupervisor:
             self.runtime_state.set_service("mqtt_tls_proxy", running=False, required=True, enabled=True)
             self._mqtt_proxy.stop()
             self._mqtt_proxy = None
+        if self.context.snapshot_store is not None:
+            self.context.snapshot_store.flush()
         if self._topic_bridge is not None:
             self.runtime_state.set_service(
                 "mqtt_topic_bridge",
@@ -1976,8 +2138,6 @@ class ReleaseSupervisor:
             self._broker = None
 
     async def serve_forever(self) -> int:
-        await self.start()
-
         def request_shutdown() -> None:
             if not self._stop_event.is_set():
                 self._stop_event.set()
@@ -1990,6 +2150,7 @@ class ReleaseSupervisor:
                 pass
 
         try:
+            await self.start()
             await self._stop_event.wait()
         finally:
             await self.stop()

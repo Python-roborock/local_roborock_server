@@ -13,6 +13,10 @@ from shared.data_helpers import as_bool, as_int, default_home_id, default_produc
 from shared.http_helpers import wrap_response
 from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory, write_inventory
 
+from .routes.api.v1.agreement import build_check_app_agreement as _build_check_app_agreement_v1
+from .routes.api.v1.agreement import match_check_app_agreement as _match_check_app_agreement_v1
+from .routes.api.v1.agreement import build_product_agreement_and_policy as _build_product_agreement_and_policy_v1
+from .routes.api.v1.agreement import match_product_agreement_and_policy as _match_product_agreement_and_policy_v1
 from .routes.api.v1.appfeatureplugin import build as _build_app_feature_plugin
 from .routes.api.v1.appfeatureplugin import match as _match_app_feature_plugin
 from .routes.api.v1.appconfig import build as _build_app_config_v1
@@ -67,8 +71,12 @@ from .routes.api.v5.product import build as _build_get_products_v5
 from .routes.api.v5.product import match as _match_get_products_v5
 from .routes.bootstrap.catchall import build as _build_catchall
 from .routes.bootstrap.catchall import match as _match_catchall
+from .routes.bootstrap.device_info import build as _build_device_info
+from .routes.bootstrap.device_info import match as _match_device_info
 from .routes.fw.check import build as _build_fw_check
 from .routes.fw.check import match as _match_fw_check
+from .routes.fw.createca import build as _build_fw_createca
+from .routes.fw.createca import match as _match_fw_createca
 from .routes.bootstrap.location import build as _build_location
 from .routes.bootstrap.location import match as _match_location
 from .routes.bootstrap.nc_prepare import build as _build_nc_prepare
@@ -103,14 +111,24 @@ from .routes.auth.login import match_login_password_submit as _match_login_passw
 from .routes.auth.login import match_login_sms_code_send as _match_login_sms_code_send_v1
 from .routes.user.devices.detail import build as _build_get_device
 from .routes.user.devices.detail import build_extra as _build_get_device_extra
+from .routes.user.devices.detail import build_put as _build_put_device
 from .routes.user.devices.detail import match as _match_get_device
+from .routes.user.devices.detail import match_put as _match_put_device
 from .routes.user.devices.detail import match_extra as _match_get_device_extra
 from .routes.user.deviceshare import build_received_devices as _build_get_received_devices
 from .routes.user.deviceshare import build_rooms as _build_get_shared_device_rooms
 from .routes.user.deviceshare import match_received_devices as _match_get_received_devices
 from .routes.user.deviceshare import match_rooms as _match_get_shared_device_rooms
 from .routes.user.devices.jobs import build as _build_get_schedules
+from .routes.user.devices.jobs import build_create as _build_create_schedule
+from .routes.user.devices.jobs import build_delete as _build_delete_schedule
+from .routes.user.devices.jobs import build_update as _build_update_schedule
 from .routes.user.devices.jobs import match as _match_get_schedules
+from .routes.user.devices.jobs import match_create as _match_create_schedule
+from .routes.user.devices.jobs import match_delete as _match_delete_schedule
+from .routes.user.devices.jobs import match_update as _match_update_schedule
+from .routes.user.devices.last_known import build as _build_last_known
+from .routes.user.devices.last_known import match as _match_last_known
 from .routes.user.devices.newadd import build as _build_add_device
 from .routes.user.devices.newadd import match as _match_add_device
 from .routes.user.homes.item import build as _build_get_home_data
@@ -134,6 +152,8 @@ from .routes.user.scene.item import match_put_name as _match_put_scene_name
 from .routes.user.scene.item import match_put_param as _match_put_scene_param
 from .routes.user.scene.order import build as _build_get_scene_order
 from .routes.user.scene.order import match as _match_get_scene_order
+from .routes.user.scene.validity import build as _build_put_scene_validity
+from .routes.user.scene.validity import match as _match_put_scene_validity
 from .routes.v2.user.scene import build as _build_post_scene_create
 from .routes.v2.user.scene import match as _match_post_scene_create
 
@@ -565,6 +585,12 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("country_version", _match_country_version_v1, _build_country_version_v1),
         EndpointRule("country_list", _match_country_list_v1, _build_country_list_v1),
         EndpointRule("agreement_latest_v4", _match_agreement_latest_v4, _build_agreement_latest_v4),
+        EndpointRule("check_app_agreement_v1", _match_check_app_agreement_v1, _build_check_app_agreement_v1),
+        EndpointRule(
+            "product_agreement_and_policy_v1",
+            _match_product_agreement_and_policy_v1,
+            _build_product_agreement_and_policy_v1,
+        ),
         EndpointRule("get_home_detail", _match_get_home_detail_v1, _build_get_home_detail_v1),
         EndpointRule("user_info", _match_user_info_v1, _build_user_info_v1),
         EndpointRule("app_config", _match_app_config_v1, _build_app_config_v1),
@@ -584,11 +610,17 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("get_scene_order", _match_get_scene_order, _build_get_scene_order),
         EndpointRule("put_scene_name", _match_put_scene_name, _build_put_scene_name),
         EndpointRule("put_scene_param", _match_put_scene_param, _build_put_scene_param),
+        EndpointRule("put_scene_validity", _match_put_scene_validity, _build_put_scene_validity),
         EndpointRule("execute_scene", _match_execute_scene, _build_execute_scene),
         EndpointRule("delete_scene", _match_delete_scene, _build_delete_scene),
+        EndpointRule("put_device", _match_put_device, _build_put_device),
         EndpointRule("get_device", _match_get_device, _build_get_device),
         EndpointRule("get_device_extra", _match_get_device_extra, _build_get_device_extra),
         EndpointRule("get_schedules", _match_get_schedules, _build_get_schedules),
+        EndpointRule("create_schedule", _match_create_schedule, _build_create_schedule),
+        EndpointRule("update_schedule", _match_update_schedule, _build_update_schedule),
+        EndpointRule("delete_schedule", _match_delete_schedule, _build_delete_schedule),
+        EndpointRule("get_device_last_known", _match_last_known, _build_last_known),
         EndpointRule("post_app_info", _match_post_app_info, _build_post_app_info),
         EndpointRule("get_inbox_latest", _match_get_inbox_latest, _build_get_inbox_latest),
         EndpointRule("get_products_v4", _match_get_products_v4, _build_get_products_v4),
@@ -601,6 +633,8 @@ def default_endpoint_rules() -> Sequence[EndpointRule]:
         EndpointRule("time", _match_time, _build_time),
         EndpointRule("location", _match_location, _build_location),
         EndpointRule("fw_check", _match_fw_check, _build_fw_check),
+        EndpointRule("fw_createca", _match_fw_createca, _build_fw_createca),
+        EndpointRule("device_info", _match_device_info, _build_device_info),
         EndpointRule("catchall", _match_catchall, _build_catchall),
     )
 

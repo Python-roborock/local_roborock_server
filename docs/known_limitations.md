@@ -2,8 +2,8 @@
 
 I have tried to copy over most functionality into this server, but some is not 100% completed. There are a few features I know are not currently working
 
-- Vacuum camera live streaming
+- Vacuum camera live streaming — available; see the [model-specific results](camera.md#reported-camera-results). Bootstrap, activation and audio support vary by firmware, and some reports require custom builds.
 - Firmware Updates
-- Schedules (Routines/Scenes do work though)
-- China-market devices do not work outside of China. Their firmware checks the region they are used in (via `rrcheck`), and after local onboarding they reject ordinary commands such as `get_status` with `-10002 / rrcheck access denied`. See [#81](https://github.com/Python-roborock/local_roborock_server/issues/81).
-    - Some users have gotten China-market vacuums working outside China on the official cloud by routing the robot's traffic through a VPN that exits in China (the robot's WAN IP is what matters, not the phone's). See [this comment](https://github.com/iobroker-community-adapters/ioBroker.mihome-vacuum/issues/842#issuecomment-1736230673). This has not been tested with this local server yet, so it may or may not help.
+- Schedules are experimental. A scheduled start has been reported on an S7; broader hardware compatibility, DST parity, and expired one-time jobs still need validation. See [schedule support](schedules.md). Routines/Scenes are separate.
+- China-market devices have model/firmware-specific region and access-renewal restrictions. Unresolved a143/a146/a96 reports reject ordinary commands with `-10002 / rrcheck access denied` after local onboarding. See [known failures](tested_vacuums.md#known-failures). Factory-firmware a184 success was reported with custom interception and compromised-intermediate certificates; it does not establish support through the standard setup or resolve those other reports.
+    - Some users report success with the official cloud through a China-exit VPN; see [this comment](https://github.com/iobroker-community-adapters/ioBroker.mihome-vacuum/issues/842#issuecomment-1736230673). A China VPN did not resolve the G30 local-server report [#161](https://github.com/Python-roborock/local_roborock_server/issues/161), so it is not an established general workaround here.

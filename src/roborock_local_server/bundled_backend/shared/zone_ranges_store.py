@@ -16,6 +16,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from roborock_local_server.log_retention import iter_log_lines
+
 
 _ZONE_RANGES_FILE = "zone_ranges.json"
 
@@ -117,33 +119,29 @@ class ZoneRangesStore:
 
         Returns the number of new entries added.
         """
-        if not mqtt_jsonl.exists():
-            return 0
         count_before = len(self._data)
-        try:
-            with mqtt_jsonl.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    decoded_messages = entry.get("decoded_messages")
-                    if not isinstance(decoded_messages, list):
-                        continue
-                    for decoded in decoded_messages:
-                        if not isinstance(decoded, dict):
-                            continue
-                        rpc = decoded.get("rpc")
-                        if isinstance(rpc, dict) and str(rpc.get("method") or "").strip() == "set_scenes_zones":
-                            self.merge_set_scenes_zones_request(rpc.get("params"))
-                        response_to = decoded.get("response_to")
-                        if isinstance(response_to, dict) and str(response_to.get("request_method") or "").strip() == "set_scenes_zones":
-                            self.merge_set_scenes_zones_response(
-                                request_params=response_to.get("request_params"),
-                                result=response_to.get("result"),
-                            )
-        except OSError:
-            pass
+        for line in iter_log_lines(mqtt_jsonl):
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            decoded_messages = entry.get("decoded_messages")
+            if not isinstance(decoded_messages, list):
+                continue
+            for decoded in decoded_messages:
+                if not isinstance(decoded, dict):
+                    continue
+                rpc = decoded.get("rpc")
+                if isinstance(rpc, dict) and str(rpc.get("method") or "").strip() == "set_scenes_zones":
+                    self.merge_set_scenes_zones_request(rpc.get("params"))
+                response_to = decoded.get("response_to")
+                if isinstance(response_to, dict) and str(response_to.get("request_method") or "").strip() == "set_scenes_zones":
+                    self.merge_set_scenes_zones_response(
+                        request_params=response_to.get("request_params"),
+                        result=response_to.get("result"),
+                    )
         return len(self._data) - count_before
 
     def merge_set_scenes_zones_response(

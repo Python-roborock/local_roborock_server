@@ -605,12 +605,22 @@
         "code": 200,
         "msg": "success",
         "data": [
-          900001,
-          900002
+          {
+            "duid": "anon-device-qrevo",
+            "sceneIds": [
+              900001,
+              900002
+            ]
+          }
         ],
         "result": [
-          900001,
-          900002
+          {
+            "duid": "anon-device-qrevo",
+            "sceneIds": [
+              900001,
+              900002
+            ]
+          }
         ]
       }
     },

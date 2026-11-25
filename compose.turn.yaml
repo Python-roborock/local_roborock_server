@@ -1,0 +1,7 @@
+# Opt in only when turn.mode = "provided".
+# docker compose -f compose.yaml -f compose.turn.yaml up -d
+services:
+  roborock-local-server:
+    ports:
+      - "${ROBOROCK_SERVER_TURN_PORT:-3478}:${ROBOROCK_SERVER_TURN_PORT:-3478}/udp"
+      - "49160-49179:49160-49179/udp"

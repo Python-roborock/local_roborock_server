@@ -1,12 +1,63 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from functools import wraps
 import json
+import logging
+import os
+from pathlib import Path
+import tempfile
+import threading
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .context import ServerContext
 
 WEB_API_INVENTORY_FILE = "web_api_inventory.json"
+DEVICE_OVERRIDES_KEY = "device_overrides"
+_LOGGER = logging.getLogger(__name__)
+_LOCKS: dict[Path, Any] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def inventory_transaction(path: Path):
+    """Serialize inventory read/modify/write in this process; a corrupt existing file is refused, not replaced."""
+    path = path.resolve()
+    with _LOCKS_GUARD:
+        lock = _LOCKS.setdefault(path, threading.RLock())
+    with lock:
+        if path.exists():
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise ValueError("Existing inventory must be a JSON object")
+        yield
+
+
+def inventory_mutation(function):
+    """Protect a synchronous context-first inventory mutation."""
+    @wraps(function)
+    def wrapped(ctx, *args, **kwargs):
+        with inventory_transaction(ctx.http_jsonl.parent / WEB_API_INVENTORY_FILE):
+            return function(ctx, *args, **kwargs)
+    return wrapped
+
+
+def atomic_write_inventory(path: Path, inventory: dict[str, Any]) -> None:
+    """Replace only after a complete write; propagate failures to the caller."""
+    payload = json.dumps(inventory, ensure_ascii=False, indent=2) + "\n"
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def load_inventory(ctx: ServerContext) -> dict[str, Any]:
@@ -20,9 +71,40 @@ def load_inventory(ctx: ServerContext) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def write_inventory(ctx: ServerContext, inventory: dict[str, Any]) -> None:
+class CachedInventory:
+    """Re-reads the inventory only when its size, mtime or file id changed; the shared dict is read-only."""
+
+    def __init__(self, ctx: ServerContext) -> None:
+        self._ctx = ctx
+        self._signature: tuple[int, int, int] | None = None
+        self._inventory: dict[str, Any] = {}
+
+    def read(self) -> dict[str, Any]:
+        path = self._ctx.http_jsonl.parent / WEB_API_INVENTORY_FILE
+        try:
+            stat = path.stat()
+            signature: tuple[int, int, int] | None = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        except OSError:
+            signature = None
+        if signature is None or signature != self._signature:
+            self._inventory = load_inventory(self._ctx)
+            self._signature = signature
+        return self._inventory
+
+
+def write_inventory(ctx: ServerContext, inventory: dict[str, Any]) -> bool:
     path = ctx.http_jsonl.parent / WEB_API_INVENTORY_FILE
     try:
-        path.write_text(json.dumps(inventory, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_inventory(path, inventory)
     except OSError:
-        return
+        _LOGGER.exception("Unable to persist inventory")
+        return False
+    return True
+
+
+def device_overrides(inventory: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return the local per-duid device overrides (name, silentOtaSwitch) stored in the inventory."""
+    value = inventory.get(DEVICE_OVERRIDES_KEY)
+    if not isinstance(value, dict):
+        return {}
+    return {str(duid): dict(item) for duid, item in value.items() if isinstance(item, dict)}

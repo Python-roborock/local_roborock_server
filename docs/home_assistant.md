@@ -158,6 +158,14 @@ If you would like to avoid deleting the integration, you must update the URLs in
 6. Save the file and restart Home Assistant.
 7. Re-enable the Roborock integration. If prompted to re-authenticate, enter your 6-digit `protocol_login_pin` as the code.
 
+The re-authentication form calls this field **verification code**, but the local
+server expects the configured `protocol_login_pin`; it does not send an email.
+Until re-authentication finishes, HA can still attempt MQTT login with its old
+cloud credentials and produce `invalid_mqtt_credentials` in the server logs.
+If that continues after accepting the local PIN, use the troubleshooting below.
+This distinction was reported in
+[#156](https://github.com/Python-roborock/local_roborock_server/issues/156).
+
 ### Troubleshooting
 
 #### Invalid MQTT Credentials

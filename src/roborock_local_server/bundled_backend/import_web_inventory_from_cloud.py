@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import json
@@ -19,6 +20,8 @@ import aiohttp
 from roborock.data import HomeData, HomeDataDevice, HomeDataProduct, RRiot, UserData
 from roborock.exceptions import RoborockRateLimit
 from roborock.web_api import PreparedRequest, RoborockApiClient, _get_hawk_authentication
+
+from shared.data_helpers import model_product_ids
 
 
 def _find_repo_root() -> Path:
@@ -376,13 +379,18 @@ async def _request_cloud_api_data(
     return response.get("data")
 
 
-def _plugin_product_ids(home_data: HomeData) -> list[int]:
+def _plugin_product_ids(home_data: HomeData, cloud_products: Any = None) -> list[int]:
+    # Newer models (e.g. roborock.vacuum.a226) carry a string product id in home
+    # data; the numeric id the plugin catalog is keyed by comes from /api/v5/product.
+    ids_by_model = model_product_ids(cloud_products)
     product_ids: set[int] = set()
     for product in home_data.products or []:
         try:
             product_ids.add(int(product.id))
         except (TypeError, ValueError):
-            continue
+            model_id = ids_by_model.get(str(product.model or "").strip().lower())
+            if model_id:
+                product_ids.add(model_id)
     for device in _all_home_devices(home_data):
         try:
             product_ids.add(int(getattr(device, "product_id", 0) or 0))
@@ -442,21 +450,21 @@ async def _fetch_plugin_catalogs(
         "/api/v1/plugins",
         params={"type": 2, "apiLevel": 10043},
     )
-    product_ids = _plugin_product_ids(home_data)
-    if product_ids:
-        await fetch_catalog(
-            "appplugin",
-            "/api/v1/appplugin",
-            method="post",
-            json_body={"type": 2, "apilevel": 10043, "productids": product_ids},
-        )
-    else:
-        catalogs["appplugin"] = {
-            "path": "/api/v1/appplugin",
-            "method": "POST",
-            "json": {"type": 2, "apilevel": 10043, "productids": []},
-            "error": "no product ids available",
-        }
+    await fetch_catalog("product", "/api/v5/product")
+    product_ids = _plugin_product_ids(home_data, catalogs["product"].get("data"))
+    # The cloud serves a separate zip per platform for the same plugin version:
+    # type 2 is Android, type 1 is iOS.
+    for name, app_type in (("appplugin", 2), ("appplugin_ios", 1)):
+        json_body = {"type": app_type, "apilevel": 10043, "productids": product_ids}
+        if product_ids:
+            await fetch_catalog(name, "/api/v1/appplugin", method="post", json_body=json_body)
+        else:
+            catalogs[name] = {
+                "path": "/api/v1/appplugin",
+                "method": "POST",
+                "json": json_body,
+                "error": "no product ids available",
+            }
     return catalogs
 
 
@@ -631,7 +639,7 @@ async def _fetch_cloud_home_data_with_api(api: RoborockApiClient, user_data: Use
                 # The library applies request rate-limits per method family.
                 # Back off a bit before trying legacy endpoint variants.
                 await asyncio.sleep(1.2)
-    raise RuntimeError(f"Failed to fetch cloud home_data: {last_error}")
+    raise RuntimeError(f"Failed to fetch cloud home_data: {last_error}") from last_error
 
 
 async def _fetch_cloud_home_data_from_dict(
@@ -757,6 +765,12 @@ def _merge_existing_inventory_mutations(
 
     merged = dict(cloud_inventory)
 
+    # Refreshing cloud definitions must not erase the local scheduler's record
+    # of occurrences already attempted (including a clean with a lost reply).
+    occurrences = existing_inventory.get("schedule_occurrences")
+    if isinstance(occurrences, dict):
+        merged["schedule_occurrences"] = copy.deepcopy(occurrences)
+
     rooms = _merge_record_lists_by_identity(
         _inventory_rooms(merged),
         _inventory_rooms(existing_inventory),
@@ -785,6 +799,15 @@ def _merge_existing_inventory_mutations(
         merged["home_scenes"] = home_scenes
 
     merged["scene_order"] = _merge_scene_order(merged.get("scene_order"), existing_inventory.get("scene_order"))
+
+    overrides = existing_inventory.get("device_overrides")
+    if isinstance(overrides, dict) and overrides:
+        merged["device_overrides"] = overrides
+        for key in ("devices", "received_devices", "receivedDevices"):
+            for item in merged.get(key) or []:
+                override = overrides.get(str(item.get("duid") or "").strip()) if isinstance(item, dict) else None
+                if isinstance(override, dict):
+                    item.update(override)
     return merged
 
 

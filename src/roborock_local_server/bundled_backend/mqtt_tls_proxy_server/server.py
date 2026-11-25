@@ -8,6 +8,7 @@ import json
 import logging
 from pathlib import Path
 import queue
+import re
 import socket
 import ssl
 import threading
@@ -19,12 +20,24 @@ from shared.io_utils import append_jsonl, payload_preview
 from shared.protocol_auth import ProtocolAuthStore
 from shared.runtime_credentials import RuntimeCredentialsStore, parse_mqtt_connect_packet
 from shared.runtime_state import RuntimeState
+from shared.device_snapshot_store import DeviceSnapshotStore, is_mower_model, is_status_answer
 from shared.zone_ranges_store import ZoneRangesStore
 
 from .command_handlers import RpcCommandRegistry
 
+# Vacuums publish {"mqttOtaData": {"mqttOtaFirmwareVersion": {"version": "02.44.86"}}}
+# with protocol 203 on their own topic after connecting.
+_FIRMWARE_REPORT_PROTOCOL = 203
+_SAFE_FIRMWARE_VERSION = re.compile(r"[A-Za-z0-9._-]{1,64}")
+# CONNECT results that mean the client logged in with a vacuum's own MQTT credentials.
+_DEVICE_AUTH_REASONS = frozenset({"device_mqtt_user", "device_mqtt_recovered"})
+# Trace queue direction for the marker _handle_client queues after a connection's last packet.
+_CONN_CLOSED = "closed"
+
+
 class MqttTlsProxy:
     _MAX_FIRST_PACKET_BYTES = 1024 * 1024
+    _TLS_HANDSHAKE_TIMEOUT_SECONDS = 10.0
 
     def __init__(
         self,
@@ -45,8 +58,10 @@ class MqttTlsProxy:
         runtime_state: RuntimeState | None = None,
         runtime_credentials: RuntimeCredentialsStore | None = None,
         zone_ranges_store: ZoneRangesStore | None = None,
+        snapshot_store: DeviceSnapshotStore | None = None,
         tls_enabled: bool = True,
         on_onboarding_credentials_learned: Callable[[], None] | None = None,
+        on_device_firmware_reported: Callable[[str, str], None] | None = None,
     ) -> None:
         self.cert_file = cert_file
         self.key_file = key_file
@@ -64,7 +79,11 @@ class MqttTlsProxy:
         self.runtime_state = runtime_state
         self.runtime_credentials = runtime_credentials
         self.zone_ranges_store = zone_ranges_store
+        self.snapshot_store = snapshot_store
+        self._conn_duids: dict[str, set[str]] = {}
+        self._duid_conn: dict[str, str] = {}
         self._on_onboarding_credentials_learned = on_onboarding_credentials_learned
+        self._on_device_firmware_reported = on_device_firmware_reported
         self._server_socket: socket.socket | None = None
         self._running = False
         self._counter = 0
@@ -72,6 +91,7 @@ class MqttTlsProxy:
         self._conn_protocol_levels: dict[str, int] = {}
         self._conn_endpoints: dict[str, tuple[socket.socket, socket.socket]] = {}
         self._pending_onboarding_auth: dict[str, dict[str, str]] = {}
+        self._conn_device_topics: dict[str, str] = {}
         self._trace_queue: queue.Queue[tuple[str, str, bytes] | None] = queue.Queue()
         self._trace_thread: threading.Thread | None = None
         self._protocol_auth = (
@@ -122,6 +142,38 @@ class MqttTlsProxy:
         with self._lock:
             candidate = self._pending_onboarding_auth.pop(conn_id, None)
             return dict(candidate) if candidate is not None else None
+
+    def _set_conn_device_topic(self, conn_id: str, topic: str) -> None:
+        with self._lock:
+            self._conn_device_topics[conn_id] = topic
+
+    def _get_conn_device_topic(self, conn_id: str) -> str | None:
+        with self._lock:
+            return self._conn_device_topics.get(conn_id)
+
+    def _bind_authenticated_device_topic(self, conn_id: str, auth_reason: str, username: str) -> None:
+        """Remember the topic of the vacuum whose own MQTT credentials this connection used."""
+        if auth_reason not in _DEVICE_AUTH_REASONS or self.runtime_credentials is None:
+            return
+        normalized_username = username.strip()
+        device = self.runtime_credentials.resolve_device_by_mqtt_username(normalized_username)
+        did = str((device or {}).get("did") or "").strip()
+        if did:
+            self._set_conn_device_topic(conn_id, f"rr/d/i/{did}/{normalized_username}")
+            # Logging in with its own credentials means the robot is back, even before it publishes.
+            duid = str((device or {}).get("duid") or "").strip()
+            if duid and self.snapshot_store is not None:
+                try:
+                    self._note_robot_online(conn_id, duid)
+                except Exception:
+                    self.logger.exception("[conn %s] marking the robot online failed", conn_id)
+
+    def _note_robot_online(self, conn_id: str, duid: str) -> None:
+        with self._lock:
+            self._conn_duids.setdefault(conn_id, set()).add(duid)
+            self._duid_conn[duid] = conn_id
+        if self.snapshot_store is not None:
+            self.snapshot_store.mark_seen(duid)
 
     @staticmethod
     def _decode_remaining_length(data: bytes, start: int) -> tuple[int | None, int]:
@@ -350,6 +402,7 @@ class MqttTlsProxy:
             )
             self._close_conn_endpoints(conn_id)
             return False
+        self._set_conn_device_topic(conn_id, expected_topic)
         self.logger.info(
             "[conn %s] learned onboarding MQTT credentials did=%s duid=%s username=%s",
             conn_id,
@@ -520,13 +573,115 @@ class MqttTlsProxy:
             parsed["error"] = rpc_obj.get("error")
         return parsed
 
+    @staticmethod
+    def _reported_firmware_version(payload_utf8: str | None) -> str | None:
+        if not payload_utf8:
+            return None
+        try:
+            payload_obj = json.loads(payload_utf8)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        ota_data = payload_obj.get("mqttOtaData") if isinstance(payload_obj, dict) else None
+        firmware = ota_data.get("mqttOtaFirmwareVersion") if isinstance(ota_data, dict) else None
+        version = firmware.get("version") if isinstance(firmware, dict) else None
+        if not isinstance(version, str):
+            return None
+        version = version.strip()
+        return version if _SAFE_FIRMWARE_VERSION.fullmatch(version) else None
+
+    @staticmethod
+    def _device_id_from_topic(topic: str) -> str | None:
+        # Device-to-broker topics are rr/d/i/<did>/<device mqtt username>.
+        parts = topic.split("/")
+        if len(parts) < 4 or parts[:3] != ["rr", "d", "i"]:
+            return None
+        return parts[3].strip() or None
+
+    def _report_device_firmware(self, conn_id: str, topic: str, payload_utf8: str | None) -> None:
+        if self._on_device_firmware_reported is None:
+            return
+        # App and bootstrap logins can publish on any topic, so a report counts only on the
+        # topic of the vacuum whose own credentials this connection logged in with.
+        if topic != self._get_conn_device_topic(conn_id):
+            return
+        device_id = self._device_id_from_topic(topic)
+        firmware_version = self._reported_firmware_version(payload_utf8)
+        if device_id is None or firmware_version is None:
+            return
+        try:
+            self._on_device_firmware_reported(device_id, firmware_version)
+        except Exception:
+            self.logger.exception("recording firmware %s reported by %s failed", firmware_version, device_id)
+
+    def _duid_for_topic(self, topic: str) -> str:
+        parts = topic.split("/")
+        if topic.startswith("rr/m/") and len(parts) >= 6:
+            return parts[5]
+        if topic.startswith("rr/d/") and len(parts) >= 5 and self.runtime_credentials is not None:
+            device = self.runtime_credentials.resolve_device(did=parts[3])
+            return str(device.get("duid") or "") if device else ""
+        return ""
+
+    def _is_mower(self, duid: str) -> bool:
+        # Mower dps 121/122 are not state/battery, so their pushes must not fill the vacuum fields.
+        device = self.runtime_credentials.resolve_device(duid=duid) if self.runtime_credentials is not None else None
+        return is_mower_model((device or {}).get("model"))
+
+    def _observe_snapshot(
+        self,
+        conn_id: str,
+        direction: str,
+        topic: str,
+        proto_value: int,
+        decoded_entry: dict[str, Any],
+        payload_bytes: bytes,
+    ) -> None:
+        """Feed what the robot says into the last-known-state store."""
+        if self.snapshot_store is None:
+            return
+        try:
+            duid = self._duid_for_topic(topic)
+            if not duid:
+                return
+            payload_utf8 = decoded_entry.get("payload_utf8")
+            payload_utf8 = payload_utf8 if isinstance(payload_utf8, str) else None
+            if proto_value == 101:
+                # Any client's request: the nonce in it is what decrypts the map reply it gets.
+                self.snapshot_store.note_request(duid, payload_utf8)
+                return
+            # App and bootstrap logins can publish on any topic; only the vacuum's own login speaks for it.
+            if direction != "c2b" or topic != self._get_conn_device_topic(conn_id):
+                return
+            self._note_robot_online(conn_id, duid)
+            # B01 robots (Q7, Q10) use other dps keys; their 121 is not the V1 state.
+            if decoded_entry.get("version") == "B01":
+                return
+            if proto_value == 301:
+                self.snapshot_store.record_map(duid, payload_bytes)
+            elif proto_value == 102:
+                response_to = decoded_entry.get("response_to")
+                if isinstance(response_to, dict):
+                    if is_status_answer(response_to) and response_to.get("error") is None:
+                        self.snapshot_store.record_status_result(duid, response_to.get("result"))
+                    elif response_to.get("request_method") == "get_room_mapping" and response_to.get("error") is None:
+                        self.snapshot_store.record_room_mapping(duid, response_to.get("result"))
+                elif not self._is_mower(duid):
+                    self.snapshot_store.record_dps(duid, payload_utf8)
+        except Exception:
+            self.logger.exception("[conn %s] snapshot update failed", conn_id)
+
     def _trace_packet(self, conn_id: str, direction: str, packet: bytes) -> None:
         packet_type = packet[0] >> 4
         if packet_type in (12, 13):  # PINGREQ, PINGRESP
             return
         packet_name = MQTT_TYPES.get(packet_type, f"TYPE_{packet_type}")
-        preview = packet[:96].hex()
-        self.logger.info("[conn %s %s] %s len=%d hex=%s", conn_id, direction, packet_name, len(packet), preview)
+        if packet_type in (1, 15):  # CONNECT, AUTH
+            # These carry the client's MQTT username and password (or auth data); a hex
+            # preview would write them to mqtt_server.log in recoverable form.
+            self.logger.info("[conn %s %s] %s len=%d", conn_id, direction, packet_name, len(packet))
+        else:
+            preview = packet[:96].hex()
+            self.logger.info("[conn %s %s] %s len=%d hex=%s", conn_id, direction, packet_name, len(packet), preview)
 
         if packet_type == 1 and direction == "c2b":
             protocol_level = self._extract_connect_protocol_level(packet)
@@ -554,7 +709,13 @@ class MqttTlsProxy:
                 topic=topic,
                 payload_preview=payload_preview(payload),
             )
-        if self.runtime_credentials is not None:
+        # App, bootstrap and other vacuums' logins can publish on any rr/d topic, so only the
+        # vacuum's own login, publishing on its own topic, may update its stored device record.
+        if (
+            self.runtime_credentials is not None
+            and direction == "c2b"
+            and topic == self._get_conn_device_topic(conn_id)
+        ):
             self.runtime_credentials.record_mqtt_topic(topic=topic)
 
         messages, variant, decode_error, decode_key_source = self._decode_mqtt_payload(topic, payload)
@@ -593,6 +754,9 @@ class MqttTlsProxy:
             )
             payload_bytes = message.payload if isinstance(message.payload, bytes) else b""
             payload_data = self._decode_payload_bytes(payload_bytes)
+            if direction == "c2b" and proto_value == _FIRMWARE_REPORT_PROTOCOL:
+                payload_utf8 = payload_data.get("payload_utf8")
+                self._report_device_firmware(conn_id, topic, payload_utf8 if isinstance(payload_utf8, str) else None)
             payload_compact = payload_data.get("payload_utf8")
             if isinstance(payload_compact, str):
                 try:
@@ -660,6 +824,7 @@ class MqttTlsProxy:
                             response_to.get("request_method"),
                             response_to.get("error"),
                         )
+            self._observe_snapshot(conn_id, direction, topic, proto_value, decoded_entry, payload_bytes)
             decoded_messages.append(decoded_entry)
             self.logger.info(
                 "[conn %s %s] PUBLISH topic=%s proto=%s(%d) ver=%s seq=%s key_source=%s payload=%s",
@@ -679,12 +844,32 @@ class MqttTlsProxy:
         entry["decoded_messages"] = decoded_messages
         append_jsonl(self.decoded_jsonl, entry)
 
+    def _forget_conn_trace_state(self, conn_id: str) -> None:
+        with self._lock:
+            self._conn_protocol_levels.pop(conn_id, None)
+            self._conn_device_topics.pop(conn_id, None)
+            self._pending_onboarding_auth.pop(conn_id, None)
+            gone_duids = self._conn_duids.pop(conn_id, set())
+            # A robot that already reconnected on a newer connection is still online.
+            gone_duids = {duid for duid in gone_duids if self._duid_conn.get(duid) == conn_id}
+            for duid in gone_duids:
+                del self._duid_conn[duid]
+        if self.snapshot_store is not None:
+            try:
+                for duid in gone_duids:
+                    self.snapshot_store.mark_offline(duid)
+            except Exception:
+                self.logger.exception("[conn %s] marking robots offline failed", conn_id)
+
     def _run_trace_worker(self) -> None:
         while True:
             item = self._trace_queue.get()
             if item is None:
                 return
             conn_id, direction, packet = item
+            if direction == _CONN_CLOSED:
+                self._forget_conn_trace_state(conn_id)
+                continue
             try:
                 self._trace_packet(conn_id, direction, packet)
             except Exception:
@@ -708,6 +893,11 @@ class MqttTlsProxy:
     def _queue_trace_packet(self, conn_id: str, direction: str, packet: bytes) -> None:
         self._ensure_trace_worker()
         self._trace_queue.put((conn_id, direction, packet))
+
+    def _queue_conn_closed(self, conn_id: str) -> None:
+        """Forget the connection's trace state once the worker has traced its queued packets."""
+        self._ensure_trace_worker()
+        self._trace_queue.put((conn_id, _CONN_CLOSED, b""))
 
     def _relay(self, src: socket.socket, dst: socket.socket, conn_id: str, direction: str, frame_buf: bytearray) -> None:
         try:
@@ -777,6 +967,7 @@ class MqttTlsProxy:
                         self._queue_trace_packet(conn_id, "b2c", reject_packet)
                 return
 
+            self._bind_authenticated_device_topic(conn_id, auth_reason, str((connect_info or {}).get("username") or ""))
             backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             backend.connect((self.backend_host, self.backend_port))
             self._register_conn_endpoints(conn_id, tls_conn, backend)
@@ -800,7 +991,6 @@ class MqttTlsProxy:
         except Exception as exc:
             self.logger.error("[conn %s] connection error: %s", conn_id, exc)
         finally:
-            self._pop_pending_onboarding_auth(conn_id)
             self._pop_conn_endpoints(conn_id)
             if not relay_started:
                 for endpoint in (tls_conn, backend):
@@ -812,8 +1002,9 @@ class MqttTlsProxy:
                         pass
             if self.runtime_state is not None:
                 self.runtime_state.record_mqtt_disconnect(conn_id=conn_id)
-            with self._lock:
-                self._conn_protocol_levels.pop(conn_id, None)
+            # The trace worker may not have reached this connection's last packets yet, and
+            # tracing them needs its protocol level, device topic and onboarding candidate.
+            self._queue_conn_closed(conn_id)
             self.logger.info("[conn %s] closed", conn_id)
 
     def start(self) -> threading.Thread:
@@ -863,6 +1054,21 @@ class MqttTlsProxy:
             raw_conn.close()
             return None
 
+    def _accept_and_handle_client(
+        self,
+        raw_conn: socket.socket,
+        addr: tuple[str, int],
+        tls_ctx: ssl.SSLContext | None,
+    ) -> None:
+        # Runs on its own thread with a bounded handshake,
+        # so a client that stalls mid-handshake cannot block accept() for everyone else.
+        raw_conn.settimeout(self._TLS_HANDSHAKE_TIMEOUT_SECONDS)
+        client_conn = self._accept_client_connection(raw_conn=raw_conn, addr=addr, tls_ctx=tls_ctx)
+        if client_conn is None:
+            return
+        client_conn.settimeout(None)
+        self._handle_client(client_conn, addr)
+
     def _run(self) -> None:
         tls_ctx = self._build_tls_context() if self.tls_enabled else None
 
@@ -883,10 +1089,11 @@ class MqttTlsProxy:
         while self._running:
             try:
                 raw_conn, addr = self._server_socket.accept()
-                client_conn = self._accept_client_connection(raw_conn=raw_conn, addr=addr, tls_ctx=tls_ctx)
-                if client_conn is None:
-                    continue
-                threading.Thread(target=self._handle_client, args=(client_conn, addr), daemon=True).start()
+                threading.Thread(
+                    target=self._accept_and_handle_client,
+                    args=(raw_conn, addr, tls_ctx),
+                    daemon=True,
+                ).start()
             except OSError as exc:
                 if not self._running:
                     break
@@ -908,4 +1115,7 @@ class MqttTlsProxy:
         if trace_thread is not None and trace_thread.is_alive():
             self._trace_queue.put(None)
             trace_thread.join(timeout=2.0)
+        # Updates traced while the worker drained its queue came after the caller's own flush.
+        if self.snapshot_store is not None:
+            self.snapshot_store.flush()
         self.logger.info("TLS MQTT proxy stopped")

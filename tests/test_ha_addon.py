@@ -1,16 +1,50 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tomllib
+from pathlib import Path
 
 import pytest
+import yaml
 
+from roborock_local_server.config import load_config
 from roborock_local_server.ha_addon import write_config_from_home_assistant_options
 
 
 def _write_options(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+@pytest.mark.parametrize("addon", ["roborock_local_server_addon", "roborock_local_server_beta_addon"])
+def test_logging_options_round_trip_from_addon_schema(tmp_path, addon):
+    manifest = yaml.safe_load((Path(addon) / "config.yaml").read_text())
+    assert manifest["options"]["log_max_size_mb"] == 10
+    assert manifest["options"]["log_backup_count"] == 3
+    assert manifest["schema"]["log_max_size_mb"] == "int(1,1024)?"
+    assert manifest["schema"]["log_backup_count"] == "int(0,20)?"
+    options = {**manifest["options"], "stack_fqdn": "api-roborock.example.com",
+               "cert_file": "cert", "key_file": "key", "admin_password": "secret",
+               "protocol_login_email": "user@example.com", "protocol_login_pin": "123456",
+               "log_max_size_mb": 2, "log_backup_count": 0}
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+    _write_options(options_path, options)
+    write_config_from_home_assistant_options(options_path=options_path, config_path=config_path)
+    config = load_config(config_path)
+    assert config.logging.max_bytes == 2 * 1024 * 1024
+    assert config.logging.backup_count == 0
+
+
+@pytest.mark.parametrize("options", [{"log_max_size_mb": 0}, {"log_max_size_mb": 1.5},
+                                    {"log_backup_count": -1}, {"log_backup_count": True}])
+def test_addon_rejects_invalid_logging_options_before_writing_config(tmp_path, options):
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("existing configuration")
+    _write_options(options_path, options)
+    with pytest.raises(ValueError, match="logging."):
+        write_config_from_home_assistant_options(options_path=options_path, config_path=config_path)
+    assert config_path.read_text() == "existing configuration"
 
 
 def test_write_config_from_home_assistant_options_provided_tls(tmp_path: Path) -> None:
@@ -50,6 +84,7 @@ def test_write_config_from_home_assistant_options_provided_tls(tmp_path: Path) -
     assert parsed["broker"]["host"] == "127.0.0.1"
     assert parsed["broker"]["port"] == 18830
     assert parsed["broker"]["enable_topic_bridge"] is True
+    assert parsed["logging"] == {"max_size_mb": 10, "backup_count": 3}
     assert parsed["tls"]["mode"] == "provided"
     assert parsed["tls"]["cert_file"] == "/ssl/fullchain.pem"
     assert parsed["tls"]["key_file"] == "/ssl/privkey.pem"
@@ -481,3 +516,102 @@ def test_write_config_from_home_assistant_options_removes_stale_cloudflare_token
     assert token_path.exists() is False
     assert kid_path.exists() is False
     assert hmac_path.exists() is False
+
+
+def test_write_config_from_home_assistant_options_renders_turn_settings(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+
+    _write_options(
+        options_path,
+        {
+            **yaml.safe_load(Path("roborock_local_server_addon/config.yaml").read_text())["options"],
+            "stack_fqdn": "api-roborock.example.com",
+            "tls_mode": "provided",
+            "cert_file": "/ssl/fullchain.pem",
+            "key_file": "/ssl/privkey.pem",
+            "admin_password": "super-secret-password",
+            "protocol_login_email": "user@example.com",
+            "protocol_login_pin": "123456",
+            "turn_mode": "external",
+            "turn_host": "turn.example.com",
+            "turn_port": 3478,
+            "turn_username": "rrturn",
+            "turn_password": "secretpassword",
+            "turn_realm": "turn.example.com",
+            "turn_ttl": 86400,
+        },
+    )
+
+    write_config_from_home_assistant_options(
+        options_path=options_path,
+        config_path=config_path,
+    )
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["turn"]["mode"] == "external"
+    assert parsed["turn"]["host"] == "turn.example.com"
+    assert parsed["turn"]["port"] == 3478
+    assert parsed["turn"]["username"] == "rrturn"
+    assert parsed["turn"]["password"] == "secretpassword"
+    assert parsed["turn"]["realm"] == "turn.example.com"
+    assert parsed["turn"]["ttl"] == 86400
+
+
+def test_provided_turn_generates_stable_credentials_and_uses_stack_host(tmp_path: Path) -> None:
+    options_path = tmp_path / "options.json"
+    config_path = tmp_path / "config.toml"
+    _write_options(options_path, {
+        "stack_fqdn": "api-vac.cc",
+        "tls_mode": "provided",
+        "cert_file": "/ssl/fullchain.pem",
+        "key_file": "/ssl/privkey.pem",
+        "admin_password": "super-secret-password",
+        "protocol_login_email": "user@example.com",
+        "protocol_login_pin": "123456",
+        "turn_mode": "provided",
+    })
+    write_config_from_home_assistant_options(options_path=options_path, config_path=config_path)
+    first = tomllib.loads(config_path.read_text(encoding="utf-8"))["turn"]
+    write_config_from_home_assistant_options(options_path=options_path, config_path=config_path)
+    second = tomllib.loads(config_path.read_text(encoding="utf-8"))["turn"]
+    assert first["mode"] == "provided"
+    assert first["host"] == "api-vac.cc"
+    assert first["realm"] == "api-vac.cc"
+    assert first["username"] == "roborock"
+    assert len(first["password"]) >= 32
+    assert first["password"] == second["password"]
+
+
+def test_provided_turn_rejects_unpublished_custom_listener_port(tmp_path):
+    options = yaml.safe_load(Path("roborock_local_server_addon/config.yaml").read_text())["options"]
+    options.update(stack_fqdn="api-vac.cc", tls_mode="provided", cert_file="cert", key_file="key",
+                   admin_password="secret", protocol_login_email="user@example.com", protocol_login_pin="123456",
+                   turn_mode="provided", turn_port=3479)
+    options_path = tmp_path / "options.json"
+    _write_options(options_path, options)
+    with pytest.raises(ValueError, match="requires turn_port 3478"):
+        write_config_from_home_assistant_options(options_path=options_path, config_path=tmp_path / "config.toml")
+
+
+def test_empty_generated_turn_password_is_replaced_atomically(tmp_path, monkeypatch):
+    from roborock_local_server import ha_addon
+    options = yaml.safe_load(Path("roborock_local_server_addon/config.yaml").read_text())["options"]
+    options.update(stack_fqdn="api-vac.cc", tls_mode="provided", cert_file="cert", key_file="key",
+                   admin_password="secret", protocol_login_email="user@example.com", protocol_login_pin="123456",
+                   turn_mode="provided")
+    options_path = tmp_path / "options.json"
+    _write_options(options_path, options)
+    password_path = tmp_path / "state" / "turn_password"
+    password_path.parent.mkdir()
+    password_path.write_text("")
+    actual_replace = ha_addon.os.replace
+    replacements = []
+    def replace(source, target):
+        assert len(Path(source).read_text()) >= 32
+        replacements.append(target)
+        actual_replace(source, target)
+    monkeypatch.setattr(ha_addon.os, "replace", replace)
+    write_config_from_home_assistant_options(options_path=options_path, config_path=tmp_path / "config.toml")
+    assert replacements == [password_path]
+    assert len(password_path.read_text()) >= 32

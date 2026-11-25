@@ -13,9 +13,51 @@ arch:
 ports:
   555/tcp: 555
   8881/tcp: 8881
+  3478/udp: null
+  49160/udp: null
+  49161/udp: null
+  49162/udp: null
+  49163/udp: null
+  49164/udp: null
+  49165/udp: null
+  49166/udp: null
+  49167/udp: null
+  49168/udp: null
+  49169/udp: null
+  49170/udp: null
+  49171/udp: null
+  49172/udp: null
+  49173/udp: null
+  49174/udp: null
+  49175/udp: null
+  49176/udp: null
+  49177/udp: null
+  49178/udp: null
+  49179/udp: null
 ports_description:
   555/tcp: Roborock HTTPS API
   8881/tcp: Roborock MQTT TLS proxy
+  3478/udp: TURN/STUN listener
+  49160/udp: TURN media relay
+  49161/udp: TURN media relay
+  49162/udp: TURN media relay
+  49163/udp: TURN media relay
+  49164/udp: TURN media relay
+  49165/udp: TURN media relay
+  49166/udp: TURN media relay
+  49167/udp: TURN media relay
+  49168/udp: TURN media relay
+  49169/udp: TURN media relay
+  49170/udp: TURN media relay
+  49171/udp: TURN media relay
+  49172/udp: TURN media relay
+  49173/udp: TURN media relay
+  49174/udp: TURN media relay
+  49175/udp: TURN media relay
+  49176/udp: TURN media relay
+  49177/udp: TURN media relay
+  49178/udp: TURN media relay
+  49179/udp: TURN media relay
 map:
   - ssl:ro
   - addon_config:rw
@@ -28,6 +70,8 @@ options:
   advertised_https_port: 0
   advertised_mqtt_tls_port: 0
   region: "us"
+  log_max_size_mb: 10
+  log_backup_count: 3
   tls_mode: "provided"
   tls_base_domain: ""
   tls_email: ""
@@ -40,6 +84,13 @@ options:
   admin_password: ""
   protocol_login_email: ""
   protocol_login_pin: ""
+  turn_mode: "disabled"
+  turn_host: ""
+  turn_port: 3478
+  turn_username: ""
+  turn_password: ""
+  turn_realm: ""
+  turn_ttl: 86400
 schema:
   stack_fqdn: str
   https_port: port
@@ -47,6 +98,8 @@ schema:
   advertised_https_port: int
   advertised_mqtt_tls_port: int
   region: list(us|eu|cn|ru)
+  log_max_size_mb: int(1,1024)?
+  log_backup_count: int(0,20)?
   tls_mode: list(provided|cloudflare_acme)
   tls_base_domain: str
   tls_email: str
@@ -59,3 +112,10 @@ schema:
   admin_password: password
   protocol_login_email: email
   protocol_login_pin: password
+  turn_mode: list(disabled|provided|external)?
+  turn_host: str?
+  turn_port: port?
+  turn_username: str?
+  turn_password: password?
+  turn_realm: str?
+  turn_ttl: int?

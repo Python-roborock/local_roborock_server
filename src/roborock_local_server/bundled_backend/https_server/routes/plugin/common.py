@@ -20,7 +20,9 @@ PLUGIN_PROXY_ALLOWED_HOSTS = {
     "cdn.awsusor0.fds.api.mi-img.com",
 }
 
-PLUGIN_PROXY_MAX_BYTES = 32 * 1024 * 1024
+# Current device plugins are larger than 32 MB (e.g. ~55 MB for some Android
+# vacuum plugins), which made the proxy answer "plugin too large".
+PLUGIN_PROXY_MAX_BYTES = 128 * 1024 * 1024
 
 LEGACY_CATEGORY_PLUGIN_SOURCES = {
     "robot_vacuum_cleaner": "https://files.roborock.com/iot/plugin/979bb22f91a24f10a8bafe232b4fb5ee.zip",
@@ -152,6 +154,10 @@ def _dict_records(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def snapshot_plugin_catalog_data(ctx: ServerContext, catalog_name: str) -> Any:
+    return _catalog_data(_snapshot_plugin_catalogs(ctx), catalog_name)
 
 
 def snapshot_plugin_records(

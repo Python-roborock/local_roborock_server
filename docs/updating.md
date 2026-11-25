@@ -16,6 +16,11 @@ Use this page when moving an existing install to a newer stable release.
 
 ## Updating From A Stable Or RC Release
 
+Builds with automatic [log retention](logging.md) apply a default of 10 MiB per
+file with three backups, including to existing installations. On first startup,
+oversized logs are trimmed after state recovery; copy any historical logs you
+need before upgrading.
+
 If you were already on a stable release such as `0.0.5`, `0.0.6`, `1.0.0`, or a late release candidate, updating should usually not require manual migration.
 
 After updating:

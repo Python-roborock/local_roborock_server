@@ -26,8 +26,14 @@ class RpcCommandHandler(Protocol):
 def _parse_fan_power(params: Any) -> int | None:
     if isinstance(params, int):
         return params
+    if isinstance(params, dict):
+        # set_clean_motor_mode sends [{"fan_power": 102, "water_box_mode": 202, ...}].
+        value = params.get("fan_power")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
     if isinstance(params, list) and params:
         first = params[0]
+        if isinstance(first, dict):
+            return _parse_fan_power(first)
         if isinstance(first, int):
             return first
         if isinstance(first, str):

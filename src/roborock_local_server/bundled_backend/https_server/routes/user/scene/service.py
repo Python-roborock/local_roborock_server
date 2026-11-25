@@ -6,9 +6,11 @@ import json
 import logging
 from typing import Any, Callable, Sequence
 
+from roborock_local_server.log_retention import iter_log_lines
+
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, as_int, default_home_id, get_value, stable_int
-from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory, write_inventory
+from shared.inventory_io import WEB_API_INVENTORY_FILE, inventory_mutation, load_inventory, write_inventory
 from shared.routine_runner import RoutineExecutionError, RoutineRunner
 
 _LOGGER = logging.getLogger(__name__)
@@ -166,45 +168,36 @@ def _scene_zone_ranges_from_mqtt(
     *,
     tids_filter: set[str] | None = None,
 ) -> dict[tuple[str, int], list[int]]:
-    path = ctx.mqtt_jsonl
-    if not path.exists():
-        return {}
     zone_ranges: dict[tuple[str, int], list[int]] = {}
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            lines = handle.readlines()
-        for line in reversed(lines):
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
+    # Oldest first so the latest coordinates win, including across rotations.
+    for line in iter_log_lines(ctx.mqtt_jsonl):
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        decoded_messages = entry.get("decoded_messages")
+        if not isinstance(decoded_messages, list):
+            continue
+        for decoded in decoded_messages:
+            if not isinstance(decoded, dict):
                 continue
-            decoded_messages = entry.get("decoded_messages")
-            if not isinstance(decoded_messages, list):
-                continue
-            for decoded in decoded_messages:
-                if not isinstance(decoded, dict):
-                    continue
-                rpc = decoded.get("rpc")
-                if isinstance(rpc, dict) and str(rpc.get("method") or "").strip() == "set_scenes_zones":
-                    _merge_scene_zone_ranges_from_request(
-                        zone_ranges,
-                        params=rpc.get("params"),
-                        tids_filter=tids_filter,
-                    )
-                response_to = decoded.get("response_to")
-                if isinstance(response_to, dict) and str(response_to.get("request_method") or "").strip() == "set_scenes_zones":
-                    _merge_scene_zone_ranges_from_response(
-                        zone_ranges,
-                        request_params=response_to.get("request_params"),
-                        result=response_to.get("result"),
-                        tids_filter=tids_filter,
-                    )
-            if tids_filter and all(
-                any(key[0] == tid for key in zone_ranges) for tid in tids_filter
-            ):
-                break
-    except OSError:
-        return {}
+            rpc = decoded.get("rpc")
+            if isinstance(rpc, dict) and str(rpc.get("method") or "").strip() == "set_scenes_zones":
+                _merge_scene_zone_ranges_from_request(
+                    zone_ranges,
+                    params=rpc.get("params"),
+                    tids_filter=tids_filter,
+                )
+            response_to = decoded.get("response_to")
+            if isinstance(response_to, dict) and str(response_to.get("request_method") or "").strip() == "set_scenes_zones":
+                _merge_scene_zone_ranges_from_response(
+                    zone_ranges,
+                    request_params=response_to.get("request_params"),
+                    result=response_to.get("result"),
+                    tids_filter=tids_filter,
+                )
     return zone_ranges
 
 
@@ -424,6 +417,7 @@ def _scene_device_name(inventory: dict[str, Any], device_id: str) -> str:
     return ""
 
 
+@inventory_mutation
 def _replace_inventory_scene(
     ctx: ServerContext,
     *,
@@ -486,6 +480,7 @@ def _hydrate_inventory_scene_ranges(ctx: ServerContext, scene: dict[str, Any]) -
     return updated_scene
 
 
+@inventory_mutation
 def _create_inventory_scene(ctx: ServerContext, scene_request: dict[str, Any]) -> dict[str, Any]:
     inventory = load_inventory(ctx)
     if not isinstance(inventory, dict):
@@ -524,7 +519,11 @@ def _create_inventory_scene(ctx: ServerContext, scene_request: dict[str, Any]) -
 
     scene_order_value = inventory.get("scene_order")
     if isinstance(scene_order_value, list):
-        scene_order = [as_int(value, 0) for value in scene_order_value if as_int(value, 0) > 0]
+        scene_order = [
+            as_int(value, 0)
+            for value in _flatten_stored_scene_order(scene_order_value)
+            if as_int(value, 0) > 0
+        ]
     else:
         scene_order = [as_int(get_value(scene, "id", default=0), 0) for scene in scenes[:-1] if as_int(get_value(scene, "id", default=0), 0) > 0]
     scene_order.append(scene_id)
@@ -590,6 +589,24 @@ def list_scenes_for_home(ctx: ServerContext, requested_home_id: Any) -> list[dic
     ]
 
 
+def _flatten_stored_scene_order(stored_order: list[Any]) -> list[Any]:
+    """Accept both stored forms of the scene order.
+
+    The cloud answers GET /user/scene/order with a list of per-device objects,
+    [{"duid": ..., "sceneIds": [...]}], and the cloud import stores that list
+    verbatim. Locally maintained inventories may hold a flat list of ids.
+    """
+    flattened: list[Any] = []
+    for entry in stored_order:
+        if isinstance(entry, dict):
+            scene_ids = get_value(entry, "sceneIds", "scene_ids", default=[])
+            if isinstance(scene_ids, list):
+                flattened.extend(scene_ids)
+            continue
+        flattened.append(entry)
+    return flattened
+
+
 def scene_order(ctx: ServerContext, query_params: dict[str, list[str]]) -> list[int]:
     state = _scene_state(ctx)
     requested_home_id = as_int(_split_param_values(query_params.get("homeId", []))[0] if query_params.get("homeId") else 0, 0)
@@ -605,7 +622,7 @@ def scene_order(ctx: ServerContext, query_params: dict[str, list[str]]) -> list[
     ordered_scene_ids: list[int] = []
     existing_scene_order = state.get("scene_order")
     if isinstance(existing_scene_order, list):
-        for raw_scene_id in existing_scene_order:
+        for raw_scene_id in _flatten_stored_scene_order(existing_scene_order):
             scene_id = as_int(raw_scene_id, 0)
             if scene_id <= 0 or scene_id in ordered_scene_ids:
                 continue
@@ -626,6 +643,28 @@ def scene_order(ctx: ServerContext, query_params: dict[str, list[str]]) -> list[
         if scene_id > 0 and scene_id not in ordered_scene_ids:
             ordered_scene_ids.append(scene_id)
     return ordered_scene_ids
+
+
+
+def scene_order_by_device(ctx: ServerContext, query_params: dict[str, list[str]]) -> list[dict[str, Any]]:
+    """Scene order in the app's List<SceneOrder> form: [{"duid", "sceneIds"}].
+
+    Devices appear in the order of their first scene in scene_order().
+    """
+    state = _scene_state(ctx)
+    device_by_scene_id: dict[int, str] = {}
+    for scene in state["scenes"]:
+        if not isinstance(scene, dict):
+            continue
+        scene_id = as_int(get_value(scene, "id", default=0), 0)
+        if scene_id > 0:
+            device_by_scene_id[scene_id] = str(
+                get_value(scene, "device_id", "deviceId", "duid", default="")
+            ).strip()
+    grouped: dict[str, list[int]] = {}
+    for scene_id in scene_order(ctx, query_params):
+        grouped.setdefault(device_by_scene_id.get(scene_id, ""), []).append(scene_id)
+    return [{"duid": duid, "sceneIds": scene_ids} for duid, scene_ids in grouped.items()]
 
 
 def create_scene(ctx: ServerContext, body_params: dict[str, list[str]]) -> dict[str, Any]:
@@ -697,6 +736,7 @@ def update_scene_param(ctx: ServerContext, scene_id: int, body_params: dict[str,
     return build_scene_payload(updated_scene, home_id=home_id, include_device_context=True)
 
 
+@inventory_mutation
 def delete_scene(ctx: ServerContext, scene_id: int) -> None:
     inventory = load_inventory(ctx)
     if not isinstance(inventory, dict):
@@ -718,7 +758,9 @@ def delete_scene(ctx: ServerContext, scene_id: int) -> None:
 
     order_source = inventory.get("scene_order")
     if isinstance(order_source, list):
-        inventory["scene_order"] = [v for v in order_source if as_int(v, 0) != scene_id]
+        inventory["scene_order"] = [
+            v for v in _flatten_stored_scene_order(order_source) if as_int(v, 0) != scene_id
+        ]
 
     write_inventory(ctx, inventory)
     _LOGGER.info("Deleted scene %s (removed=%s)", scene_id, removed)

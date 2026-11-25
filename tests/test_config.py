@@ -1,7 +1,65 @@
 from pathlib import Path
+
 import pytest
+from conftest import write_release_config
 
 from roborock_local_server.config import load_config, resolve_paths
+
+
+def test_logging_defaults_and_overrides(tmp_path):
+    path = write_release_config(tmp_path)
+    defaults = load_config(path).logging
+    assert defaults.max_bytes == 10 * 1024 * 1024
+    assert defaults.backup_count == 3
+    path.write_text(path.read_text() + '\n[logging]\nmax_size_mb=2\nbackup_count=0\n')
+    config = load_config(path)
+    assert config.logging.max_bytes == 2 * 1024 * 1024
+    assert config.logging.backup_count == 0
+
+
+@pytest.mark.parametrize("field,value", [
+    ("max_size_mb", "0"), ("max_size_mb", "-1"), ("max_size_mb", "1025"),
+    ("max_size_mb", "1.5"), ("max_size_mb", "true"), ("max_size_mb", '"10"'),
+    ("backup_count", "-1"), ("backup_count", "21"), ("backup_count", "false"),
+])
+def test_logging_rejects_invalid_limits(tmp_path, field, value):
+    path = write_release_config(tmp_path)
+    path.write_text(path.read_text() + f'\n[logging]\n{field}={value}\n')
+    with pytest.raises(ValueError, match=f"logging.{field} must be an integer"):
+        load_config(path)
+
+
+def test_turn_config_defaults_and_rejects_unsafe_provided_credentials(tmp_path):
+    path = write_release_config(tmp_path)
+    base = path.read_text()
+    path.write_text(base + '\n[turn]\nmode="provided"\nhost="relay.example"\npassword="secret"\n')
+    config = load_config(path)
+    assert config.turn.realm == "relay.example"
+    assert config.turn.username == "roborock"
+    path.write_text(base + '\n[turn]\nmode="provided"\nhost="relay.example"\npassword="bad:secret"\n')
+    with pytest.raises(ValueError, match="turn.password cannot"):
+        load_config(path)
+
+
+def test_turn_config_mode_is_case_insensitive(tmp_path):
+    path = write_release_config(tmp_path)
+    path.write_text(path.read_text() + '\n[turn]\nmode="Provided"\nhost="relay.example"\npassword="secret"\n')
+    config = load_config(path)
+    assert config.turn.mode == "provided"
+    assert config.turn.username == "roborock"
+
+
+def test_turn_config_legacy_enabled_flag_maps_to_external(tmp_path):
+    path = write_release_config(tmp_path)
+    path.write_text(path.read_text() + '\n[turn]\nenabled=true\nhost="relay.example"\nusername="user"\npassword="secret"\n')
+    assert load_config(path).turn.mode == "external"
+
+
+def test_turn_config_rejects_nonpositive_ttl(tmp_path):
+    path = write_release_config(tmp_path)
+    path.write_text(path.read_text() + '\n[turn]\nmode="external"\nhost="relay.example"\nusername="user"\npassword="secret"\nttl=0\n')
+    with pytest.raises(ValueError, match="turn.ttl must"):
+        load_config(path)
 
 
 def test_load_config_and_resolve_paths(tmp_path: Path) -> None:

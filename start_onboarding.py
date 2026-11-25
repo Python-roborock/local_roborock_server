@@ -30,7 +30,7 @@ from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Util.Padding import pad
 
-from onboarding_shared import build_ssl_context, perform_onboarding_preflight
+from onboarding_shared import build_ssl_context, gateway_mac, normalize_camera_domain, perform_camera_preflight, perform_onboarding_preflight, ssid_pre_key
 
 
 CFGWIFI_HOST = "192.168.8.1"
@@ -438,6 +438,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cst", default="")
     parser.add_argument("--country-domain", default="")
     parser.add_argument(
+        "--camera-domain",
+        default="",
+        help="Optional domain for local camera TURN bootstrap (must be 14 characters or fewer; trailing slash appended automatically).",
+    )
+    parser.add_argument(
         "--allow-insecure-tls",
         action="store_true",
         help="Skip TLS certificate verification for the admin API and MQTT preflight checks.",
@@ -457,7 +462,7 @@ def _prompt_text(value: str, prompt: str, *, default: str = "", secret: bool = F
         print("A value is required.")
 
 
-def prompt_for_config(args: argparse.Namespace) -> GuidedOnboardingConfig:
+def prompt_for_config(args: argparse.Namespace, output: TextIO = sys.stdout) -> GuidedOnboardingConfig:
     api_base_url = normalize_api_base_url(args.server)
     stack_server = sanitize_stack_server(args.server)
     admin_password = _prompt_text(args.admin_password, "Admin password", secret=True)
@@ -469,11 +474,16 @@ def prompt_for_config(args: argparse.Namespace) -> GuidedOnboardingConfig:
         cst = posix_tz_from_iana(timezone)
     if not cst:
         cst = _prompt_text("", "POSIX TZ string (could not auto-detect from timezone)", default=DEFAULT_CST)
+    camera_domain = str(getattr(args, "camera_domain", "") or "").strip()
     country_domain = str(args.country_domain or "").strip()
-    if not country_domain:
+    if camera_domain and country_domain:
+        raise ValueError("Set either country domain or camera domain, not both.")
+    if camera_domain:
+        country_domain = normalize_camera_domain(camera_domain)
+    elif not country_domain:
         country_domain = country_from_iana(timezone)
-    if not country_domain:
-        country_domain = _prompt_text("", "Country domain (could not auto-detect from timezone)", default=DEFAULT_COUNTRY_DOMAIN)
+        if not country_domain:
+            country_domain = _prompt_text("", "Country domain (could not auto-detect from timezone)", default=DEFAULT_COUNTRY_DOMAIN)
     return GuidedOnboardingConfig(
         api_base_url=api_base_url,
         stack_server=stack_server,
@@ -487,7 +497,7 @@ def prompt_for_config(args: argparse.Namespace) -> GuidedOnboardingConfig:
     )
 
 
-def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout) -> bool:
+def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout, *, model: str = "") -> bool:
     token_s = f"S_TOKEN_{secrets.token_hex(16)}"
     token_t = f"T_TOKEN_{secrets.token_hex(16)}"
 
@@ -501,6 +511,13 @@ def onboard_once(config: GuidedOnboardingConfig, output: TextIO = sys.stdout) ->
         hello = build_hello_packet(CFGWIFI_PRE_KEY, pub)
         sock.sendto(hello, target)
         hello_resp = recv_with_timeout(sock, CFGWIFI_TIMEOUT_SECONDS)
+        mac = gateway_mac(CFGWIFI_HOST) if not hello_resp and model else ""
+        if mac:
+            # Some vacuums only accept a pre-key taken from their hotspot SSID.
+            pre_key = ssid_pre_key(model, mac)
+            output.write(f"HELLO: no response with default pre-key, retrying with SSID pre-key {pre_key}\n")
+            sock.sendto(build_hello_packet(pre_key, pub), target)
+            hello_resp = recv_with_timeout(sock, CFGWIFI_TIMEOUT_SECONDS)
         if not hello_resp:
             output.write("HELLO: no response\n")
             return False
@@ -668,7 +685,7 @@ def run_guided_onboarding(
     *,
     config: GuidedOnboardingConfig,
     api: Any,
-    send_onboarding: Callable[[GuidedOnboardingConfig, TextIO], bool] = onboard_once,
+    send_onboarding: Callable[..., bool] = onboard_once,
     output: TextIO = sys.stdout,
     poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
     timeout_seconds: float = POLL_TIMEOUT_SECONDS,
@@ -681,6 +698,14 @@ def run_guided_onboarding(
         selected = choose_device(devices, output=output)
         if selected is None:
             return 0
+
+        try:
+            perform_camera_preflight(api=api, stack_server=config.stack_server,
+                                     country_domain=config.country_domain,
+                                     model=str(selected.get("model") or ""), output=output)
+        except (RuntimeError, ValueError) as exc:
+            output.write(f"Camera preflight failed: {exc}\nChoose another vacuum or quit to edit the settings.\n")
+            continue
 
         if selected.get("new_vacuum"):
             output.write(
@@ -720,7 +745,7 @@ def run_guided_onboarding(
                     break
 
                 output.write("Sending cfgwifi onboarding packet...\n")
-                if not send_onboarding(config, output):
+                if not send_onboarding(config, output, model=str(selected.get("model") or "")):
                     output.write("Onboarding send failed.\n")
                     action = prompt_post_attempt_action(status, output=output)
                     if action == "reselect":
