@@ -173,9 +173,7 @@ async def fetch_voice_bytes(url: str, *, max_bytes: int, timeout_s: float) -> by
 
 
 def _cache_dir(runtime_dir: Path) -> Path:
-    path = runtime_dir / "voice_pkg_cache"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return runtime_dir / "voice_pkg_cache"
 
 
 def _digest(value: str) -> str:
@@ -203,6 +201,7 @@ async def _single_flight(key: str, factory: Callable[[], Awaitable[_T]]) -> _T:
 
 
 def _write_atomic(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     temp.write_bytes(data)
     temp.replace(path)

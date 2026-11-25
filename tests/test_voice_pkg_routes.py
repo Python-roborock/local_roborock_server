@@ -454,6 +454,31 @@ def test_cache_hit_removed_after_the_touch_still_answers(
     assert response.headers["X-RR-Voice-Cache"] == "miss"
 
 
+def test_cache_dir_is_created_on_write_not_on_lookup(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import asyncio
+
+    from https_server.routes.plugin import voice_pkg
+
+    source = "https://us-app.roborock.com/a/voice-pkg/package/en.pkg"
+    _fake_fetch(monkeypatch, {source: b"fresh"})
+    cache_dir = tmp_path / "voice_pkg_cache"
+
+    assert voice_pkg._cache_dir(tmp_path) == cache_dir
+    assert not cache_dir.exists()
+
+    _, response = asyncio.run(
+        voice_pkg._voice_file_response(
+            tmp_path, "us-app.roborock.com", "/a/voice-pkg/package/en.pkg"
+        )
+    )
+    assert response.headers["X-RR-Voice-Cache"] == "miss"
+    assert [p.name for p in cache_dir.glob("*.pkg")] == [
+        voice_pkg._digest(source) + ".pkg"
+    ]
+
+
 def test_package_cache_is_bounded_by_total_bytes(tmp_path: Path, monkeypatch) -> None:
     import os
 
