@@ -93,16 +93,18 @@ class RateLimiter:
         return allowed
 
 
-def known_device(vacuums: list[dict[str, Any]], query_params: dict[str, list[str]], client_ip: str) -> bool:
-    """A request names a paired robot (did/duid in the query), or comes from the address of one that is connected."""
+def known_device(vacuums: list[dict[str, Any]], query_params: dict[str, list[str]], client_ip: str) -> str | None:
+    """The id of the paired robot the request names (did/duid in the query) or comes from, else None."""
     named = {value for key in _DID_KEYS for value in query_params.get(key, []) if value}
     for vac in vacuums:
         if named & {str(vac.get("duid") or ""), str(vac.get("did") or "")}:
-            return True
+            return str(vac.get("duid") or vac.get("did"))
     if named:
-        return False
-    ips = {ip for vac in vacuums for ip in [*(vac.get("ips") or []), vac.get("last_ip")] if ip}
-    return client_ip in ips
+        return None
+    for vac in vacuums:
+        if client_ip in {ip for ip in [*(vac.get("ips") or []), vac.get("last_ip")] if ip}:
+            return str(vac.get("duid") or vac.get("did") or "") or None
+    return None
 
 
 def redact_log_entry(entry: dict[str, object]) -> None:

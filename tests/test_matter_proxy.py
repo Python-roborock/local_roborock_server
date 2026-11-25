@@ -7,6 +7,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 from fastapi.testclient import TestClient
 from starlette.requests import Request
+from starlette.responses import Response
 
 from conftest import write_release_config
 from roborock_local_server import matter_proxy
@@ -180,13 +181,13 @@ def test_the_rate_limit_is_per_client() -> None:
 
 def test_a_request_must_name_or_come_from_a_known_robot() -> None:
     robots = [{"duid": "D1", "did": "d1", "ips": ["10.0.0.7"], "last_ip": "10.0.0.7"}]
-    assert matter_proxy.known_device(robots, {"did": ["d1"]}, "9.9.9.9")
-    assert matter_proxy.known_device(robots, {"duid": ["D1"]}, "9.9.9.9")
-    assert not matter_proxy.known_device(robots, {"did": ["other"]}, "10.0.0.7")
-    assert matter_proxy.known_device(robots, {}, "10.0.0.7")
-    assert not matter_proxy.known_device(robots, {}, "9.9.9.9")
-    assert not matter_proxy.known_device([], {}, "10.0.0.7")
-    assert not matter_proxy.known_device(robots, {"device_id": ["d1"]}, "9.9.9.9")
+    assert matter_proxy.known_device(robots, {"did": ["d1"]}, "9.9.9.9") == "D1"
+    assert matter_proxy.known_device(robots, {"duid": ["D1"]}, "9.9.9.9") == "D1"
+    assert matter_proxy.known_device(robots, {"did": ["other"]}, "10.0.0.7") is None
+    assert matter_proxy.known_device(robots, {}, "10.0.0.7") == "D1"
+    assert matter_proxy.known_device(robots, {}, "9.9.9.9") is None
+    assert matter_proxy.known_device([], {}, "10.0.0.7") is None
+    assert matter_proxy.known_device(robots, {"device_id": ["d1"]}, "9.9.9.9") is None
 
 
 def _supervisor(tmp_path, monkeypatch, enabled: bool) -> ReleaseSupervisor:
@@ -262,3 +263,38 @@ def test_the_route_records_an_event_without_creating_a_robot_for_a_refused_id(tm
     events = [e for e in supervisor.runtime_state.recent_events() if e.get("route") == "matter_key_proxy"]
     assert len(events) == 1 and events[0]["raw_path"] == PATH and events[0]["did"] is None
     assert supervisor.runtime_state.vacuum_snapshot() == []
+
+
+def _ghost_ids(supervisor) -> list[str]:
+    return [str(v.get("duid") or v.get("did")) for v in supervisor.runtime_state.vacuum_snapshot()]
+
+
+def test_an_extra_id_key_cannot_create_a_robot_beside_a_known_duid(tmp_path, monkeypatch) -> None:
+    supervisor = _supervisor(tmp_path, monkeypatch, True)
+    supervisor.runtime_state.upsert_vacuum("D1", did="d1", name="Robot")
+
+    async def fake_forward(request, region):
+        return Response(content=b"K")
+
+    monkeypatch.setattr(matter_proxy, "forward", fake_forward)
+    TestClient(supervisor.app).get(PATH + "?duid=D1&d=ghost")
+    events = [e for e in supervisor.runtime_state.recent_events() if e.get("route") == "matter_key_proxy"]
+    assert len(events) == 1 and events[0]["did"] == "D1"
+    assert "ghost" not in _ghost_ids(supervisor)
+
+
+def test_an_extra_id_key_cannot_create_a_robot_through_the_address_fallback(tmp_path, monkeypatch) -> None:
+    supervisor = _supervisor(tmp_path, monkeypatch, True)
+    supervisor.runtime_state.upsert_vacuum("D1", did="d1", name="Robot")
+    supervisor.runtime_state.record_http_event(
+        event_time="2026-01-01T00:00:00+00:00", route_name="region", clean_path="/region", raw_path="/region",
+        method="GET", host="h", remote="10.0.0.7:1", did="D1",
+    )
+
+    async def fake_forward(request, region):
+        return Response(content=b"K")
+
+    monkeypatch.setattr(matter_proxy, "forward", fake_forward)
+    TestClient(supervisor.app, client=("10.0.0.7", 5000)).get(PATH + "?d=ghost")
+    assert "ghost" not in _ghost_ids(supervisor)
+    assert [e["did"] for e in supervisor.runtime_state.recent_events() if e.get("route") == "matter_key_proxy"] == ["D1"]
