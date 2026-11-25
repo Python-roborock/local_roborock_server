@@ -16,3 +16,6 @@ mitm_logs
 .roborock_onboard.conf
 .roborock_mitm.pid
 roborock_mitm.log
+.roborock_certificate.log
+.roborock_onboard.lock/
+.roborock_sessions/

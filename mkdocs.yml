@@ -56,6 +56,7 @@ nav:
     - Updating: updating.md
   - Integrations:
     - Mobile App Options: roborock_app.md
+    - iOS App Onboarding Wizard: ios_mitm_onboarding.md
     - Camera (Live Video): camera.md
   - Reference:
     - Log Retention: logging.md

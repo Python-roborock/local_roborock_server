@@ -19,6 +19,8 @@ The launcher now preflights that callback before starting `mitmweb`. If the `--l
 
 ### iPhone
 
+On macOS, the [iOS App Onboarding Wizard](ios_mitm_onboarding.md) guides server verification, certificate setup, login, and cleanup. The manual procedure is available below.
+
 1. Log out of the app on your phone.
 
 2. On a machine that is not running the server, run the MITM script:

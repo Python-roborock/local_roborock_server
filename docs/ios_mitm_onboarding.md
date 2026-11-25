@@ -1,154 +1,225 @@
-# Roborock Local Server: macOS iPhone MITM Login Helper
+# iOS App Onboarding Wizard (macOS)
 
-An interactive Bash wrapper for the **official Roborock iOS app** login procedure used with [Python-roborock/local_roborock_server](https://github.com/Python-roborock/local_roborock_server).
+The interactive `roborock_onboard.sh` wizard helps iOS users connect the **official Roborock app** to an already configured Roborock Local Server. It guides the Mac and iPhone operations needed for a temporary intercepted login and synchronization of the app's authentication session to your server.
 
-**Status:** Community-contributed Bash helper, tested successfully on my Mac. It guides the existing onboarding procedure, launches and stops the temporary MITM server, and opens its authenticated browser interface. It is not an installer. Compatibility with other environments has not been confirmed.
-
-## What this does
-
-Once a vacuum has already been provisioned to Roborock Local Server, the official iOS app may need a one-time intercepted login so that its protocol authentication session can be synchronized to the local server. This helper walks the operator through that temporary process on a **Mac**:
-
-- Checks whether the iPhone already trusts the Mac's mitmproxy CA.
-- If needed, finds or generates the CA certificate on the Mac, opens it in Finder, and instructs the operator to AirDrop it to the iPhone.
-- Coordinates obtaining the Roborock email verification code **before** enabling the WireGuard tunnel.
-- Preflights the local server's protocol-sync endpoint and secret.
-- Starts the repository's `mitm_redirect.py` with the explicit HTTPS endpoint, including `:443` when a reverse proxy terminates TLS on port 443.
-- Presents a nine-step terminal wizard with ANSI colors, Unicode-bordered panels, progress indicators, and confirmation prompts.
-- Opens the authenticated mitmweb capture interface on the Mac.
-- Guides replacement of the Roborock MITM WireGuard tunnel and manual verification-code submission.
-- Waits for manual confirmation that robot status and map work, then verifies the app again with WireGuard **off**.
-- Stops the temporary MITM process and reminds the operator to disable trust in the temporary CA.
-
-**This is not vacuum Wi-Fi onboarding.** First complete the upstream [Installation](https://github.com/Python-roborock/local_roborock_server/blob/main/docs/installation.md) and [Onboarding](https://github.com/Python-roborock/local_roborock_server/blob/main/docs/onboarding.md) instructions. This helper supplements the [Official Roborock App](https://github.com/Python-roborock/local_roborock_server/blob/main/docs/roborock_app.md) section.
+First complete [Installation](installation.md) and [Onboarding](onboarding.md). The wizard does not install the server, provision Wi-Fi for your robot(s), or replace robot onboarding. See [Mobile App Options](roborock_app.md) for other ways to use the server.
 
 ## Requirements
 
-- macOS computer with Bash, `curl`, `open`, and [`uv`](https://docs.astral.sh/uv/).
-- A checkout of `local_roborock_server` or a directory containing its `mitm_redirect.py`, `pyproject.toml`, and `uv.lock`.
-- The companion `roborock_onboard.sh` script, placed beside `mitm_redirect.py`.
-- An operational Roborock Local Server instance, with vacuum already paired and account data imported.
-- A valid HTTPS hostname for the local server, reachable from the Mac.
-- Current **Protocol Auth / `admin.session_secret`** from the *running* server's admin dashboard.
-- An iPhone with the official Roborock app and WireGuard installed, and the ability to receive the Roborock login email.
-- AirDrop between the Mac and iPhone, if the CA is not already installed.
+- A Mac with Bash, including macOS's built-in **Bash 3.2**, and the commands `uv`, `uvx`, `curl`, and macOS `open`. Install [`uv`](https://docs.astral.sh/uv/) if needed; it includes `uvx`.
+- **Python 3.8 or newer** for the wizard's embedded helper, available as `python3` or through `uv python find`. This does not replace the repository's separate Python requirement, currently **3.11 through 3.13**, for running the project and Python launcher.
+- A trusted checkout with `roborock_onboard.sh` beside the repository's actual `mitm_redirect.py`, `pyproject.toml`, and `uv.lock`.
+- An operational Roborock Local Server with your robot(s) already onboarded and account data imported. Its HTTPS endpoint must be reachable from the Mac and present a valid certificate for the hostname or IP address you enter.
+- The running server's **Protocol Sync Secret**, available from its web interface.
+- An iPhone with the official Roborock app and WireGuard installed, access to the account's verification email, and the ability to transfer the Mac's public CA certificate to the iPhone, for example with AirDrop.
 
-The hostname prompt expects a hostname without a port; the MITM launch explicitly appends `:443`. The script assumes the server's protocol-sync callback is accessible at `https://<your-hostname>:443/internal/protocol/user-data`. This matches one tested reverse-proxy layout; other port arrangements need script adjustments.
+The wizard uses the server address you enter for the app's local connections. It uses your selected HTTPS port for web requests and port `8881` for robot messaging. If you changed the robot messaging port or configured separate server addresses for the app's services, use the manual setup described in [Mobile App Options](roborock_app.md#official-roborock-app) and [Reverse Proxy](reverse_proxy.md).
 
-## Files
+!!! warning "Temporary certificate trust"
+    Trusting the mitmproxy CA permits interception of HTTPS traffic routed through the proxy. Use a Mac and iPhone you control. Transfer only the public CA certificate, keep its private key on the Mac, and disable Full Trust after onboarding.
 
-```text
-local_roborock_server/
-├── roborock_onboard.sh        # Community helper; add this file
-├── mitm_redirect.py           # Upstream script
-├── pyproject.toml             # Upstream dependencies
-├── uv.lock                    # Upstream lockfile
-└── ...
-```
+## Quick Start
 
-The Bash wrapper is not a replacement for `mitm_redirect.py`. If your local Python file has a development filename such as `mitm_redirect_fixed_v2.py`, confirm it is compatible and rename/copy it to `mitm_redirect.py` before running the wrapper.
-
-## Quick start
-
-From the directory containing the scripts:
+In the repository directory, run:
 
 ```bash
 chmod +x roborock_onboard.sh
 ./roborock_onboard.sh
 ```
 
-The script prompts for your HTTPS hostname and current protocol-sync secret on first use. It stores them in `.roborock_onboard.conf` with permissions `0600`. **That file contains a sensitive credential:** do not commit, upload, share, or back it up to an untrusted location. Add `.roborock_onboard.conf`, `.roborock_mitm.pid`, and `roborock_mitm.log` to `.gitignore` before publishing the helper.
+On first use, the wizard prompts for the server address and Protocol Sync Secret. It then checks the server before asking you to change iPhone trust settings or request a short-lived verification code.
 
-Other commands:
+| Command | When to use it |
+| --- | --- |
+| `./roborock_onboard.sh config` | Replace the saved connection settings or Protocol Sync Secret, including recovery from invalid saved configuration. |
+| `./roborock_onboard.sh status` | Inspect the recorded session for this checkout and report matching unmanaged processes. It does not check iPhone settings. |
+| `./roborock_onboard.sh stop` | Stop the temporary MITM proxy and its background helpers started by the wizard in this project folder. |
 
-```bash
-./roborock_onboard.sh status   # Check for the expected MITM process
-./roborock_onboard.sh stop     # Stop a tracked/recognized MITM process
-./roborock_onboard.sh config   # Replace saved hostname and secret
-```
+### Server Address
 
-## Terminal interface
+| Setup | Example input | HTTPS port |
+| --- | --- | --- |
+| No reverse proxy / default installation | `192.168.1.50` | `555`, selected automatically |
+| Reverse proxy | `roborock.example.com:443` | The externally reachable proxy port, here `443` |
+| Customized HTTPS port in either setup | `roborock.example.com:8443` | The actual port you supply, here `8443` |
 
-V2 uses ANSI colors for headings and status messages, Unicode-bordered panels, and nine-step progress indicators. Press Enter at each confirmation prompt only after completing the requested action; Ctrl+C cancels.
+Enter a complete hostname or IPv4 address, with a port when needed. A port alone, such as `443` or `555`, is invalid. Explicit port numbers are preserved. Pasted `http://` and `https://` prefixes are normalized; connections still use **HTTPS**. Enter only the address and optional port, without paths or login details. IPv6 literals are not supported by the wizard.
 
-Color is enabled only when standard output is a terminal, `TERM` is not `dumb`, and `NO_COLOR` is unset or empty. To disable ANSI colors:
+Use an address that resolves and is reachable from the Mac. An IP address works only if the server's HTTPS certificate is valid for that IP. For proxy routing requirements, see [Reverse Proxy](reverse_proxy.md).
+
+This is the **Roborock Local Server HTTPS endpoint**. It is separate from mitmweb's browser interface at `http://127.0.0.1:8081` on the Mac.
+
+### Protocol Sync Secret
+
+For a Home Assistant installation, follow this path:
+
+**Home Assistant → Apps → Roborock Local Server → Open Web UI → log in with the admin password → copy Protocol Sync Secret → paste it into the terminal.**
+
+For other installations, sign in to the running server's admin web interface and find the active secret under **Protocol Auth**. See [Home Assistant](home_assistant.md) for the server dashboard location.
+
+Paste the **Protocol Sync Secret**, not the admin password. The admin password opens the web interface; the Protocol Sync Secret authorizes synchronization by the wizard. Pasted characters remain hidden in the terminal. Press Enter afterward. Empty and whitespace-only secrets are rejected; a saved whitespace-only secret prompts for replacement. Use `./roborock_onboard.sh config` to replace saved credentials or connection settings.
+
+### Terminal Interface and Initial Check
+
+Boxed headings, nine-step progress indicators, color-coded messages, and confirmation prompts guide the session. Press Enter only after completing the action described. **Ctrl+C cancels** and attempts cleanup.
+
+ANSI colors are disabled when output is not a terminal, `TERM` is `dumb`, or `NO_COLOR` has a nonempty value. For example:
 
 ```bash
 NO_COLOR=1 ./roborock_onboard.sh
 ```
 
-Unicode borders and symbols remain when colors are disabled; use a terminal and font that display them correctly. The interface changes do not replace the existing authentication sequence or add automated verification of iPhone actions.
+Unicode borders and symbols remain visible without color; use a terminal font that supports them.
 
-## Guided iPhone workflow
+The following is an **illustrative initial screen** with saved settings and an expected successful server check, not a record of an onboarding run:
 
-1. **Certificate:** Keep WireGuard off. If the iPhone lacks the mitmproxy CA, the helper checks `~/.mitmproxy/mitmproxy-ca-cert.cer`, attempts to generate the CA locally if absent, and opens Finder with the file selected. AirDrop it to the iPhone, install it under **Settings → General → VPN & Device Management**, then enable **Full Trust** under **Settings → General → About → Certificate Trust Settings**. The certificate must be generated by the *same mitmproxy installation* that will intercept traffic. Never download a stranger's root CA or distribute the private key.
-2. **Email code:** With WireGuard still **off**, request a fresh Roborock verification code. Save the code somewhere you can easily reference, but **do not enter or submit it yet**. The wizard instructs you to type it manually later because the Roborock app does not allow pasting verification codes. Leave the app on the code-entry screen.
-3. **Preflight:** The helper posts a deliberately incomplete payload to `/internal/protocol/user-data`. HTTP `400` with `code: 40041` and `reason: missing_user_data` is the expected success signal for this particular preflight. The current helper also accepts HTTP `2xx` responses. Its `40041` / `missing_user_data` check matches literal compact JSON strings, so differently formatted JSON can fail the check. An unexpected response requires investigation; this preflight does not prove the complete authentication flow works.
-4. **MITM:** The helper starts the MITM launcher on the Mac with `--set web_open_browser=false`, disabling mitmweb's own automatic browser launch. It waits up to 45 seconds for the session-specific authentication URL in `roborock_mitm.log`, verifies the token against the live web interface, and opens the capture page in the Mac's default browser. The URL has this structure (open it **on the Mac**):
+```text
+╭──────────────────────────────────────────────────────────╮
+│ ROBOROCK iOS ONBOARDING                                  │
+╰──────────────────────────────────────────────────────────╯
 
-   ```text
-   http://127.0.0.1:8081/?token=<session-token>#/capture
-   ```
+To change the saved server or Protocol Sync Secret, run:
+  ./roborock_onboard.sh config
 
-   Use the current session's token, not the placeholder above. Do not hardcode or share it. The helper can reuse a recognized running MITM instance only after verifying its authentication URL; an existing instance whose token cannot be verified is left running. A newly started instance is subject to cleanup if startup fails. Once reuse is verified, the wizard tracks that instance for subsequent cleanup as well.
-5. **WireGuard and login:** Delete any pre-existing **Roborock MITM** WireGuard tunnel, then scan the current capture page's QR code to create a fresh tunnel for this session. Enable that new tunnel, return to the Roborock app, and manually type and submit the saved code. **Request the code with WireGuard off; submit it with WireGuard on.**
-6. **Check intercepted session:** Confirm the robot appears and both status and map load. This can take around 1.5 minutes; there is **no fixed timeout for this manual verification step** (the MITM startup check has a separate 45-second deadline). Proceed only when successful. Inspect `roborock_mitm.log` for synchronization errors.
-7. **Check normal operation:** Force-quit Roborock, switch WireGuard **off**, reopen the app, and verify that the robot, status, map, and controls still work without the tunnel.
-8. **Shut down MITM:** After you confirm normal operation with WireGuard off, the helper stops the temporary MITM process.
-9. **Certificate cleanup:** Confirm WireGuard remains **off**. Disable Full Trust for the mitmproxy CA on the iPhone. The installed profile can remain for future recovery, but should not remain trusted between sessions.
-
-If onboarding is interrupted after MITM starts, the script attempts to stop MITM and prints a reminder to turn off WireGuard and certificate trust. **Always verify these settings manually.**
-
-## Reverse-proxy note
-
-If your public HTTPS entry point is a reverse proxy (for example, pfSense HAProxy on `443`) forwarding to the local server's internal HTTPS port (commonly `555`), configure the MITM callback with the **externally reachable port**:
-
-```bash
-uv run mitm_redirect.py \
-  --local-api https://api-roborock.example.com:443 \
-  --sync-secret 'YOUR_CURRENT_ADMIN_SESSION_SECRET'
+Configured server: https://roborock.example.com:443
+Checking the server connection and Protocol Sync Secret (up to 10 seconds)...
+✓ Server connection verified.
 ```
 
-Do not assume the upstream default `:555` is reachable from the Mac. Avoid exposing the local server's internal management port directly to the Internet. Prefer private DNS/network access where practical, and follow upstream guidance on securing the server.
+The check sends a protocol-sync probe to the configured HTTPS endpoint with a **10-second total request limit**. DNS, connection, timeout, TLS/certificate, access, and unexpected-response failures stop the wizard with guidance to correct the settings. Complete this check before making any iPhone changes. It checks endpoint access, not the entire login flow.
+
+## Guided iPhone Workflow
+
+The nine steps below match the wizard's terminal headings. iPhone certificate installation, Full Trust, WireGuard state, login, maps, and controls depend on **your confirmation**. The Mac cannot change or verify those phone settings. Manual checkpoints have no MITM startup timeout.
+
+### Step 1: PREPARE THE IPHONE
+
+Keep **WireGuard OFF** throughout certificate preparation.
+
+Check **Settings → General → About → Certificate Trust Settings** on the iPhone. If the correct mitmproxy certificate is already installed, enable it under **Enable Full Trust for Root Certificates**. The certificate must correspond to the Mac's CA used by mitmproxy for this session; the wizard cannot verify that an existing iPhone certificate matches.
+
+If it is not installed, the wizard locates `~/.mitmproxy/mitmproxy-ca-cert.cer` and opens Finder with it selected. If Finder does not open, locate that file manually. AirDrop the public certificate to the iPhone, then:
+
+1. Accept the transfer and open **Settings → General → VPN & Device Management**.
+2. Select the mitmproxy profile and install it.
+3. Open **Settings → General → About → Certificate Trust Settings**.
+4. Enable the mitmproxy certificate under **Enable Full Trust for Root Certificates**.
+
+Installing the profile and enabling Full Trust are separate actions. Confirm both before continuing.
+
+If the Mac's certificate is missing, the wizard briefly runs installed `mitmdump`, or uses this fallback:
+
+```bash
+uvx --from mitmproxy mitmdump
+```
+
+The wizard adds a loopback-only listener on an automatically selected port, supervises the temporary processes, waits up to 90 seconds for certificate generation, and stops them afterward. Failures point to `.roborock_certificate.log`. It uses no `sudo` and makes no macOS Keychain or trust changes.
+
+!!! warning "Transfer the public certificate only"
+    Send `mitmproxy-ca-cert.cer`. Never transfer `mitmproxy-ca.pem` or `mitmproxy-ca.p12`, which contain the CA private key. Use the CA belonging to the mitmproxy installation used for this onboarding session.
+
+### Step 2: GET THE ROBOROCK VERIFICATION CODE
+
+With **WireGuard still OFF**, open the official Roborock app, log out if needed to reach login, enter your account email, accept the terms and conditions, and request a fresh email verification code.
+
+**Save the verification code somewhere you can easily reference. DO NOT ENTER IT YET.**
+
+The Roborock app does not allow pasting verification codes, so you will need to type the code manually later. Leave the app at the verification-code entry screen and confirm in the terminal only after the code arrives.
+
+### Step 3: PREPARE MITM CONNECTION
+
+The initial screen has already checked the configured server. At startup, the Python launcher performs its own fresh preflight to catch endpoint or credential changes during the manual phone steps. A failure stops onboarding before you enable WireGuard.
+
+### Step 4: START MITM SERVER
+
+The wizard starts a fresh managed MITM session with `--set web_open_browser=false`, disabling mitmweb's automatic browser launch. It shows startup progress and waits for the authenticated interface to become ready. The readiness window is **90 seconds**, after a separate short supervisor-startup allowance of up to five seconds. These are startup limits, not deadlines for completing phone instructions.
+
+The wizard reads the current authentication URL from `roborock_mitm.log` and validates its token against the live authenticated `/flows` endpoint. Only then does it open the authenticated Capture page in the Mac's default browser, using this structure:
+
+```text
+http://127.0.0.1:8081/?token=<session-token>#/capture
+```
+
+The token is session-specific. Keep it private; never hardcode, share, or substitute an old token. The wizard does not trust stale log tokens or fall back to an unauthenticated page. Disabling mitmweb's own browser opener avoids redundant automatic tabs.
+
+Failed readiness stops startup and triggers a cleanup attempt. If the server is ready but macOS reports that browser opening failed, the wizard pauses: **Open the authenticated URL from the private log, then select Capture.** Confirm only after the page is open. A successful `open` command dispatches the URL but cannot prove the browser displayed it; use the same recovery path if the page does not appear.
+
+### Step 5: CONNECT WIREGUARD AND SUBMIT LOGIN
+
+1. Delete any previous **Roborock MITM** WireGuard tunnel on the iPhone.
+2. Create a new tunnel by scanning the **current session's** QR code on the Mac's Capture page. Create a fresh tunnel each time.
+3. Enable the newly created tunnel.
+4. Return to the Roborock app's code-entry screen and manually enter the saved verification code.
+5. Submit the login, then confirm in the terminal after it succeeds.
+
+**Request the code with WireGuard OFF; submit it with WireGuard ON.**
+
+### Step 6: VERIFY ROBOT THROUGH MITM
+
+Keep WireGuard **ON** and MITM running. Confirm your robot(s) appear, open the device screen, and wait for status and map data to load. The wizard suggests approximately 1.5 minutes, but this manual checkpoint has no fixed timeout. Continue only after status and maps work.
+
+### Step 7: TEST WITHOUT THE MITM TUNNEL
+
+Leave MITM running on the Mac. Force-quit the Roborock app, turn WireGuard **OFF**, and reopen the app. Confirm your robot(s), status, maps, and normal controls work. Do not continue if this check fails.
+
+### Step 8: SHUT DOWN MITM
+
+After your confirmation that normal operation works with WireGuard off, the wizard stops its verified temporary MITM session and child processes. If shutdown cannot be verified, follow the reported recovery guidance before considering cleanup complete.
+
+### Step 9: CERTIFICATE CLEANUP
+
+Confirm WireGuard remains **OFF**. In **Settings → General → About → Certificate Trust Settings**, disable Full Trust for the mitmproxy CA. The certificate profile may remain installed for future use, provided it is not left trusted between onboarding sessions. Confirm in the terminal after Full Trust is off.
+
+!!! warning "Delete sensitive captures manually"
+    `mitm_logs/<session>/` can contain complete request and response headers and bodies, including cloud login tokens, Roborock authentication credentials, `rriot` keys, and other intercepted account or protocol information. Never publish raw captures, credentials, or authentication URLs.
+
+After successful onboarding, identify the **current session directory shown by the wizard** and delete that directory in Finder. If it cannot identify the directory automatically, use the `[LOG]` entries in `roborock_mitm.log` to locate that session under `mitm_logs/`. Preserve unrelated sessions unless you intentionally want to remove them. The wizard does **not** delete captures automatically.
+
+Treat `roborock_mitm.log` separately: it contains the authenticated web URL. Delete that startup log after troubleshooting is finished.
+
+## Stopping and Recovery
+
+Run `./roborock_onboard.sh status` from this checkout to inspect its recorded session. An existing verified wizard session must be stopped with `./roborock_onboard.sh stop` before starting fresh with current settings. Sessions are not automatically reused.
+
+Shutdown requires verified ownership of the managed session and its process group. Unrelated sessions and other checkouts are not terminated. Legacy or externally launched sessions must be stopped through their original launcher. A stale numeric PID is not permission to stop a process. If ownership cannot be verified, follow the diagnostic instructions and confirm the original server has stopped before removing only the state pointer identified by the wizard.
+
+Pressing **Ctrl+C**, or an ordinary failure during onboarding, attempts cleanup of the temporary processes and reminds you to turn WireGuard and Full Trust off. Cleanup can fail, and power loss or forceful termination can prevent it. Check `status` and use `stop` as needed; **always check iPhone VPN and certificate trust settings manually**.
+
+A checkout-wide lock prevents concurrent wizard runs. If a lock remains after interruption, first confirm that **no onboarding wizard is running**. Only then remove the empty `.roborock_onboard.lock` directory in this checkout using Finder and retry. Do not delete other state or captures to clear a lock.
+
+macOS may deny inspection of unrelated processes. That message is advisory and does not itself block startup. An occupied port `8081` is reported without stopping its listener or overwriting the existing startup log. Stop a previous managed session with the wizard; close another listener through its own launcher.
 
 ## Troubleshooting
 
-| Symptom | Check |
+| Symptom | Action |
 | --- | --- |
-| `mitm.it` says traffic is not going through mitmproxy | Expected when the iPhone is not routed through the MITM instance. This helper uses **Mac-generated certificate + AirDrop**, not `mitm.it`, for initial certificate transfer. |
-| `403 Authentication Required` | Use the current session's authenticated URL, including `?token=...` before `#/capture`. A bare `http://127.0.0.1:8081/#/capture` URL can fail authentication. Do not reuse an old session's token. |
-| Two browser tabs open | Confirm the launcher supports and receives `--set web_open_browser=false`. The helper opens the authenticated page itself; an already-running instance may have launched a tab under its previous settings. |
-| Capture page does not open, or startup times out | Inspect `roborock_mitm.log` for startup errors and the current `Web server listening at` authentication URL. Dependency downloads can exceed the 45-second startup window. Resolve the cause and retry; if only browser opening failed, open the current authenticated URL on the Mac and select Capture. Keep the token private. |
-| Existing WireGuard tunnel fails | Delete the old Roborock MITM tunnel and scan the current session's QR code to create a fresh tunnel. |
-| TLS/certificate error during intercepted login | Ensure the installed CA matches the Mac's current `~/.mitmproxy` CA and **Full Trust** is enabled. |
-| Verification email does not arrive | Turn WireGuard off, request a new code, and only enable WireGuard before submitting it. |
-| Preflight fails | Verify DNS, HTTPS certificate, reverse-proxy routing, callback path, and the active `admin.session_secret`. |
-| `Address already in use` | Check for an earlier MITM process and run `./roborock_onboard.sh status` or `stop`. Do not terminate unrelated listeners. |
-| App works with WireGuard on but not off | Do not declare success. Inspect the protocol-auth sync result and local server logs. |
-| Certificate is absent from the Mac | The wrapper attempts local generation via `mitmdump`/`uv`; verify that the correct CA was generated before installing it. |
+| Initial server check fails | Check the complete hostname/IP, HTTPS port, DNS, server availability, proxy routing, and Protocol Sync Secret. Use `./roborock_onboard.sh config` to correct saved settings. |
+| Server HTTPS certificate or TLS verification fails | Check the server's certificate chain and that its certificate covers the address entered. Correct the endpoint or certificate; keep TLS verification enabled. This is separate from trusting the temporary CA on the iPhone. |
+| Server returns an unexpected response | The incomplete POST to `/internal/protocol/user-data` must return HTTP **400** with structured JSON `data.reason` equal to `missing_user_data`. JSON spacing and key order do not matter. Ordinary 2xx, HTML, redirects, and unrelated errors are rejected; no particular numeric `code` is required. Check proxy routing and access requirements. |
+| `403 Authentication Required` in mitmweb | Open the current session's private authenticated URL with `?token=...` before `#/capture`. A bare Capture URL or an old token is insufficient. |
+| Browser does not open, or authenticated Capture page is missing | After readiness succeeds, open the authenticated URL from the current private startup log on the Mac and select Capture. If it still fails, inspect the startup log and session status before retrying. Keep the token private. |
+| MITM exits or authenticated readiness fails | Inspect `roborock_mitm.log` locally for launcher preflight, dependency/tool startup, or binding errors. Downloads may exceed the readiness window. Resolve the cause, check `status`, stop any remaining verified session, and retry. |
+| Port `8081` is already occupied | Use `status` and `stop` for a prior managed session. Otherwise close the listener through its original launcher. The wizard leaves that listener and the existing startup log untouched. |
+| Certificate generation fails | Inspect `.roborock_certificate.log` locally and check `mitmdump` or `uvx` availability and network access. Transfer the public CA only after generation succeeds. |
+| iPhone reports certificate errors during intercepted login | Check that the installed profile matches the Mac's current mitmproxy CA and Full Trust is enabled. This is an iPhone trust check, not a server HTTPS verification fix. |
+| Verification email does not arrive | Keep WireGuard off while requesting a fresh code. Save it before enabling the new tunnel. |
+| Previous WireGuard tunnel fails | Delete the old Roborock MITM tunnel and scan the current session's QR code. |
+| App works through MITM but fails with WireGuard off | Stop at Step 7. Inspect protocol-sync errors in the private startup log and server logs; do not confirm successful onboarding. |
 
-## Security and implementation caveats
+## Local Files and Credentials
 
-- Temporarily trusting a custom root CA permits interception of TLS traffic routed through that proxy. Use only a Mac and iPhone you control, and revoke trust immediately afterward.
-- The CA **private key** must stay on the Mac. Only AirDrop `mitmproxy-ca-cert.cer`, never `mitmproxy-ca.pem` or `mitmproxy-ca.p12`.
-- The script stores a sensitive server secret in a local config file. Its process command line may also expose the secret to other local processes/users. Consider a more restrictive credential-handling design before upstreaming.
-- The configuration file is sourced as shell code; protect it from modification by untrusted users. Treat MITM logs and web authentication tokens as sensitive too. The inspected helper creates a new MITM log with permissions `0600`.
-- The helper's process detection and cleanup are best-effort and should be tested with the actual installed launcher and `uv` version. Existing MITM instances may have different command lines.
-- The certificate-generation fallback starts and stops `mitmdump`; verify it does not interfere with any existing proxy instance.
-- The success prompts rely on **user confirmation**; the script does not programmatically prove that the map or controls work.
-- This helper targets the **official iOS app** and has not been validated as an Android onboarding tool.
+Generated files are kept beside the wizard unless noted otherwise:
 
-## Developer notes and testing status
+| Path | Purpose and handling |
+| --- | --- |
+| `.roborock_onboard.conf` | Sensitive server address and Protocol Sync Secret. Written atomically with mode `0600`; keep private. |
+| `.roborock_sessions/` | Private per-launch supervisor state for MITM and certificate generation. Process-management data, separate from traffic captures. Preserve it while a session may still need shutdown. |
+| `.roborock_mitm.pid` | Pointer to a managed session directory, despite the filename. Process-management data, not authority to terminate an arbitrary PID. |
+| `.roborock_onboard.lock/` | Empty directory serializing wizard runs. Remove only as described under recovery. |
+| `.roborock_certificate.log` | Restricted certificate-generation diagnostics. Review privately if generation fails. |
+| `roborock_mitm.log` | Sensitive startup diagnostics and the session's authenticated web URL. Remove when troubleshooting is finished. |
+| `mitm_logs/<session>/` | Sensitive intercepted traffic. Manually remove the identified session after successful onboarding. |
 
-V2 is intended to include extensive developer-facing comments explaining configuration, certificate management, preflight validation, MITM lifecycle and cleanup, browser authentication, and the required login sequence. In the available local `roborock_onboard.sh`, comments explain terminal styling, Unicode progress alignment, log handling, token extraction and validation, and ownership of a reused MITM process. That copy does **not** contain extensive commentary across every subsystem; verify the final submitted script before claiming that broader documentation is complete.
+Configuration is **literal data**, not an executable shell script. Ordinary quotes and shell punctuation in values do not execute commands. Invalid legacy configuration requires replacement with `./roborock_onboard.sh config`; do not source it to recover values.
 
-The browser startup logic depends on the installed launcher forwarding `--set web_open_browser=false`, logging the expected `http://127.0.0.1:8081/?token=...` announcement, and exposing the authenticated `/flows` endpoint. Compare these assumptions with your installed `mitm_redirect.py` and mitmweb version. A different host, port, log format, or authentication mechanism can require changes.
-
-This document was compared with the available local V2 helper. Bash syntax validation with `bash -n` passed for that copy. This is not an end-to-end test: certificate generation and installation, live server preflight, launcher compatibility, browser behavior, WireGuard routing, real iOS authentication, protocol synchronization, and interruption/cleanup behavior still require validation in the target environment. Prior reports of terminal rendering review do not establish compatibility with every terminal. Do not describe the final revision as independently end-to-end tested until that testing has actually been completed.
-
-## Contributing upstream
-
-If the maintainer would like this included, propose it as an **optional macOS helper** alongside an update to `docs/roborock_app.md`. Keep the upstream's normal manual procedure available. Test the complete flow and avoid adding machine-specific hostnames, secrets, certificates, or logs to the pull request.
-
-Upstream repository: https://github.com/Python-roborock/local_roborock_server
-
-License and attribution should follow the upstream project's contribution requirements.
+The wizard transports the secret through environment variables or standard input, rather than secret-bearing command arguments. Environment transport does not guarantee protection from privileged or same-user inspection. Restricted permissions and ignored files do not make credentials or captures safe to share or back up to an untrusted location.
