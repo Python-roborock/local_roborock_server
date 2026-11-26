@@ -383,3 +383,28 @@ def test_a_broken_file_is_left_alone(tmp_path: Path) -> None:
     broken = "[network\nhttps_port = 555\n"
     patched, changes = plan_config_patch({"ROBOROCK_SERVER_HTTPS_PORT": "443"}, broken)
     assert patched == broken and "not valid TOML" in changes[0]
+
+
+def test_write_config_from_env_replaces_atomically_with_private_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("stale", encoding="utf-8")
+    replaced: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def spy(src: object, dst: object) -> None:
+        replaced.append((Path(str(src)).name, Path(str(dst)).name))
+        real_replace(src, dst)
+
+    monkeypatch.setattr("roborock_local_server.env_config.os.replace", spy)
+
+    write_config_from_env(_BASE_ENV, config_path=config_path)
+
+    assert replaced == [("config.toml.tmp", "config.toml")]
+    assert "api-roborock.example.com" in config_path.read_text(encoding="utf-8")
+    assert not (tmp_path / "config.toml.tmp").exists()
+    if os.name != "nt":
+        assert config_path.stat().st_mode & 0o777 == 0o600

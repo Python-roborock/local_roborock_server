@@ -584,6 +584,21 @@ def patch_config_from_env(env: Mapping[str, str], *, config_path: Path) -> list[
     return changes
 
 
+def _write_private_file(path: Path, text: str) -> None:
+    """Writes `text` to a new 0600 temp file and renames it over `path`, so a reader never sees a partial file."""
+    temp = path.with_name(path.name + ".tmp")
+    try:
+        temp.unlink(missing_ok=True)
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+        os.replace(temp, path)
+    except OSError:
+        # a bind-mounted single file cannot be replaced; write it in place instead
+        temp.unlink(missing_ok=True)
+        path.write_text(text, encoding="utf-8", newline="")
+
+
 def write_config_from_env(
     env: Mapping[str, str],
     *,
@@ -596,7 +611,7 @@ def write_config_from_env(
         secret_paths=secret_paths,
     )
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(config_text, encoding="utf-8")
+    _write_private_file(config_path, config_text)
     for path, contents in secrets_to_write.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(contents, encoding="utf-8")
