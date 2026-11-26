@@ -7,7 +7,12 @@ from shared.context import ServerContext
 from shared.data_helpers import as_int
 
 from ...auth.service import ok
-from ...plugin.common import APPPLUGIN_LIST, proxied_plugin_records, snapshot_plugin_records
+from ...plugin.common import (
+    built_in_catalog,
+    proxied_plugin_records,
+    snapshot_plugin_records,
+)
+from ..product_service import served_models_by_product_id
 
 # Request "type" of the iOS app; Android sends 2.
 IOS_APP_TYPE = 1
@@ -59,6 +64,27 @@ def _product_id(record: dict[str, Any]) -> int:
     return as_int(record.get("productid"), 0)
 
 
+def _built_in_records(ctx: ServerContext, product_ids: set[int]) -> list[dict[str, Any]]:
+    # Product ids differ by cloud region, so the built-in record is looked up
+    # by the model that /api/v5/product gives the id to. An id that no device
+    # has, or that names two models, gets no record.
+    catalog = built_in_catalog(ctx)
+    served_models = served_models_by_product_id(ctx, catalog)
+    records = []
+    for product_id in sorted(product_ids):
+        models = served_models.get(product_id, set())
+        if len(models) != 1:
+            continue
+        [model] = models
+        record = catalog.records_by_model.get(model)
+        if record is None:
+            continue
+        # The answer carries the id that the app requested. The record can
+        # come from the catalog of another region; see catalog_for_region.
+        records.append(dict(record, productid=product_id))
+    return records
+
+
 def build(
     ctx: ServerContext,
     _query_params: dict[str, list[str]],
@@ -72,17 +98,19 @@ def build(
         snapshot_records = snapshot_plugin_records(ctx, "appplugin_ios") or snapshot_records
     product_ids = _requested_product_ids(body_params)
     if product_ids is None:
-        return ok(proxied_plugin_records(ctx, snapshot_records or APPPLUGIN_LIST))
+        return ok(proxied_plugin_records(ctx, snapshot_records or built_in_catalog(ctx).appplugin_records))
     # When the app opens a device, it installs the first record without
     # checking its productid. So a device must only get the records for the
     # product ids it asked for. If no record matches, the answer is an empty
     # list.
     matching = [record for record in snapshot_records if _product_id(record) in product_ids]
     # A device added after the snapshot import has no snapshot record, so the
-    # ids that the snapshot lacks come from the built-in list. The built-in list
-    # is the same for both platforms. So an iOS request can get an Android zip
-    # here, which the iOS app cannot load. The fallback to the Android catalog
-    # above has the same limitation if the snapshot has no iOS catalog.
+    # ids that the snapshot lacks get the built-in record of their model. The
+    # built-in list is the same for both platforms. So an iOS request can get
+    # an Android zip here, which the iOS app cannot load. The fallback to the
+    # Android catalog above has the same limitation if the snapshot has no iOS
+    # catalog.
     missing_ids = product_ids - {_product_id(record) for record in snapshot_records}
-    matching += [record for record in APPPLUGIN_LIST if _product_id(record) in missing_ids]
+    if missing_ids:
+        matching += _built_in_records(ctx, missing_ids)
     return ok(proxied_plugin_records(ctx, matching))

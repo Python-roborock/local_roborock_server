@@ -127,12 +127,6 @@ DEFAULT_PRODUCT_SCHEMA: list[dict[str, Any]] = [
     },
 ]
 
-MODEL_PRODUCT_ID_OVERRIDES = {
-    "roborock.vacuum.a87": 110,
-    "roborock.vacuum.a15": 23,
-    "roborock.vacuum.sc05": 10001,
-}
-
 MQTT_TYPES = {
     1: "CONNECT",
     2: "CONNACK",

@@ -21,7 +21,7 @@ from roborock.data import HomeData, HomeDataDevice, HomeDataProduct, RRiot, User
 from roborock.exceptions import RoborockRateLimit
 from roborock.web_api import PreparedRequest, RoborockApiClient, _get_hawk_authentication
 
-from shared.data_helpers import model_product_ids
+from shared.data_helpers import as_int, model_product_ids
 
 
 def _find_repo_root() -> Path:
@@ -380,22 +380,19 @@ async def _request_cloud_api_data(
 
 
 def _plugin_product_ids(home_data: HomeData, cloud_products: Any = None) -> list[int]:
-    # Newer models (e.g. roborock.vacuum.a226) carry a string product id in home
-    # data; the numeric id the plugin catalog is keyed by comes from /api/v5/product.
+    # The local /api/v5/product gives each model the id of the cloud's product
+    # list, else the numeric id in home data. The app requests the device plugin
+    # with that id, so the import fetches the plugins by the same id. Newer
+    # models (e.g. roborock.vacuum.a226) have a string product id in home data.
     ids_by_model = model_product_ids(cloud_products)
-    product_ids: set[int] = set()
+    ids_by_home_data_id: dict[str, int] = {}
     for product in home_data.products or []:
-        try:
-            product_ids.add(int(product.id))
-        except (TypeError, ValueError):
-            model_id = ids_by_model.get(str(product.model or "").strip().lower())
-            if model_id:
-                product_ids.add(model_id)
+        model_id = ids_by_model.get(str(product.model or "").strip().lower())
+        ids_by_home_data_id[str(product.id)] = model_id or as_int(product.id, 0)
+    product_ids = set(ids_by_home_data_id.values())
     for device in _all_home_devices(home_data):
-        try:
-            product_ids.add(int(getattr(device, "product_id", 0) or 0))
-        except (TypeError, ValueError):
-            continue
+        home_data_id = str(getattr(device, "product_id", "") or "")
+        product_ids.add(ids_by_home_data_id.get(home_data_id) or as_int(home_data_id, 0))
     return sorted(product_id for product_id in product_ids if product_id > 0)
 
 

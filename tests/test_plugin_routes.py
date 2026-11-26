@@ -18,6 +18,24 @@ def _build_supervisor(tmp_path: Path) -> ReleaseSupervisor:
     return ReleaseSupervisor(config=config, paths=paths)
 
 
+def _pair_devices(supervisor: ReleaseSupervisor, *models: str) -> None:
+    # /api/v1/appplugin answers a built-in record only for a product id that
+    # /api/v5/product gives to the model of the record. /api/v5/product lists
+    # the inventory devices that have paired with the server.
+    devices = [
+        {"duid": f"duid-{index}", "name": model, "model": model, "product_id": f"rriot-{model}"}
+        for index, model in enumerate(models)
+    ]
+    supervisor.paths.inventory_path.write_text(json.dumps({"devices": devices}) + "\n", encoding="utf-8")
+    for device in devices:
+        supervisor.runtime_credentials.ensure_device(
+            did=f"did-{device['duid']}",
+            duid=device["duid"],
+            model=device["model"],
+            product_id=device["product_id"],
+        )
+
+
 def _source_from_proxied_url(url: str) -> str:
     parsed = urllib.parse.urlsplit(url)
     return urllib.parse.parse_qs(parsed.query).get("src", [""])[0]
@@ -135,6 +153,7 @@ def _app_plugin_product_ids(payload: dict) -> list[int]:
 
 def test_app_plugin_answers_only_requested_product_ids(tmp_path: Path) -> None:
     supervisor = _build_supervisor(tmp_path)
+    _pair_devices(supervisor, "roborock.vacuum.a15")
     client = TestClient(supervisor.app)
 
     # The app posts this JSON body and installs the first record it gets back.
@@ -148,6 +167,7 @@ def test_app_plugin_answers_only_requested_product_ids(tmp_path: Path) -> None:
 
 def test_app_plugin_reads_product_ids_from_form_body(tmp_path: Path) -> None:
     supervisor = _build_supervisor(tmp_path)
+    _pair_devices(supervisor, "roborock.vacuum.a15", "roborock.vacuum.sc05")
     client = TestClient(supervisor.app)
 
     repeated = client.post("/api/v1/appplugin", data={"type": "2", "productids": ["23", "10001"]})
@@ -253,25 +273,29 @@ def test_app_plugin_filters_cloud_snapshot_catalog(tmp_path: Path) -> None:
 
 
 def test_app_plugin_falls_back_to_built_in_list_for_ids_missing_from_snapshot(tmp_path: Path) -> None:
+    from https_server.routes.plugin import common as plugin_common
+
     supervisor = _build_supervisor(tmp_path)
     # A device added after the snapshot import has no record in the snapshot.
     _write_android_app_plugin_snapshot(supervisor, [_SNAPSHOT_APP_PLUGIN_RECORD])
+    _pair_devices(supervisor, "roborock.vacuum.a15")
     client = TestClient(supervisor.app)
 
     missing = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23], "type": 2})
     mixed = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23, 4242], "type": 2})
 
     [record] = missing.json()["data"]
+    [built_in_23] = [item for item in plugin_common.APPPLUGIN_LIST if item["productid"] == 23]
     assert record["productid"] == 23
-    assert record["version"] == 5208
-    assert _source_from_proxied_url(record["url"]) == (
-        "https://cdn.awsusor0.fds.api.mi-img.com/resources/iot/plugin/7cf4eb4c705c420483741189be389927.zip"
-    )
+    assert record["version"] == built_in_23["version"]
+    assert _source_from_proxied_url(record["url"]) == built_in_23["url"]
     # Snapshot records come first, built-in records after them.
     assert _app_plugin_product_ids(mixed.json()) == [4242, 23]
 
 
 def test_app_plugin_prefers_snapshot_record_over_built_in_record(tmp_path: Path) -> None:
+    from https_server.routes.plugin import common as plugin_common
+
     supervisor = _build_supervisor(tmp_path)
     _write_android_app_plugin_snapshot(
         supervisor,
@@ -285,12 +309,17 @@ def test_app_plugin_prefers_snapshot_record_over_built_in_record(tmp_path: Path)
             }
         ],
     )
+    _pair_devices(supervisor, "roborock.vacuum.a15", "roborock.vacuum.sc05")
     client = TestClient(supervisor.app)
 
     response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [23, 10001], "type": 2})
 
     records = response.json()["data"]
-    assert [(item["productid"], item["version"]) for item in records] == [(23, 9999), (10001, 90)]
+    [built_in_10001] = [item for item in plugin_common.APPPLUGIN_LIST if item["productid"] == 10001]
+    assert [(item["productid"], item["version"]) for item in records] == [
+        (23, 9999),
+        (10001, built_in_10001["version"]),
+    ]
     assert _source_from_proxied_url(records[0]["url"]) == "https://rrpkg-us.roborock.com/iot/plugin/cloud-23.zip"
 
 
@@ -467,11 +496,14 @@ ANDROID_23_ZIP = "https://app-files.roborock.com/iot/plugin/android-23.zip"
 
 def _ios_app_plugin_client(tmp_path: Path) -> TestClient:
     # Product 199 is in both catalogs, and 300 is only in the iOS catalog. Products 23
-    # and 4242 are only in the Android catalog. The built-in list also has 23.
+    # and 4242 are only in the Android catalog. The import gives 23 to the paired
+    # a15, and the built-in list also has 23.
     supervisor = _build_supervisor(tmp_path)
+    a15_product = {"id": 23, "model": "roborock.vacuum.a15"}
     _write_app_plugin_snapshot(
         supervisor,
         {
+            "product": {"data": {"categoryDetailList": [{"productList": [a15_product]}]}},
             "appplugin": {
                 "data": [
                     _app_plugin_record(199, ANDROID_ZIP),
@@ -482,6 +514,7 @@ def _ios_app_plugin_client(tmp_path: Path) -> TestClient:
             "appplugin_ios": {"data": [_app_plugin_record(199, IOS_ZIP), _app_plugin_record(300, IOS_ONLY_ZIP)]},
         },
     )
+    _pair_devices(supervisor, "roborock.vacuum.a15")
     return TestClient(supervisor.app)
 
 
@@ -529,3 +562,142 @@ def test_app_plugin_ios_answers_full_ios_catalog_without_product_ids(tmp_path: P
 
     assert _app_plugin_sources(no_ids.json()) == [(199, IOS_ZIP), (300, IOS_ONLY_ZIP)]
     assert _app_plugin_sources(empty_ids.json()) == [(199, IOS_ZIP), (300, IOS_ONLY_ZIP)]
+
+
+@pytest.mark.parametrize(
+    ("model", "product_id", "version", "source"),
+    [
+        # Saros 20 Flow
+        ("roborock.vacuum.a307", 263, 7046, "https://app-files.roborock.com/iot/plugin/de0ceb1351854a819a0374fdcbf17831.zip"),
+        # Qrevo Curv 2 Pro
+        ("roborock.vacuum.a226", 199, 6846, "https://app-files.roborock.com/iot/plugin/69588500d2c54b0bb154a967646dd57b.zip"),
+        # F25 Ultra
+        ("roborock.wdv.a194", 180, 2674, "https://app-files.roborock.com/iot/plugin/6d5e1e8589e54a1e81351ee54b75eed7.zip"),
+        # RockNeo Q1
+        ("roborock.mower.a222", 224, 856, "https://app-files.roborock.com/iot/plugin/9dbe90bcb3b343458086800d7f556ab2.zip"),
+    ],
+)
+def test_app_plugin_answers_built_in_record_without_cloud_snapshot(
+    tmp_path: Path, model: str, product_id: int, version: int, source: str
+) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    _pair_devices(supervisor, model)
+    client = TestClient(supervisor.app)
+
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [product_id], "type": 2})
+
+    [record] = response.json()["data"]
+    assert record["productid"] == product_id
+    assert record["version"] == version
+    assert _source_from_proxied_url(record["url"]) == source
+
+
+def test_app_plugin_cloud_snapshot_wins_over_built_in_records(tmp_path: Path) -> None:
+    supervisor = _build_supervisor(tmp_path)
+    snapshot = {
+        "web_api_cache": {
+            "plugin_catalogs": {
+                "appplugin": {
+                    "data": [
+                        {
+                            "version": 9999,
+                            "url": "https://app-files.roborock.com/iot/plugin/cloud-a307.zip",
+                            "pluginLevel": 3002,
+                            "productid": 263,
+                            "apilevel": 10030,
+                        }
+                    ]
+                },
+            }
+        }
+    }
+    supervisor.paths.cloud_snapshot_path.write_text(json.dumps(snapshot) + "\n", encoding="utf-8")
+    client = TestClient(supervisor.app)
+
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [263], "type": 2})
+
+    [record] = response.json()["data"]
+    assert record["version"] == 9999
+    assert _source_from_proxied_url(record["url"]) == "https://app-files.roborock.com/iot/plugin/cloud-a307.zip"
+
+
+
+def _cloud_product_catalog(products: dict[str, int]) -> dict:
+    product_list = [{"id": product_id, "model": model} for model, product_id in products.items()]
+    return {"data": {"categoryDetailList": [{"category": {"id": 1}, "productList": product_list}]}}
+
+
+@pytest.mark.parametrize(
+    ("model", "import_id"),
+    [
+        # The EU ids 199 and 110 belong to the a226 and the roborock.wm.a91.
+        ("roborock.vacuum.a199", 199),
+        ("roborock.vacuum.a87", 110),
+    ],
+)
+def test_app_plugin_answers_built_in_record_of_the_model_that_gets_the_id(
+    tmp_path: Path, model: str, import_id: int
+) -> None:
+    from shared.device_plugin_catalog import catalog_for_region
+
+    # The import of another region gives the id to another model than the
+    # built-in list. The device was added after the import, so the snapshot
+    # has no record for it.
+    supervisor = _build_supervisor(tmp_path)
+    _write_app_plugin_snapshot(
+        supervisor,
+        {
+            "product": _cloud_product_catalog({model: import_id, "roborock.vacuum.a15": 23}),
+            "appplugin": {"data": [_app_plugin_record(23, ANDROID_23_ZIP)]},
+        },
+    )
+    _pair_devices(supervisor, model)
+    client = TestClient(supervisor.app)
+
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [import_id], "type": 2})
+
+    # No catalog of the import's region exists, so the record comes from the EU catalog.
+    eu_record = catalog_for_region("eu").records_by_model[model]
+    assert _app_plugin_sources(response.json()) == [(import_id, eu_record["url"])]
+
+
+def test_app_plugin_answers_built_in_record_if_import_ids_agree(tmp_path: Path) -> None:
+    from https_server.routes.plugin import common as plugin_common
+
+    # The import gives the a307 the same id as the built-in list. The device
+    # was added after the import, so the snapshot has no record for it.
+    supervisor = _build_supervisor(tmp_path)
+    _write_app_plugin_snapshot(
+        supervisor,
+        {
+            "product": _cloud_product_catalog({"roborock.vacuum.a307": 263, "roborock.vacuum.a226": 199}),
+            "appplugin": {"data": [_app_plugin_record(199, ANDROID_ZIP)]},
+        },
+    )
+    _pair_devices(supervisor, "roborock.vacuum.a307")
+    client = TestClient(supervisor.app)
+    [built_in_263] = [record for record in plugin_common.APPPLUGIN_LIST if record["productid"] == 263]
+
+    response = client.post("/api/v1/appplugin", json={"apilevel": 10046, "productids": [263], "type": 2})
+
+    assert _app_plugin_sources(response.json()) == [(263, built_in_263["url"])]
+
+
+def test_built_in_plugin_records_match_built_in_products() -> None:
+    from https_server.routes.plugin.common import is_allowed_plugin_source
+    from shared import device_plugin_catalog
+
+    assert "eu" in device_plugin_catalog.CATALOGS
+    for region, catalog in device_plugin_catalog.CATALOGS.items():
+        product_ids = list(catalog.product_ids.values())
+        record_ids = [record["productid"] for record in catalog.appplugin_records]
+
+        # The app installs the first record for its product id, so each id
+        # needs one model and at most one record.
+        assert len(product_ids) == len(set(product_ids))
+        assert len(record_ids) == len(set(record_ids))
+        assert set(record_ids) <= set(product_ids)
+        for record in catalog.appplugin_records:
+            assert is_allowed_plugin_source(record["url"])
+        path = device_plugin_catalog.CATALOG_DIR / f"device_plugin_catalog_{region}.json"
+        assert json.loads(path.read_text(encoding="utf-8"))["source"]["region"] == region

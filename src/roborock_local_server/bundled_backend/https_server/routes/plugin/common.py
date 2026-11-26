@@ -11,6 +11,8 @@ import aiohttp
 from fastapi.responses import Response
 
 from shared.context import ServerContext
+from shared.data_helpers import as_int, cloud_region_from_base_url, known_cloud_region
+from shared.device_plugin_catalog import FALLBACK_REGION, DevicePluginCatalog, catalog_for_region
 from ..auth.service import load_cloud_full_snapshot
 
 PLUGIN_PROXY_ALLOWED_HOSTS = {
@@ -82,29 +84,9 @@ CATEGORY_PLUGIN_LIST = [
     },
 ]
 
-APPPLUGIN_LIST = [
-    {
-        "version": 6058,
-        "url": "https://files.roborock.com/iot/plugin/ea53983b82e948638904d9154bb7f474.zip",
-        "pluginLevel": 3001,
-        "productid": 110,
-        "apilevel": 10028,
-    },
-    {
-        "version": 5208,
-        "url": "https://cdn.awsusor0.fds.api.mi-img.com/resources/iot/plugin/7cf4eb4c705c420483741189be389927.zip",
-        "pluginLevel": 3001,
-        "productid": 23,
-        "apilevel": 10028,
-    },
-    {
-        "version": 90,
-        "url": "https://rrpkg-us.roborock.com/iot/plugin/019b4e083fbe7f81a28d79756be6f0ed.zip",
-        "pluginLevel": 3001,
-        "productid": 10001,
-        "apilevel": 10028,
-    },
-]
+# Android device plugin records of the EU catalog. /api/v1/appplugin answers
+# all of them to a request without product ids.
+APPPLUGIN_LIST = catalog_for_region(FALLBACK_REGION).appplugin_records
 
 
 def plugin_proxy_url(ctx: ServerContext, source_url: str) -> str:
@@ -134,13 +116,39 @@ def proxied_plugin_records(
     return proxied
 
 
+def _dict_value(data: Any, key: str) -> dict[str, Any]:
+    value = data.get(key) if isinstance(data, dict) else None
+    return value if isinstance(value, dict) else {}
+
+
+def server_cloud_region(ctx: ServerContext) -> str:
+    """Return the cloud region of the account's cloud import, else the configured region."""
+    # The import's product ids come from the cloud of its region. Without an
+    # import, or if its region is unknown, network.region of the config decides.
+    snapshot = load_cloud_full_snapshot(ctx)
+    if snapshot is not None:
+        user_data = _dict_value(snapshot, "user_data")
+        region = (
+            cloud_region_from_base_url(_dict_value(snapshot, "meta").get("base_url"))
+            or known_cloud_region(user_data.get("region"))
+            or known_cloud_region(_dict_value(_dict_value(user_data, "rriot"), "r").get("r"))
+        )
+        if region:
+            return region
+    return ctx.region
+
+
+def built_in_catalog(ctx: ServerContext) -> DevicePluginCatalog:
+    """Return the built-in plugin catalog for the cloud region of this server."""
+    return catalog_for_region(server_cloud_region(ctx))
+
+
+def _plugin_catalogs(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return _dict_value(_dict_value(snapshot, "web_api_cache"), "plugin_catalogs")
+
+
 def _snapshot_plugin_catalogs(ctx: ServerContext) -> dict[str, Any]:
-    snapshot = load_cloud_full_snapshot(ctx) or {}
-    web_cache = snapshot.get("web_api_cache")
-    if not isinstance(web_cache, dict):
-        return {}
-    catalogs = web_cache.get("plugin_catalogs")
-    return catalogs if isinstance(catalogs, dict) else {}
+    return _plugin_catalogs(load_cloud_full_snapshot(ctx) or {})
 
 
 def _catalog_data(catalogs: dict[str, Any], name: str) -> Any:
@@ -158,6 +166,24 @@ def _dict_records(value: Any) -> list[dict[str, Any]]:
 
 def snapshot_plugin_catalog_data(ctx: ServerContext, catalog_name: str) -> Any:
     return _catalog_data(_snapshot_plugin_catalogs(ctx), catalog_name)
+
+
+def snapshot_plugin_record_owners(ctx: ServerContext) -> dict[int, str | None]:
+    """Map the product id of each Android and iOS snapshot plugin record to its model.
+
+    The model comes from the products of the snapshot's home data, else it is None.
+    """
+    snapshot = load_cloud_full_snapshot(ctx) or {}
+    catalogs = _plugin_catalogs(snapshot)
+    records = [
+        record for name in ("appplugin", "appplugin_ios") for record in _dict_records(_catalog_data(catalogs, name))
+    ]
+    models = {
+        as_int(product.get("id"), 0): str(product.get("model") or "").strip().lower()
+        for product in _dict_records(_dict_value(snapshot, "home_data").get("products"))
+    }
+    product_ids = {as_int(record.get("productid"), 0) for record in records} - {0}
+    return {product_id: models.get(product_id) or None for product_id in product_ids}
 
 
 def snapshot_plugin_records(

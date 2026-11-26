@@ -2,26 +2,38 @@ from __future__ import annotations
 
 from typing import Any
 
-from shared.constants import MODEL_PRODUCT_ID_OVERRIDES
 from shared.context import ServerContext
-from shared.data_helpers import as_int, default_product_name, model_product_ids, stable_int
+from shared.data_helpers import default_product_name, model_product_ids
+from shared.device_plugin_catalog import DevicePluginCatalog, product_fields, resolve_product_ids
 
-from ..plugin.common import snapshot_plugin_catalog_data
+from ..plugin.common import built_in_catalog, snapshot_plugin_catalog_data, snapshot_plugin_record_owners
 
 from ..user.homes.service import home_payload
 
 
-def build_product_response(ctx: ServerContext) -> dict[str, Any]:
-    home_data = home_payload(ctx)
-    products_value = home_data.get("products")
+def _served_products(ctx: ServerContext, catalog: DevicePluginCatalog) -> list[tuple[dict[str, Any], int]]:
+    """Pair each home data product with the numeric product id of /api/v5/product."""
+    products_value = home_payload(ctx).get("products")
     products = products_value if isinstance(products_value, list) else []
+    products = [product for product in products if isinstance(product, dict)]
     cloud_product_ids = model_product_ids(snapshot_plugin_catalog_data(ctx, "product"))
+    product_ids = resolve_product_ids(products, cloud_product_ids, catalog, snapshot_plugin_record_owners(ctx))
+    return list(zip(products, product_ids))
+
+
+def served_models_by_product_id(ctx: ServerContext, catalog: DevicePluginCatalog) -> dict[int, set[str]]:
+    """Map each product id that /api/v5/product answers to the models that get it."""
+    models: dict[int, set[str]] = {}
+    for product, product_id in _served_products(ctx, catalog):
+        model, _, _ = product_fields(product)
+        models.setdefault(product_id, set()).add(model.strip().lower())
+    return models
+
+
+def build_product_response(ctx: ServerContext) -> dict[str, Any]:
     categories: dict[str, dict[str, Any]] = {}
-    for product in products:
-        if not isinstance(product, dict):
-            continue
-        raw_product_id = str(product.get("id") or "")
-        category_name = str(product.get("category") or "robot.vacuum.cleaner")
+    for product, product_id in _served_products(ctx, built_in_catalog(ctx)):
+        model, raw_product_id, category_name = product_fields(product)
         if category_name not in categories:
             category_id = len(categories) + 1
             categories[category_name] = {
@@ -35,15 +47,6 @@ def build_product_response(ctx: ServerContext) -> dict[str, Any]:
                 },
                 "productList": [],
             }
-        model = str(product.get("model") or "roborock.vacuum.a117")
-        model_key = model.strip().lower()
-        # String product ids (e.g. a226) take the cloud's numeric id for the model;
-        # plugins are keyed by it, so a hashed id gets the app no device plugin.
-        product_id = MODEL_PRODUCT_ID_OVERRIDES.get(
-            model_key,
-            cloud_product_ids.get(model_key)
-            or as_int(raw_product_id, stable_int(raw_product_id or category_name) % 1_000_000),
-        )
         product_entry = {
             "id": product_id,
             "name": str(product.get("name") or default_product_name(model)),
