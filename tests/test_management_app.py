@@ -15,6 +15,13 @@ from roborock_local_server.management_app import (
     create_management_app,
 )
 
+_TOKEN = "test-setup-token"
+
+
+def _client(app, *, with_token: bool = True) -> TestClient:
+    return TestClient(app, headers={"X-Setup-Token": _TOKEN} if with_token else {})
+
+
 _VALID_PAYLOAD = {
     "stack_fqdn": "api-roborock.example.com",
     "https_port": 555,
@@ -80,7 +87,7 @@ def test_bootstrap_port_from_env_rejects_bad_value() -> None:
 
 def test_index_serves_setup_wizard_when_unconfigured(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
-    client = TestClient(create_management_app(config_file=config_file))
+    client = _client(create_management_app(config_file=config_file, setup_token=_TOKEN))
 
     response = client.get("/")
 
@@ -91,7 +98,7 @@ def test_index_serves_setup_wizard_when_unconfigured(tmp_path: Path) -> None:
 def test_index_serves_status_page_when_configured(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(_FULL_CONFIG, encoding="utf-8")
-    client = TestClient(create_management_app(config_file=config_file))
+    client = _client(create_management_app(config_file=config_file, setup_token=_TOKEN))
 
     response = client.get("/")
 
@@ -102,7 +109,7 @@ def test_index_serves_status_page_when_configured(tmp_path: Path) -> None:
 def test_index_serves_admin_only_wizard_when_only_admin_missing(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(_PARTIAL_CONFIG_MISSING_ADMIN, encoding="utf-8")
-    client = TestClient(create_management_app(config_file=config_file))
+    client = _client(create_management_app(config_file=config_file, setup_token=_TOKEN))
 
     response = client.get("/admin")
 
@@ -113,7 +120,7 @@ def test_index_serves_admin_only_wizard_when_only_admin_missing(tmp_path: Path) 
 
 def test_setup_status_reflects_config_state(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
-    client = TestClient(create_management_app(config_file=config_file))
+    client = _client(create_management_app(config_file=config_file, setup_token=_TOKEN))
 
     assert client.get("/admin/api/setup/status").json() == {"status": "invalid"}
 
@@ -127,7 +134,7 @@ def test_setup_status_reflects_config_state(tmp_path: Path) -> None:
 def test_submit_setup_writes_bootable_config(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     calls: list[str] = []
-    client = TestClient(create_management_app(config_file=config_file, on_configured=lambda: calls.append("done")))
+    client = _client(create_management_app(config_file=config_file, on_configured=lambda: calls.append("done"), setup_token=_TOKEN))
 
     response = client.post("/admin/api/setup", json=_VALID_PAYLOAD)
 
@@ -142,7 +149,7 @@ def test_submit_setup_writes_bootable_config(tmp_path: Path) -> None:
 
 def test_submit_setup_with_external_broker_needs_no_manual_edit(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
-    client = TestClient(create_management_app(config_file=config_file))
+    client = _client(create_management_app(config_file=config_file, setup_token=_TOKEN))
     payload = dict(_VALID_PAYLOAD, broker_mode="external", broker_host="mqtt.internal")
 
     response = client.post("/admin/api/setup", json=payload)
@@ -155,7 +162,7 @@ def test_submit_setup_with_external_broker_needs_no_manual_edit(tmp_path: Path) 
 
 def test_submit_setup_rejects_missing_external_broker_host(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
-    client = TestClient(create_management_app(config_file=config_file))
+    client = _client(create_management_app(config_file=config_file, setup_token=_TOKEN))
     payload = dict(_VALID_PAYLOAD, broker_mode="external")
 
     response = client.post("/admin/api/setup", json=payload)
@@ -167,7 +174,7 @@ def test_submit_setup_rejects_missing_external_broker_host(tmp_path: Path) -> No
 
 def test_submit_setup_rejects_bad_stack_fqdn(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
-    client = TestClient(create_management_app(config_file=config_file))
+    client = _client(create_management_app(config_file=config_file, setup_token=_TOKEN))
     payload = dict(_VALID_PAYLOAD, stack_fqdn="roborock.example.com")
 
     response = client.post("/admin/api/setup", json=payload)
@@ -179,7 +186,7 @@ def test_submit_setup_rejects_bad_stack_fqdn(tmp_path: Path) -> None:
 def test_submit_setup_refuses_to_overwrite_a_fully_configured_stack(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(_FULL_CONFIG, encoding="utf-8")
-    client = TestClient(create_management_app(config_file=config_file))
+    client = _client(create_management_app(config_file=config_file, setup_token=_TOKEN))
 
     response = client.post("/admin/api/setup", json=_VALID_PAYLOAD)
 
@@ -190,7 +197,7 @@ def test_submit_setup_refuses_to_overwrite_a_fully_configured_stack(tmp_path: Pa
 def test_submit_setup_refuses_to_overwrite_an_existing_broken_config(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text("existing = true\n", encoding="utf-8")
-    client = TestClient(create_management_app(config_file=config_file))
+    client = _client(create_management_app(config_file=config_file, setup_token=_TOKEN))
 
     response = client.post("/admin/api/setup", json=_VALID_PAYLOAD)
 
@@ -203,7 +210,7 @@ def test_submit_setup_completes_admin_only_config(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(_PARTIAL_CONFIG_MISSING_ADMIN, encoding="utf-8")
     calls: list[str] = []
-    client = TestClient(create_management_app(config_file=config_file, on_configured=lambda: calls.append("done")))
+    client = _client(create_management_app(config_file=config_file, on_configured=lambda: calls.append("done"), setup_token=_TOKEN))
 
     response = client.post(
         "/admin/api/setup",
@@ -227,7 +234,7 @@ def test_submit_setup_completes_admin_only_config(tmp_path: Path) -> None:
 def test_submit_setup_admin_only_rejects_bad_pin(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(_PARTIAL_CONFIG_MISSING_ADMIN, encoding="utf-8")
-    client = TestClient(create_management_app(config_file=config_file))
+    client = _client(create_management_app(config_file=config_file, setup_token=_TOKEN))
 
     response = client.post(
         "/admin/api/setup",
@@ -245,7 +252,7 @@ def test_submit_setup_admin_only_rejects_bad_pin(tmp_path: Path) -> None:
 
 def test_submit_setup_cloudflare_actalis_requires_eab(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
-    client = TestClient(create_management_app(config_file=config_file))
+    client = _client(create_management_app(config_file=config_file, setup_token=_TOKEN))
     payload = dict(
         _VALID_PAYLOAD,
         tls_mode="cloudflare_acme",
@@ -332,7 +339,7 @@ protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
 def test_invalid_admin_section_is_not_taken_over_by_the_wizard(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(_INVALID_ADMIN_CONFIG, encoding="utf-8")
-    client = TestClient(create_management_app(config_file=config_file))
+    client = _client(create_management_app(config_file=config_file, setup_token=_TOKEN))
 
     page = client.get("/admin")
     response = client.post(
@@ -381,3 +388,63 @@ def test_complete_admin_section_replaces_file_atomically_and_keeps_crlf(tmp_path
     assert "\n" not in raw.replace(crlf, "")
     assert diagnose_config(config_file) == "ok"
     assert [p.name for p in tmp_path.iterdir()] == ["config.toml"]
+
+
+def _setup_client(tmp_path: Path, *, with_token: bool = True) -> tuple[TestClient, Path]:
+    config_file = tmp_path / "config.toml"
+    app = create_management_app(config_file=config_file, setup_token=_TOKEN)
+    return _client(app, with_token=with_token), config_file
+
+
+def test_submit_setup_rejects_missing_or_wrong_token(tmp_path: Path) -> None:
+    client, config_file = _setup_client(tmp_path, with_token=False)
+
+    missing = client.post("/admin/api/setup", json=_VALID_PAYLOAD)
+    wrong = client.post("/admin/api/setup", json=_VALID_PAYLOAD, headers={"X-Setup-Token": "nope"})
+
+    assert missing.status_code == 403
+    assert wrong.status_code == 403
+    assert not config_file.exists()
+
+
+def test_submit_setup_requires_json_content_type(tmp_path: Path) -> None:
+    import json as _json
+
+    client, config_file = _setup_client(tmp_path)
+
+    response = client.post(
+        "/admin/api/setup",
+        content=_json.dumps(_VALID_PAYLOAD),
+        headers={"Content-Type": "text/plain"},
+    )
+
+    assert response.status_code == 415
+    assert not config_file.exists()
+
+
+def test_submit_setup_rejects_foreign_origin(tmp_path: Path) -> None:
+    client, config_file = _setup_client(tmp_path)
+
+    foreign = client.post(
+        "/admin/api/setup", json=_VALID_PAYLOAD, headers={"Origin": "http://evil.example"}
+    )
+    assert foreign.status_code == 403
+    assert not config_file.exists()
+
+    same = client.post(
+        "/admin/api/setup", json=_VALID_PAYLOAD, headers={"Origin": "http://testserver"}
+    )
+    assert same.status_code == 200
+
+
+def test_generated_setup_token_is_exposed_and_wizard_asks_for_it(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    app = create_management_app(config_file=config_file)
+    client = TestClient(app)
+
+    assert len(app.state.setup_token) >= 24
+    assert 'name="setup_token"' in client.get("/admin").text
+    response = client.post(
+        "/admin/api/setup", json=_VALID_PAYLOAD, headers={"X-Setup-Token": app.state.setup_token}
+    )
+    assert response.status_code == 200

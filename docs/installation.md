@@ -114,6 +114,12 @@ If your model already has certificate notes on the tested-vacuums page, follow t
    reverse-proxy or ACME setup you'd rather express as env vars/IaC, while still picking the admin password
    in a browser instead of a compose file.
 
+   The browser wizard needs a one-time setup token so that only someone who can read the container log can
+   finish setup. The container prints it on start (`docker compose logs`, look for `Setup token:`) and the
+   wizard asks for it as its first field. A new token is generated on every start of the wizard. The wizard
+   also refuses requests that are not same-origin `application/json`, and never modifies a `config.toml`
+   whose `[admin]` section already exists but is invalid; fix that by hand instead.
+
    The wizard asks for:
 
    - `stack_fqdn` (must start with `api-`)

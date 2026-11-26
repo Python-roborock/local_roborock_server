@@ -20,6 +20,7 @@ from textwrap import dedent
 import threading
 import tomllib
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -291,9 +292,11 @@ _WIZARD_SCRIPT_SUBMIT_COMMON = dedent(
         return;
       }
 
+      const setupToken = data.setup_token || "";
+      delete data.setup_token;
       const response = await fetch("/admin/api/setup", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: {"Content-Type": "application/json", "X-Setup-Token": setupToken},
         body: JSON.stringify(data),
       });
       const payload = await response.json().catch(() => ({error: "Invalid response"}));
@@ -477,6 +480,15 @@ def _setup_wizard_html(prefill: Mapping[str, str] | None = None) -> str:
             """\
 
 
+              <h5 class="header rls-heading">Setup Token</h5>
+              <div class="row">
+                <div class="input-field col s12">
+                  <input id="setup_token" name="setup_token" type="password" autocomplete="off" required>
+                  <label for="setup_token">Setup token (printed in the container log)</label>
+                </div>
+              </div>
+              <div class="divider"></div>
+
               <h5 class="header rls-heading">Admin Access</h5>
               <div class="row">
                 <div class="input-field col s6">
@@ -574,6 +586,15 @@ def _admin_only_wizard_html() -> str:
             <p class="rls-muted">Network, broker, and certificate settings are already set (from environment
             variables). Just add admin credentials to finish setup.</p>
             <form id="setup">
+              <h5 class="header rls-heading">Setup Token</h5>
+              <div class="row">
+                <div class="input-field col s12">
+                  <input id="setup_token" name="setup_token" type="password" autocomplete="off" required>
+                  <label for="setup_token">Setup token (printed in the container log)</label>
+                </div>
+              </div>
+              <div class="divider"></div>
+
               <h5 class="header rls-heading">Admin Access</h5>
               <div class="row">
                 <div class="input-field col s6">
@@ -622,12 +643,30 @@ def _admin_only_wizard_html() -> str:
     )
 
 
+def _origin_matches_host(request: Request) -> bool:
+    """False for a browser request whose Origin is not this server's own Host."""
+    origin = request.headers.get("origin")
+    if origin is None:
+        return True
+    host = request.headers.get("host", "")
+    return urlsplit(origin).netloc.lower() == host.lower() and bool(host)
+
+
 def create_management_app(
     *,
     config_file: Path,
     on_configured: Callable[[], None] | None = None,
+    setup_token: str | None = None,
 ) -> FastAPI:
+    """Bootstrap app. POST /admin/api/setup needs the one-time setup_token.
+
+    The token is generated per process when not given; the caller logs it
+    (see server.py) so only someone who can read the container log can finish
+    setup. The POST must also be application/json from the same origin.
+    """
+    expected_token = setup_token or secrets.token_urlsafe(24)
     app = FastAPI(title="Roborock Local Server Setup", docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.setup_token = expected_token
     register_theme_routes(app)
 
     @app.get("/", response_class=HTMLResponse)
@@ -648,6 +687,14 @@ def create_management_app(
 
     @app.post("/admin/api/setup")
     async def submit_setup(request: Request) -> JSONResponse:
+        content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        if content_type != "application/json":
+            return JSONResponse({"error": "Content-Type must be application/json."}, status_code=415)
+        if not _origin_matches_host(request):
+            return JSONResponse({"error": "Cross-origin requests are not allowed."}, status_code=403)
+        supplied_token = request.headers.get("x-setup-token", "")
+        if not secrets.compare_digest(supplied_token.encode("utf-8"), expected_token.encode("utf-8")):
+            return JSONResponse({"error": "Invalid or missing setup token."}, status_code=403)
         status = diagnose_config(config_file)
         if status == "ok":
             return JSONResponse({"error": "Already configured."}, status_code=409)

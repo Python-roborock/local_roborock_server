@@ -2322,6 +2322,7 @@ async def _run_setup_wizard_only(*, config_file: Path) -> int:
         config_file,
         port,
     )
+    logger.warning("Setup token: %s (paste it into the setup wizard)", app.state.setup_token)
 
     def request_shutdown() -> None:
         stop_event.set()
