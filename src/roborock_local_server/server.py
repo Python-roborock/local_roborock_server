@@ -454,7 +454,11 @@ class ReleaseSupervisor:
         # backups, including when the user lowers the configured limits.
         zone_ranges_store = self._init_zone_ranges_store()
         self.loggers = self._setup_loggers()
-        for path in (self.paths.http_jsonl_path, self.paths.mqtt_jsonl_path):
+        for path in (
+            self.paths.http_jsonl_path,
+            self.paths.mqtt_jsonl_path,
+            self.paths.mitm_activity_jsonl_path,
+        ):
             configure_jsonl_logging(
                 path, max_bytes=self.config.logging.max_bytes,
                 backup_count=self.config.logging.backup_count,
