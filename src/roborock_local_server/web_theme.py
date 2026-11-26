@@ -17,6 +17,9 @@ from fastapi.responses import PlainTextResponse
 
 MATERIALIZE_CSS_URL = "https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css"
 MATERIALIZE_JS_URL = "https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"
+# SRI hashes of the exact pinned 1.0.0 files above; update them together with the URLs.
+MATERIALIZE_CSS_SRI = "sha384-5KZdSYqynSzIjQGS2M1O3HW6HVDBjfNx0v5Y2eQuE3vvQ9NTiiPK9/GWc0yYCrgw"
+MATERIALIZE_JS_SRI = "sha384-ZOED+d9HxogEQwD+jFvux96iGQR9TxfJO+mPF2ZS0TuKH6eWrmvPsDpO6I0OWdiX"
 GOOGLE_FONTS_URL = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
 MATERIAL_ICONS_URL = "https://fonts.googleapis.com/icon?family=Material+Icons"
 STYLE_CSS_PATH = "/admin/static/style.css"
@@ -25,12 +28,14 @@ HEAD_ASSETS = dedent(
     f"""\
     <link rel="stylesheet" href="{GOOGLE_FONTS_URL}">
     <link rel="stylesheet" href="{MATERIAL_ICONS_URL}">
-    <link rel="stylesheet" href="{MATERIALIZE_CSS_URL}">
+    <link rel="stylesheet" href="{MATERIALIZE_CSS_URL}" integrity="{MATERIALIZE_CSS_SRI}" crossorigin="anonymous">
     <link rel="stylesheet" href="{STYLE_CSS_PATH}">
     """
 )
 
-SCRIPT_ASSETS = f'<script src="{MATERIALIZE_JS_URL}"></script>'
+SCRIPT_ASSETS = (
+    f'<script src="{MATERIALIZE_JS_URL}" integrity="{MATERIALIZE_JS_SRI}" crossorigin="anonymous"></script>'
+)
 
 NAV_HTML = dedent(
     """\
