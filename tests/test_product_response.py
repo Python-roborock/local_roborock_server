@@ -443,6 +443,7 @@ def test_us_server_takes_ids_and_records_from_the_us_catalog(tmp_path: Path, mon
         },
     )
     monkeypatch.setitem(device_plugin_catalog.CATALOGS, "us", us_catalog)
+    monkeypatch.setattr(device_plugin_catalog, "_MERGED_CATALOGS", {})
     # Without an import, network.region decides, and it is us here.
     device = dict(_DEVICE, model="roborock.vacuum.a307", product_id="4J89YHjAc2uUG9W0HLxKPP")
 
@@ -450,6 +451,12 @@ def test_us_server_takes_ids_and_records_from_the_us_catalog(tmp_path: Path, mon
 
     assert product["id"] == 9263
     assert _plugin_sources(tmp_path, 9263) == [(9263, _US_A307_ZIP)]
+
+
+def test_merged_catalog_is_built_once_per_region() -> None:
+    from shared.device_plugin_catalog import catalog_for_region
+
+    assert catalog_for_region("eu") is catalog_for_region(" EU ")
 
 
 def test_us_import_without_us_catalog_gets_the_eu_catalog_by_model(tmp_path: Path) -> None:
@@ -485,6 +492,7 @@ def _add_region_catalog(monkeypatch, region: str, product_ids: dict[str, int], w
         },
     )
     monkeypatch.setitem(device_plugin_catalog.CATALOGS, region, catalog)
+    monkeypatch.setattr(device_plugin_catalog, "_MERGED_CATALOGS", {})
 
 
 def test_model_missing_from_the_region_catalog_gets_the_eu_record(tmp_path: Path, monkeypatch) -> None:

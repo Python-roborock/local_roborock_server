@@ -68,6 +68,11 @@ def _load_catalogs() -> dict[str, DevicePluginCatalog]:
 CATALOGS: dict[str, DevicePluginCatalog] = _load_catalogs()
 
 
+# Region -> the merged catalog of catalog_for_region. CATALOGS does not change
+# at runtime, so each merged catalog is built once.
+_MERGED_CATALOGS: dict[str, DevicePluginCatalog] = {}
+
+
 def catalog_for_region(region: str | None) -> DevicePluginCatalog:
     """Return the built-in catalog for a server of a cloud region.
 
@@ -77,12 +82,19 @@ def catalog_for_region(region: str | None) -> DevicePluginCatalog:
     A model without any record takes its id the same way. A request without
     product ids gets the list of the region's catalog, else the EU list.
     """
+    region_key = str(region or "").strip().lower()
+    if region_key not in _MERGED_CATALOGS:
+        _MERGED_CATALOGS[region_key] = _merge_catalogs(region_key)
+    return _MERGED_CATALOGS[region_key]
+
+
+def _merge_catalogs(region_key: str) -> DevicePluginCatalog:
     # Each region hosts its own plugin files. For the a87 and the a15, the old
     # non-EU list and the EU catalog have the same versions (6058, 5208) but
     # different files, and the sc05 differs (90 against 108). So a record from
     # the catalog of another region is not verified for the server's region,
     # but without it the device would get no plugin.
-    names = [str(region or "").strip().lower(), FALLBACK_REGION, *sorted(CATALOGS)]
+    names = [region_key, FALLBACK_REGION, *sorted(CATALOGS)]
     catalogs = [CATALOGS[name] for name in dict.fromkeys(names) if name in CATALOGS]
     sources: dict[str, DevicePluginCatalog] = {}
     for catalog in catalogs:
