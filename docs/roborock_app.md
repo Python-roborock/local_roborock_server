@@ -17,6 +17,16 @@ The launcher can auto-load a sync secret from `config.toml` beside `mitm_redirec
 
 The launcher now preflights that callback before starting `mitmweb`. If the `--local-api` host cannot be reached, if the TLS certificate does not validate for that host, or if the sync secret is rejected, the script exits immediately instead of letting you proceed into a broken login flow.
 
+### Watching App Traffic In The Dashboard
+
+Add `--activity-sync` (off by default) to also send a copy of each redirected request/response to your server's admin dashboard, so you can watch what the official app is doing from the **Activity** panel without leaving the browser:
+
+```bash
+uv run mitm_redirect.py --local-api api-roborock.example.com --sync-secret YOUR_ADMIN_SESSION_SECRET --activity-sync
+```
+
+This uses the same `--sync-secret` as the login sync above - no separate secret to manage. The Activity panel redacts these entries (method/host/path/status only) by default, since this traffic includes real Roborock account tokens; set `ROBOROCK_SERVER_ACTIVITY_RAW=1` on the server if you need full headers/bodies for debugging. Because each captured request blocks briefly on a network call to your server, leave this off for normal daily use and only turn it on for an active debugging session.
+
 ### iPhone
 
 1. Log out of the app on your phone.

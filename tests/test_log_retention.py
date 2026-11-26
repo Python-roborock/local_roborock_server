@@ -234,3 +234,20 @@ def test_supervisor_recovers_state_before_trimming_or_removing_logs(tmp_path, so
         for logger in supervisor.loggers.values():
             for handler in logger.handlers:
                 handler.close()
+
+
+def test_supervisor_applies_logging_retention_to_mitm_activity_log(tmp_path):
+    config_file = write_release_config(tmp_path)
+    config_file.write_text(config_file.read_text() + '\n[logging]\nmax_size_mb=1\nbackup_count=0\n')
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    try:
+        for index in range(3):
+            backend_append(paths.mitm_activity_jsonl_path, {"index": index, "payload": "x" * 600_000})
+        assert len(_retained_json(paths.mitm_activity_jsonl_path)) == 1
+        assert not paths.mitm_activity_jsonl_path.with_name(paths.mitm_activity_jsonl_path.name + ".1").exists()
+    finally:
+        for logger in supervisor.loggers.values():
+            for handler in logger.handlers:
+                handler.close()
