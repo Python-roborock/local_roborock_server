@@ -156,6 +156,10 @@ def resolve_product_ids(
     """
     fields = [product_fields(product) for product in products]
     model_keys = [model.strip().lower() for model, _, _ in fields]
+    # The fixed ids skip the holders check. A numeric home data id could be the
+    # import id of another model, but only if the inventory and the import come
+    # from different regions. The import has the product list of its region,
+    # or none, so its id comes first for every model that the list has.
     fixed_ids = [import_ids.get(key) or as_int(raw_id, 0) for key, (_, raw_id, _) in zip(model_keys, fields)]
     holders: dict[int, set[str | None]] = {}
     for key, product_id in [*import_ids.items(), *zip(model_keys, fixed_ids)]:
