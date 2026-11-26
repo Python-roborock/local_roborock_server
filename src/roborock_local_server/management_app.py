@@ -17,6 +17,8 @@ import os
 from pathlib import Path
 import secrets
 from textwrap import dedent
+import threading
+import tomllib
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -35,6 +37,7 @@ from .env_config import ENV_PREFIX
 from .web_theme import HEAD_ASSETS, NAV_HTML, SCRIPT_ASSETS, register_theme_routes
 
 DEFAULT_BOOTSTRAP_HTTPS_PORT = 555
+_CONFIG_WRITE_LOCK = threading.Lock()
 _ENV_HTTPS_PORT = "ROBOROCK_SERVER_HTTPS_PORT"
 
 
@@ -182,8 +185,20 @@ def complete_admin_section(
             "",
         ]
     )
-    with config_file.open("a", encoding="utf-8") as handle:
-        handle.write(admin_block)
+    with _CONFIG_WRITE_LOCK:
+        existing = config_file.read_bytes().decode("utf-8")
+        if "admin" in tomllib.loads(existing):
+            raise ValueError("config.toml already has an [admin] section.")
+        newline = "\r\n" if "\r\n" in existing else "\n"
+        new_text = existing + admin_block.replace("\n", newline)
+        tmp_path = config_file.with_name(f"{config_file.name}.{secrets.token_hex(4)}.tmp")
+        try:
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                handle.write(new_text)
+            os.replace(tmp_path, config_file)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
 
 def _status_html() -> str:
@@ -207,6 +222,32 @@ def _status_html() -> str:
               <h4 class="header rls-heading">Setup is complete</h4>
               <p>The stack is restarting into the full dashboard at this same address - reload in a few
               seconds.</p>
+            </div>
+            """
+        )
+        + SCRIPT_ASSETS
+        + "\n</body></html>\n"
+    )
+
+
+def _invalid_admin_html() -> str:
+    return (
+        dedent(
+            """\
+            <!doctype html><html><head><meta charset="utf-8">
+            <title>Roborock Local Server</title>
+            """
+        )
+        + HEAD_ASSETS
+        + "</head><body>\n"
+        + NAV_HTML
+        + dedent(
+            """\
+            <div class="container">
+              <h4 class="header rls-heading">config.toml needs attention</h4>
+              <p>config.toml has an [admin] section that fails validation (for example a session_secret
+              shorter than 24 characters). The setup wizard never modifies an existing [admin] section.
+              Fix it by hand and restart the container.</p>
             </div>
             """
         )
@@ -595,6 +636,8 @@ def create_management_app(
         status = diagnose_config(config_file)
         if status == "ok":
             return HTMLResponse(_status_html())
+        if status == "invalid_admin":
+            return HTMLResponse(_invalid_admin_html(), status_code=409)
         if status == "missing_admin":
             return HTMLResponse(_admin_only_wizard_html())
         return HTMLResponse(_setup_wizard_html(prefill=_wizard_prefill_from_env(os.environ)))
@@ -608,6 +651,11 @@ def create_management_app(
         status = diagnose_config(config_file)
         if status == "ok":
             return JSONResponse({"error": "Already configured."}, status_code=409)
+        if status == "invalid_admin":
+            return JSONResponse(
+                {"error": "config.toml has an [admin] section that fails validation. Fix it by hand."},
+                status_code=409,
+            )
 
         try:
             raw_body = await request.body()
@@ -626,7 +674,8 @@ def create_management_app(
                 result_config_file = config_file
             else:
                 answers = _answers_from_payload(body)
-                result_config_file = write_config_setup(config_file=config_file, answers=answers).config_file
+                with _CONFIG_WRITE_LOCK:
+                    result_config_file = write_config_setup(config_file=config_file, answers=answers).config_file
         except (ValueError, FileExistsError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         if on_configured is not None:

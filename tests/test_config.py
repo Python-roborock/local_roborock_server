@@ -598,6 +598,14 @@ def test_diagnose_config_missing_admin_when_only_admin_section_absent(tmp_path: 
     assert diagnose_config(config_file) == "missing_admin"
 
 
+def test_diagnose_config_invalid_admin_when_admin_table_exists_but_fails(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    short_secret = _VALID_ADMIN.replace("abcdefghijklmnopqrstuvwxyz123456", "short")
+    config_file.write_text((_VALID_NETWORK_BROKER_STORAGE_TLS + short_secret).strip(), encoding="utf-8")
+
+    assert diagnose_config(config_file) == "invalid_admin"
+
+
 def test_diagnose_config_invalid_when_file_does_not_exist(tmp_path: Path) -> None:
     assert diagnose_config(tmp_path / "does-not-exist.toml") == "invalid"
 

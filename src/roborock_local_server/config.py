@@ -454,9 +454,11 @@ def diagnose_config(path: str | Path) -> str:
     """Classify config.toml's state for the setup wizard.
 
     Returns "ok" (loads cleanly), "missing_admin" (network/broker/storage/tls
-    all validate, but [admin] doesn't - e.g. a partial env-var-generated
-    config still waiting on the wizard for credentials), or "invalid" (file
-    missing/unreadable, or something other than [admin] is wrong).
+    all validate, but there is no [admin] table at all - e.g. a partial
+    env-var-generated config still waiting on the wizard for credentials),
+    "invalid_admin" (an [admin] table exists but fails validation; the wizard
+    must never touch it), or "invalid" (file missing/unreadable, or something
+    other than [admin] is wrong).
     """
     try:
         parsed = tomllib.loads(Path(path).read_text(encoding="utf-8"))
@@ -471,7 +473,7 @@ def diagnose_config(path: str | Path) -> str:
     try:
         _load_admin(parsed)
     except ValueError:
-        return "missing_admin"
+        return "invalid_admin" if "admin" in parsed else "missing_admin"
     return "ok"
 
 

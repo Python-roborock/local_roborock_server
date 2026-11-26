@@ -11,6 +11,7 @@ from roborock_local_server.management_app import (
     _setup_wizard_html,
     _wizard_prefill_from_env,
     bootstrap_port_from_env,
+    complete_admin_section,
     create_management_app,
 )
 
@@ -316,3 +317,67 @@ def test_setup_wizard_html_with_no_prefill_matches_original_defaults() -> None:
     assert 'id="acme_actalis" class="row hidden"' in html
     assert 'name="broker_mode" type="radio" value="embedded" checked' in html
     assert 'name="tls_mode" type="radio" value="cloudflare_acme" checked' in html
+
+
+_INVALID_ADMIN_CONFIG = _PARTIAL_CONFIG_MISSING_ADMIN + """
+
+[admin]
+password_hash = "pbkdf2_sha256$600000$abc$def"
+session_secret = "short"
+protocol_login_email = "user@example.com"
+protocol_login_pin_hash = "pbkdf2_sha256$600000$ghi$jkl"
+"""
+
+
+def test_invalid_admin_section_is_not_taken_over_by_the_wizard(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_INVALID_ADMIN_CONFIG, encoding="utf-8")
+    client = TestClient(create_management_app(config_file=config_file))
+
+    page = client.get("/admin")
+    response = client.post(
+        "/admin/api/setup",
+        json={
+            "admin_password": "attacker-password",
+            "protocol_login_email": "attacker@example.com",
+            "protocol_login_pin": "123456",
+        },
+    )
+
+    assert page.status_code == 409
+    assert 'id="setup"' not in page.text
+    assert response.status_code == 409
+    assert config_file.read_text(encoding="utf-8") == _INVALID_ADMIN_CONFIG
+
+
+def test_complete_admin_section_refuses_second_admin_table(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_INVALID_ADMIN_CONFIG, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="already has an"):
+        complete_admin_section(
+            config_file=config_file,
+            admin_password="pw-pw-pw-pw",
+            protocol_login_email="user@example.com",
+            protocol_login_pin="123456",
+        )
+    assert config_file.read_text(encoding="utf-8") == _INVALID_ADMIN_CONFIG
+
+
+def test_complete_admin_section_replaces_file_atomically_and_keeps_crlf(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    crlf = "\r\n"
+    config_file.write_bytes(_PARTIAL_CONFIG_MISSING_ADMIN.replace("\n", crlf).encode("utf-8"))
+
+    complete_admin_section(
+        config_file=config_file,
+        admin_password="pw-pw-pw-pw",
+        protocol_login_email="user@example.com",
+        protocol_login_pin="123456",
+    )
+
+    raw = config_file.read_text(encoding="utf-8", newline="")
+    assert crlf in raw
+    assert "\n" not in raw.replace(crlf, "")
+    assert diagnose_config(config_file) == "ok"
+    assert [p.name for p in tmp_path.iterdir()] == ["config.toml"]
