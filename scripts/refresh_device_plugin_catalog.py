@@ -83,6 +83,10 @@ async def fetch_cloud_answers(call: CloudCall) -> tuple[Any, Any]:
         raise RuntimeError(f"{PRODUCTS_PATH} listed no product with a numeric id")
     body = {"type": APP_TYPE_ANDROID, "apilevel": APP_API_LEVEL, "productids": product_ids}
     records = await call(APPPLUGIN_PATH, method="post", json_body=body)
+    # An answer that is not a list of records would give a catalog without
+    # plugin records.
+    if not isinstance(records, list) or not any(isinstance(record, dict) for record in records):
+        raise RuntimeError(f"{APPPLUGIN_PATH} answered no plugin record")
     return products, records
 
 
@@ -100,6 +104,22 @@ def catalog_region(base_url: str, region: str | None = None) -> str:
 
 def catalog_path(region: str) -> Path:
     return CATALOG_DIR / f"device_plugin_catalog_{region}.json"
+
+
+def write_catalog(path: Path, catalog: dict[str, Any]) -> None:
+    """Write the catalog through a temporary file, so a crash keeps the old file.
+
+    The server loads every device_plugin_catalog_*.json at import time, and a
+    truncated file would stop it from starting. Its glob skips the .tmp file.
+    """
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    try:
+        tmp_path.write_text(json.dumps(catalog, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        tmp_path.replace(path)
+    except BaseException:
+        # The package build would ship a leftover .tmp file.
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def build_catalog(products: Any, records: Any, *, base_url: str, region: str, fetched_at_utc: str) -> dict[str, Any]:
@@ -153,7 +173,7 @@ async def _main_async(args: argparse.Namespace) -> None:
         fetched_at_utc=datetime.now(UTC).isoformat(),
     )
     output = args.output or catalog_path(region)
-    output.write_text(json.dumps(catalog, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_catalog(output, catalog)
 
     ids_with_record = {as_int(record.get("productid"), 0) for record in catalog["appplugin"]}
     without_record = [model for model, entry in catalog["products"].items() if entry["id"] not in ids_with_record]

@@ -13,6 +13,7 @@ from scripts.refresh_device_plugin_catalog import (
     catalog_path,
     catalog_region,
     fetch_cloud_answers,
+    write_catalog,
 )
 
 CLOUD_PRODUCTS = {
@@ -122,3 +123,38 @@ def test_catalog_path_is_the_file_that_the_server_loads() -> None:
     assert catalog_path("us").name == "device_plugin_catalog_us.json"
     assert catalog_path("eu") == device_plugin_catalog.CATALOG_DIR / "device_plugin_catalog_eu.json"
     assert catalog_path("eu").exists()
+
+
+@pytest.mark.parametrize("answer", [{"list": []}, [], None, ["not a record"]])
+def test_refresh_fails_if_the_cloud_answers_no_plugin_record(answer: Any) -> None:
+    async def fake_call(path: str, *, method: str = "get", json_body: dict[str, Any] | None = None) -> Any:
+        return CLOUD_PRODUCTS if path == "/api/v5/product" else answer
+
+    with pytest.raises(RuntimeError, match="no plugin record"):
+        asyncio.run(fetch_cloud_answers(fake_call))
+
+
+def test_write_catalog_replaces_the_file_and_leaves_no_temporary_file(tmp_path: Path) -> None:
+    path = tmp_path / "device_plugin_catalog_eu.json"
+    path.write_text('{"old": true}\n', encoding="utf-8")
+
+    write_catalog(path, {"products": {}, "appplugin": []})
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"products": {}, "appplugin": []}
+    assert [file.name for file in tmp_path.iterdir()] == ["device_plugin_catalog_eu.json"]
+
+
+def test_failed_write_keeps_the_old_catalog_and_leaves_no_temporary_file(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "device_plugin_catalog_eu.json"
+    path.write_text('{"old": true}\n', encoding="utf-8")
+
+    def fail_replace(self: Path, target: Path) -> Path:
+        raise OSError("disk full")
+
+    # The .tmp file is complete, and the replace fails.
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="disk full"):
+        write_catalog(path, {"products": {}, "appplugin": []})
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"old": True}
+    assert [file.name for file in tmp_path.iterdir()] == ["device_plugin_catalog_eu.json"]
