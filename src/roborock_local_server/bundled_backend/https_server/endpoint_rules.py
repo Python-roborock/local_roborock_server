@@ -9,8 +9,7 @@ from typing import Any, Callable, Sequence
 
 from shared.constants import DEFAULT_HOME_NAME, DEFAULT_PRODUCT_SCHEMA, DEFAULT_TIMEZONE
 from shared.context import ServerContext
-from shared.data_helpers import as_bool, as_int, default_home_id, default_product_name, get_value, model_product_ids
-from shared.device_plugin_catalog import product_fields, resolve_product_ids
+from shared.data_helpers import as_bool, as_int, default_home_id, default_product_name, get_value
 from shared.http_helpers import wrap_response
 from shared.inventory_io import WEB_API_INVENTORY_FILE, load_inventory, write_inventory
 
@@ -94,7 +93,6 @@ from .routes.api.v1.user import match_get_url_by_email as _match_get_url_by_emai
 from .routes.api.v1.user import match_logout as _match_logout_v1
 from .routes.api.v1.user import match_user_info as _match_user_info_v1
 from .routes.api.v1.user import match_user_roles as _match_user_roles_v1
-from .routes.plugin.common import built_in_catalog, snapshot_plugin_catalog_data, snapshot_plugin_record_owners
 from .routes.user.app.info import build as _build_post_app_info
 from .routes.user.app.info import match as _match_post_app_info
 from .routes.user.inbox.latest import build as _build_get_inbox_latest
@@ -451,97 +449,6 @@ def _build_web_state(ctx: ServerContext) -> dict[str, Any]:
         "scene_order": scene_order,
         "schedules": schedules,
     }
-
-
-def _device_has_runtime_did(ctx: ServerContext, duid: str) -> bool:
-    runtime_credentials = getattr(ctx, "runtime_credentials", None)
-    if runtime_credentials is None:
-        return False
-    try:
-        credential_device = runtime_credentials.resolve_device(duid=duid)
-    except Exception:
-        return False
-    if credential_device is None:
-        return False
-    did = str(credential_device.get("did") or "").strip()
-    mqtt_user = str(credential_device.get("device_mqtt_usr") or "").strip()
-    return bool(did or mqtt_user)
-
-
-def _filter_home_data_to_runtime_devices(ctx: ServerContext, home_data: dict[str, Any]) -> dict[str, Any]:
-    filtered_home = dict(home_data)
-    allowed_product_ids: set[str] = set()
-
-    for collection_key in ("devices", "receivedDevices", "received_devices"):
-        devices_value = home_data.get(collection_key)
-        if not isinstance(devices_value, list):
-            filtered_home.pop(collection_key, None)
-            continue
-        devices = devices_value
-        filtered_devices: list[dict[str, Any]] = []
-        for device in devices:
-            if not isinstance(device, dict):
-                continue
-            duid = str(get_value(device, "duid", "did", default="")).strip()
-            if not duid or not _device_has_runtime_did(ctx, duid):
-                continue
-            filtered_devices.append(dict(device))
-            product_id = str(get_value(device, "productId", "product_id", default="")).strip()
-            if product_id:
-                allowed_product_ids.add(product_id)
-        filtered_home[collection_key] = filtered_devices
-
-    products_value = home_data.get("products")
-    products = products_value if isinstance(products_value, list) else []
-    filtered_products: list[dict[str, Any]] = []
-    for product in products:
-        if not isinstance(product, dict):
-            continue
-        product_id = str(get_value(product, "id", "productId", "product_id", default="")).strip()
-        if not product_id or product_id not in allowed_product_ids:
-            continue
-        filtered_products.append(dict(product))
-    filtered_home["products"] = filtered_products
-    return filtered_home
-
-
-def _build_product_response(ctx: ServerContext, home_data: dict[str, Any]) -> dict[str, Any]:
-    filtered_home_data = _filter_home_data_to_runtime_devices(ctx, home_data)
-    products_value = filtered_home_data.get("products")
-    products = products_value if isinstance(products_value, list) else []
-    products = [product for product in products if isinstance(product, dict)]
-    cloud_product_ids = model_product_ids(snapshot_plugin_catalog_data(ctx, "product"))
-    product_ids = resolve_product_ids(
-        products, cloud_product_ids, built_in_catalog(ctx), snapshot_plugin_record_owners(ctx)
-    )
-    categories: dict[str, dict[str, Any]] = {}
-    for product, product_id in zip(products, product_ids):
-        model, _, category_name = product_fields(product)
-        if category_name not in categories:
-            category_id = len(categories) + 1
-            categories[category_name] = {
-                "category": {
-                    "id": category_id,
-                    "displayName": category_name,
-                    "iconUrl": "",
-                },
-                "productList": [],
-            }
-        product_entry = {
-            "id": product_id,
-            "name": str(product.get("name") or default_product_name(model)),
-            "model": model,
-            "packagename": f"com.roborock.{model.split('.')[-1]}",
-            "ncMode": "global",
-            "status": 10,
-        }
-        icon_url = product.get("iconUrl")
-        if isinstance(icon_url, str) and icon_url:
-            product_entry["picurl"] = icon_url
-            product_entry["cardPicUrl"] = icon_url
-            product_entry["pluginPicUrl"] = icon_url
-        categories[category_name]["productList"].append(product_entry)
-    return {"categoryDetailList": list(categories.values())}
 
 
 @dataclass(frozen=True)

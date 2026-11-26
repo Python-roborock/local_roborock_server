@@ -291,16 +291,6 @@ def _v5_product_list(tmp_path: Path, device: dict[str, object]) -> list[dict]:
     return _products_v5(tmp_path, [device])["categoryDetailList"][0]["productList"]
 
 
-def _legacy_product_list(tmp_path: Path, device: dict[str, object]) -> list[dict]:
-    from https_server.endpoint_rules import _build_product_response
-
-    home_data = {
-        "devices": [{"duid": device["duid"], "productId": device["product_id"]}],
-        "products": [{"id": device["product_id"], "model": device["model"], "category": "robot.vacuum.cleaner"}],
-    }
-    return _build_product_response(_make_context(tmp_path), home_data)["categoryDetailList"][0]["productList"]
-
-
 def _product_ids_by_model(data: dict) -> dict[str, int]:
     return {
         product["model"]: product["id"] for category in data["categoryDetailList"] for product in category["productList"]
@@ -328,15 +318,14 @@ _A226 = dict(_DEVICE, duid="device-b", model="roborock.vacuum.a226", product_id=
 _WASHER = dict(_DEVICE, duid="device-b", model="roborock.wm.a91", product_id="rriot-wm-a91")
 
 
-@pytest.mark.parametrize("product_list", [_v5_product_list, _legacy_product_list], ids=["api_v5", "legacy"])
-def test_built_in_id_that_the_import_gives_another_model_is_skipped(tmp_path: Path, product_list) -> None:
+def test_built_in_id_that_the_import_gives_another_model_is_skipped(tmp_path: Path) -> None:
     from shared.data_helpers import stable_int
 
     # The import gives 199 to the a199, as the US cloud does, and lacks the
     # a226. The built-in id of the a226 comes from the EU cloud, and it is 199.
     _write_cloud_products(tmp_path, {"roborock.vacuum.a199": 199})
 
-    [product] = product_list(tmp_path, _A226)
+    [product] = _v5_product_list(tmp_path, _A226)
 
     assert product["id"] == stable_int(_A226["product_id"]) % 1_000_000
 
@@ -645,9 +634,8 @@ _A199_RECORD = {"version": 1, "url": "https://app-files.roborock.com/iot/plugin/
     "home_products", [[{"id": "199", "model": "roborock.vacuum.a199"}], []], ids=["named_model", "unknown_model"]
 )
 @pytest.mark.parametrize("catalog_name", ["appplugin", "appplugin_ios"])
-@pytest.mark.parametrize("product_list", [_v5_product_list, _legacy_product_list], ids=["api_v5", "legacy"])
 def test_built_in_id_of_a_snapshot_record_without_inventory_device_is_skipped(
-    tmp_path: Path, product_list, catalog_name: str, home_products: list[dict]
+    tmp_path: Path, catalog_name: str, home_products: list[dict]
 ) -> None:
     from shared.data_helpers import stable_int
 
@@ -656,7 +644,7 @@ def test_built_in_id_of_a_snapshot_record_without_inventory_device_is_skipped(
     # comes from the EU cloud, and it is 199.
     _write_snapshot_without_product_list(tmp_path, catalog_name, [_A199_RECORD], home_products)
 
-    [product] = product_list(tmp_path, _A226)
+    [product] = _v5_product_list(tmp_path, _A226)
 
     assert product["id"] == stable_int(_A226["product_id"]) % 1_000_000
 
