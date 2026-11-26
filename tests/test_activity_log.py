@@ -262,3 +262,20 @@ def test_read_recent_activity_sorts_across_all_three_sources(tmp_path: Path) -> 
     entries = read_recent_activity(http_jsonl_path=http_path, mqtt_jsonl_path=mqtt_path, mitm_jsonl_path=mitm_path)
 
     assert [entry["source"] for entry in entries] == ["mqtt", "mitm", "http"]
+
+
+def test_read_recent_activity_skips_catchall_http_entries(tmp_path: Path) -> None:
+    http_path = tmp_path / "http.jsonl"
+    _write_jsonl(
+        http_path,
+        [
+            {"time": "2026-01-01T00:00:01Z", "method": "GET", "clean_path": "/region", "route": "region"},
+            {"time": "2026-01-01T00:00:02Z", "method": "GET", "clean_path": "/api/v1/unknown", "route": "catchall"},
+        ],
+    )
+
+    for raw in (False, True):
+        entries = read_recent_activity(
+            http_jsonl_path=http_path, mqtt_jsonl_path=tmp_path / "missing.jsonl", raw=raw
+        )
+        assert [entry.get("path") or entry.get("clean_path") for entry in entries] == ["/region"]

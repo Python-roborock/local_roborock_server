@@ -1828,7 +1828,7 @@ def test_admin_activity_clamps_limit(tmp_path: Path) -> None:
     assert len(response.json()["entries"]) == 2
 
 
-def test_catchall_requests_are_not_logged_as_activity_but_named_routes_are(tmp_path: Path) -> None:
+def test_catchall_requests_are_logged_for_route_discovery(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
     paths = resolve_paths(config_file, config)
@@ -1842,5 +1842,5 @@ def test_catchall_requests_are_not_logged_as_activity_but_named_routes_are(tmp_p
         json.loads(line) for line in paths.http_jsonl_path.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
     routes = [entry.get("route") for entry in log_entries]
-    assert "catchall" not in routes
+    assert "catchall" in routes
     assert "region" in routes

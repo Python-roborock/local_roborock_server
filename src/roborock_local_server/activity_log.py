@@ -165,7 +165,12 @@ def read_recent_activity(
     """
     wanted = frozenset(str(item) for item in device_ids if str(item)) if device_ids is not None else None
     tail = limit * _DEVICE_FILTER_TAIL_FACTOR if device_ids is not None else limit
-    http_entries = _parse_jsonl_lines(_tail_lines(http_jsonl_path, tail))
+    # Unmatched (catchall) requests are logged for route discovery but are noise here.
+    http_entries = [
+        entry
+        for entry in _parse_jsonl_lines(_tail_lines(http_jsonl_path, tail))
+        if entry.get("route") != "catchall"
+    ]
     mqtt_entries = _parse_jsonl_lines(_tail_lines(mqtt_jsonl_path, tail))
     mitm_entries = _parse_jsonl_lines(_tail_lines(mitm_jsonl_path, tail)) if mitm_jsonl_path else []
     if wanted is not None:
