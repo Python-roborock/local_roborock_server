@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from shared.constants import region_country
 from shared.context import ServerContext
 from shared.data_helpers import as_bool, get_value
 
@@ -10,16 +11,6 @@ from ...auth.service import load_cloud_user_data
 from ...auth.service import ok
 
 _DEFAULT_AVATAR_URL = "https://files.roborock.com/iot/default_avatar.png"
-_REGION_COUNTRY_CODE = {
-    "US": "1",
-    "CN": "86",
-    "EU": "49",
-    "RU": "7",
-}
-
-
-def _default_country_code_for_region(region: str) -> str:
-    return _REGION_COUNTRY_CODE.get(region.upper(), "1")
 
 
 def match_get_url_by_email(path: str) -> bool:
@@ -44,12 +35,12 @@ def build_get_url_by_email(
     _body_params: dict[str, list[str]],
     _clean_path: str,
 ) -> dict[str, Any]:
-    region_upper = ctx.region.upper()
+    country, countrycode = region_country(ctx.region)
     return ok(
         {
             "url": ctx.api_url(),
-            "countrycode": _default_country_code_for_region(region_upper),
-            "country": region_upper,
+            "countrycode": countrycode,
+            "country": country,
         }
     )
 
@@ -76,16 +67,9 @@ def build_user_info(
     if not mobile and username.isdigit():
         mobile = username
 
-    region_upper = ctx.region.upper()
-    country = str(get_value(cloud_user_data, "country", default=region_upper) or region_upper)
-    countrycode = str(
-        get_value(
-            cloud_user_data,
-            "countrycode",
-            default=_default_country_code_for_region(region_upper),
-        )
-        or _default_country_code_for_region(region_upper)
-    )
+    default_country, default_countrycode = region_country(ctx.region)
+    country = str(get_value(cloud_user_data, "country", default=default_country) or default_country)
+    countrycode = str(get_value(cloud_user_data, "countrycode", default=default_countrycode) or default_countrycode)
     nickname = str(get_value(cloud_user_data, "nickname", default="Local User") or "Local User")
     avatarurl = str(get_value(cloud_user_data, "avatarurl", "avatarUrl", default="") or "")
     if not avatarurl:

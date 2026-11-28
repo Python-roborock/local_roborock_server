@@ -39,6 +39,19 @@ def _home_device_ids(ctx: ServerContext) -> list[str]:
     return device_ids
 
 
+def product_agreements() -> list[dict[str, Any]]:
+    """Latest agreement versions of a product, as in /api/v5/product.
+
+    The device plugin compares these with the signed versions from
+    plugin_agreements(). It opens without a privacy dialog only if both lists
+    name both types and no signed version is lower than the latest version.
+    """
+    return [
+        {"type": agreement_type, "version": PLUGIN_AGREEMENT_VERSION, "minorVersion": 0}
+        for agreement_type in PLUGIN_AGREEMENT_TYPES
+    ]
+
+
 def plugin_agreements(ctx: ServerContext) -> list[dict[str, Any]]:
     """One accepted plugin agreement per agreement type and home device.
 

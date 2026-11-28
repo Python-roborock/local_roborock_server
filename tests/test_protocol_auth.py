@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 
 from conftest import write_release_config
 from roborock_local_server.config import load_config, resolve_paths
@@ -72,8 +73,13 @@ def _token_headers(login_payload: dict[str, object]) -> dict[str, str]:
     }
 
 
-def _build_supervisor(tmp_path: Path, *, with_snapshot: bool = True) -> tuple[ReleaseSupervisor, object]:
-    config_file = write_release_config(tmp_path)
+def _build_supervisor(
+    tmp_path: Path,
+    *,
+    with_snapshot: bool = True,
+    region: str = "us",
+) -> tuple[ReleaseSupervisor, object]:
+    config_file = write_release_config(tmp_path, region=region)
     config = load_config(config_file)
     paths = resolve_paths(config_file, config)
     _write_json(paths.inventory_path, {"home": {"id": 12345, "name": "Test Home"}, "devices": []})
@@ -226,6 +232,77 @@ def test_local_pin_login_succeeds_without_imported_cloud_snapshot(tmp_path: Path
     user_info = client.get("/api/v1/userInfo", headers=_token_headers(login_payload))
     assert user_info.status_code == 200
     assert user_info.json()["data"]["email"] == "user@example.com"
+
+
+@pytest.mark.parametrize(
+    ("region", "country", "countrycode"),
+    [("eu", "DE", "49"), ("us", "US", "1")],
+)
+def test_local_pin_login_names_the_region_and_country_of_the_config(
+    tmp_path: Path,
+    region: str,
+    country: str,
+    countrycode: str,
+) -> None:
+    supervisor, _paths = _build_supervisor(tmp_path, with_snapshot=False, region=region)
+    client = TestClient(supervisor.app)
+
+    login_response = client.post(
+        "/api/v5/auth/email/login/code",
+        data={"country": "DE", "countryCode": "49", "email": "user@example.com", "code": "123456"},
+    )
+    assert login_response.status_code == 200
+    login_payload = login_response.json()["data"]
+    # The app stores "region" as RRUser.region, and the device plugin reads it
+    # as serverCode in fetchCountryInfo. Without it, the plugin looks the
+    # country up in its own server map, fails, and retries forever.
+    assert login_payload["region"] == region
+    assert login_payload["country"] == country
+    assert login_payload["countrycode"] == countrycode
+
+
+@pytest.mark.parametrize(("region", "country", "countrycode"), [("eu", "DE", "49"), ("us", "US", "1")])
+def test_url_and_user_info_routes_name_the_country_of_the_login_answer(
+    tmp_path: Path,
+    region: str,
+    country: str,
+    countrycode: str,
+) -> None:
+    supervisor, _paths = _build_supervisor(tmp_path, with_snapshot=False, region=region)
+    client = TestClient(supervisor.app)
+
+    login_response = client.post(
+        "/api/v5/auth/email/login/code",
+        data={"email": "user@example.com", "code": "123456"},
+    )
+    assert login_response.status_code == 200
+    login_payload = login_response.json()["data"]
+    assert (login_payload["country"], login_payload["countrycode"]) == (country, countrycode)
+
+    url_response = client.post("/api/v1/getUrlByEmail", data={"email": "user@example.com"})
+    assert url_response.status_code == 200
+    url_data = url_response.json()["data"]
+    assert (url_data["country"], url_data["countrycode"]) == (country, countrycode)
+
+    user_info = client.get("/api/v1/userInfo", headers=_token_headers(login_payload))
+    assert user_info.status_code == 200
+    user_data = user_info.json()["data"]
+    assert (user_data["country"], user_data["countrycode"]) == (country, countrycode)
+
+
+def test_user_info_prefers_the_country_of_the_cloud_snapshot(tmp_path: Path) -> None:
+    supervisor, paths = _build_supervisor(tmp_path, region="eu")
+    snapshot = json.loads(paths.cloud_snapshot_path.read_text(encoding="utf-8"))
+    snapshot["user_data"]["country"] = "AT"
+    _write_json(paths.cloud_snapshot_path, snapshot)
+    client = TestClient(supervisor.app)
+
+    user_info = client.get(
+        "/api/v1/userInfo",
+        headers={"Authorization": "local-token-123", "header_username": "local-rruid-123"},
+    )
+    assert user_info.status_code == 200
+    assert user_info.json()["data"]["country"] == "AT"
 
 
 def test_protected_routes_skip_protocol_auth_when_disabled(tmp_path: Path) -> None:
