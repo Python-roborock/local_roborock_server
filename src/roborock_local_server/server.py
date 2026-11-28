@@ -52,6 +52,7 @@ from .backend import (
     start_broker,
     strip_roborock_prefix,
 )
+from shared.http_helpers import with_route_headers
 from shared.inventory_io import atomic_write_inventory, inventory_transaction
 from shared.protocol_auth import ProtocolAuthStore
 from shared.schedule_runner import ScheduleRunner
@@ -1389,7 +1390,7 @@ class ReleaseSupervisor:
                 rules=self.endpoint_rules,
                 context=self.context,
                 clean_path=clean_path,
-                query_params=query_params,
+                query_params=with_route_headers(query_params, request_headers),
                 body_params=body_params,
                 method=request.method,
             )

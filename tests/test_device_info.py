@@ -12,11 +12,22 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 import roborock_local_server.backend as backend
 from https_server.routes.bootstrap import catchall, device_info
+from shared import http_helpers
+
+# Synthetic V2 header values; the signature header is added per test.
+V2_HEADERS = {"v": "v2", "n": "q7Xk2P", "t": "1767225600"}
+# Stands in for the real_stack.api logger of the server context.
+API_LOGGER = "test_device_info.api"
 
 
 @pytest.fixture
-def setup_report(tmp_path):
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+def signing_key():
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+@pytest.fixture
+def setup_report(tmp_path, signing_key):
+    key = signing_key
     inventory = {
         "home": {"name": "Home"},
         "devices": [
@@ -27,7 +38,8 @@ def setup_report(tmp_path):
     path = tmp_path / "web_api_inventory.json"
     path.write_text(json.dumps(inventory))
     ctx = SimpleNamespace(http_jsonl=tmp_path / "http.jsonl", runtime_credentials=None,
-                          device_public_key=lambda did: key.public_key() if did == "123" else None)
+                          device_public_key=lambda did: key.public_key() if did == "123" else None,
+                          loggers={"api": logging.getLogger(API_LOGGER)})
     fields = {"did": "123", "featureset": "123456789", "newfeatureset": "0000000AbCD", "pid": "roborock.vacuum.a87", "sn": "TESTSERIAL"}
     canonical = "&".join(f"{name}={value}" for name, value in fields.items()).encode()
     params = {name: [value] for name, value in fields.items()}
@@ -35,9 +47,28 @@ def setup_report(tmp_path):
     return ctx, path, inventory, params
 
 
-def _request(ctx, params, *, path="/devices/123/info", method="POST"):
+def _sign_v2(key, params, headers, algorithm=None):
+    canonical = "&".join(f"{name}={values[0]}" for name, values in params.items())
+    message = f"{canonical}:{headers['n']}:{headers['t']}".encode()
+    return base64.b64encode(key.sign(message, padding.PKCS1v15(), algorithm or hashes.SHA384())).decode()
+
+
+@pytest.fixture
+def setup_v2_report(setup_report, signing_key):
+    ctx, path, inventory, params = setup_report
+    del params["signature"]
+    headers = {**V2_HEADERS, "s": _sign_v2(signing_key, params, V2_HEADERS)}
+    return ctx, path, inventory, params, headers
+
+
+def _request(ctx, params, *, path="/devices/123/info", method="POST", headers=None):
+    query_params = {} if headers is None else http_helpers.with_route_headers({}, headers)
     return backend.resolve_route(rules=backend.default_endpoint_rules(), context=ctx, clean_path=path,
-                                 query_params={}, body_params=params, method=method)
+                                 query_params=query_params, body_params=params, method=method)
+
+
+def _outcome_log(caplog):
+    return "\n".join(r.getMessage() for r in caplog.records if r.name == API_LOGGER)
 
 
 def test_verified_upload_updates_only_metadata(setup_report):
@@ -131,25 +162,96 @@ def test_outcome_diagnostics_are_sanitized(setup_report, caplog, monkeypatch, ch
         path.write_text('{"devices": []}')
     elif change == "write_failed":
         monkeypatch.setattr(device_info, "write_inventory", lambda *args: False)
-    with caplog.at_level(logging.INFO, logger=device_info.__name__):
+    with caplog.at_level(logging.INFO, logger=API_LOGGER):
         _request(ctx, params)
-    assert f"did=123 outcome={outcome} updated=" in caplog.text
+    assert f"did=123 outcome={outcome} updated=" in _outcome_log(caplog)
     assert params["sn"][0] not in caplog.text
     assert params["signature"][0] not in caplog.text
 
 
-@pytest.mark.parametrize("prefix", ["", "/.roborock.com"])
-def test_real_http_form_preserves_base64_signature(tmp_path, prefix):
+def test_v2_header_signed_upload_updates_metadata(setup_v2_report):
+    ctx, path, original, params, headers = setup_v2_report
+    route, response = _request(ctx, params, headers=headers)
+    assert route == "device_info"
+    assert response == catchall.build(ctx, {}, params, "/devices/123/info")
+    device = json.loads(path.read_text())["devices"][0]
+    assert (device["sn"], device["featureSet"], device["newFeatureSet"]) == ("TESTSERIAL", "123456789", "0000000AbCD")
+    assert {key: device[key] for key in original["devices"][0]} == original["devices"][0]
+
+
+@pytest.mark.parametrize("change,outcome", [
+    ("tampered", "invalid_signature"), ("other_key", "invalid_signature"), ("sha256", "invalid_signature"),
+    ("bad_base64", "invalid_signature"), ("nonce", "invalid_signature"), ("timestamp", "invalid_signature"),
+    ("short_signature", "invalid_signature"), ("long_signature", "invalid_signature"),
+    ("missing_v", "malformed_fields"), ("missing_n", "malformed_fields"), ("missing_t", "malformed_fields"),
+    ("missing_s", "malformed_fields"), ("version", "malformed_fields"), ("duplicate", "malformed_fields"),
+    ("wrong_did", "did_mismatch"), ("unsafe_value", "unsupported_values"), ("unknown_key", "missing_key"),
+])
+def test_unverifiable_v2_upload_acknowledged_without_writes(setup_v2_report, signing_key, caplog, change, outcome):
+    ctx, path, _, params, headers = setup_v2_report
+    before = path.read_bytes()
+    if change == "tampered": params["sn"] = ["ALTERED"]
+    if change == "other_key": headers["s"] = _sign_v2(rsa.generate_private_key(public_exponent=65537, key_size=2048), params, headers)
+    if change == "sha256": headers["s"] = _sign_v2(signing_key, params, headers, hashes.SHA256())
+    if change == "bad_base64": headers["s"] = "!!!!"
+    # key.verify rejects a signature whose length differs from the key size.
+    if change == "short_signature": headers["s"] = base64.b64encode(base64.b64decode(headers["s"])[:-1]).decode()
+    if change == "long_signature": headers["s"] = base64.b64encode(base64.b64decode(headers["s"]) + b"\0").decode()
+    if change == "nonce": headers["n"] = "q7Xk2Q"
+    if change == "timestamp": headers["t"] = "1767225601"
+    if change.startswith("missing_"): del headers[change.removeprefix("missing_")]
+    if change == "version": headers["v"] = "v1"
+    if change == "duplicate": params["did"].append("456")
+    if change == "wrong_did": params["did"] = ["456"]
+    if change == "unsafe_value": params["sn"] = ["TEST SERIAL"]
+    if change == "unknown_key": ctx.device_public_key = lambda did: None
+    with caplog.at_level(logging.INFO, logger=API_LOGGER):
+        route, response = _request(ctx, params, headers=headers)
+    assert route == "device_info" and response["code"] == 200
+    assert path.read_bytes() == before
+    assert f"did=123 outcome={outcome} updated=0" in _outcome_log(caplog)
+
+
+def test_v1_form_ignores_v2_headers(setup_report):
+    ctx, path, _, params = setup_report
+    headers = {**V2_HEADERS, "s": base64.b64encode(b"\0" * 256).decode()}
+    _request(ctx, params, headers=headers)
+    assert json.loads(path.read_text())["devices"][0]["sn"] == "TESTSERIAL"
+
+
+def test_query_cannot_supply_route_headers():
+    query = {"__header_s": ["forged"], "__host": ["example.com"]}
+    assert http_helpers.with_route_headers(query, {}) == {"__host": ["example.com"]}
+    assert http_helpers.with_route_headers(query, {"s": " real "})["__header_s"] == ["real"]
+
+
+_TEST_FIELDS = {"did": "123", "featureset": "123456789", "newfeatureset": "0000000AbCD",
+                "pid": "roborock.vacuum.a87", "sn": "TESTSERIAL"}
+
+
+def _release_supervisor(tmp_path, key):
     from conftest import write_release_config
-    from fastapi.testclient import TestClient
     from roborock_local_server.config import load_config, resolve_paths
     from roborock_local_server.server import ReleaseSupervisor
 
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)
     paths = resolve_paths(config_file, config)
-    fields = {"did": "123", "featureset": "123456789", "newfeatureset": "0000000AbCD",
-              "pid": "roborock.vacuum.a87", "sn": "TESTSERIAL"}
+    for path, payload in (
+        (paths.inventory_path, {"devices": [{"did": "123", "duid": "cloud-a"}]}),
+        (paths.device_key_state_path,
+         {"devices": {"123": {"modulus_hex": format(key.public_key().public_numbers().n, "x")}}}),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload))
+    return ReleaseSupervisor(config=config, paths=paths), paths
+
+
+@pytest.mark.parametrize("prefix", ["", "/.roborock.com"])
+def test_real_http_form_preserves_base64_signature(tmp_path, prefix):
+    from fastapi.testclient import TestClient
+
+    fields = _TEST_FIELDS
     canonical = "&".join(f"{name}={value}" for name, value in fields.items()).encode()
     # Select a synthetic key whose signature exercises both URL-escaped chars.
     for _ in range(100):
@@ -159,14 +261,7 @@ def test_real_http_form_preserves_base64_signature(tmp_path, prefix):
             break
     else:
         pytest.fail("Could not produce representative synthetic signature")
-    for path, payload in (
-        (paths.inventory_path, {"devices": [{"did": "123", "duid": "cloud-a"}]}),
-        (paths.device_key_state_path,
-         {"devices": {"123": {"modulus_hex": format(key.public_key().public_numbers().n, "x")}}}),
-    ):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload))
-    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    supervisor, paths = _release_supervisor(tmp_path, key)
     body = urlencode({**fields, "signature": signature})
     assert "%2B" in body and "%2F" in body
     with TestClient(supervisor.app) as client:
@@ -178,3 +273,20 @@ def test_real_http_form_preserves_base64_signature(tmp_path, prefix):
     assert inventory["devices"][0]["sn"] == fields["sn"]
     entries = [json.loads(line) for line in paths.http_jsonl_path.read_text().splitlines()]
     assert entries[-1]["route"] == "device_info"
+
+
+def test_real_http_multipart_v2_upload(tmp_path, signing_key):
+    from fastapi.testclient import TestClient
+
+    supervisor, paths = _release_supervisor(tmp_path, signing_key)
+    params = {name: [value] for name, value in _TEST_FIELDS.items()}
+    headers = {**V2_HEADERS, "s": _sign_v2(signing_key, params, V2_HEADERS)}
+    boundary = "deviceinfotestboundary"
+    body = "".join(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'
+                   for name, value in _TEST_FIELDS.items()) + f"--{boundary}--\r\n"
+    with TestClient(supervisor.app) as client:
+        response = client.post("/devices/123/info", content=body,
+                               headers={"content-type": f"multipart/form-data; boundary={boundary}", **headers})
+    assert response.status_code == 200
+    assert json.loads(paths.inventory_path.read_text())["devices"][0]["sn"] == "TESTSERIAL"
+    assert "Device info did=123 outcome=stored updated=1" in (paths.runtime_dir / "api_server.log").read_text()

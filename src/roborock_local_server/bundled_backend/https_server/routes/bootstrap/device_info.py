@@ -1,8 +1,10 @@
 """Acknowledge signed firmware metadata uploads and update known devices.
 
 The G10S rriot_rr upload callback accepts HTTP 200/201 and ignores the response
-body. Its form is RSA PKCS#1 v1.5/SHA-256 signed in the field order below. See
-docs/device-info.md for firmware evidence and the limits of this contract.
+body. Its form is RSA PKCS#1 v1.5/SHA-256 signed in the field order below. The
+a307 omits the signature field and sends a V2 header signature instead: SHA-384
+over the same fields, followed by the nonce and timestamp headers. See
+docs/device-info.md for firmware evidence and the limits of these contracts.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 
 from shared.context import ServerContext
+from shared.http_helpers import route_header
 from shared.inventory_io import WEB_API_INVENTORY_FILE, inventory_transaction, load_inventory, write_inventory
 
 from .catchall import build as _build_catchall
@@ -31,13 +34,33 @@ def match(path: str, method: str = "POST") -> bool:
     return method.upper() == "POST" and _PATH.fullmatch(path) is not None
 
 
+def _signature_contract(
+    query_params: dict[str, list[str]], params: dict[str, list[str]]
+) -> tuple[str, str, hashes.HashAlgorithm] | None:
+    """Pick the signature form of an upload, or None if the form is unknown.
+
+    The result is the base64 signature, the text that follows the canonical
+    fields in the signed message, and the hash algorithm.
+    """
+    if set(params) == {*_FIELDS, "signature"}:
+        return params["signature"][0], "", hashes.SHA256()
+    if set(params) != set(_FIELDS) or route_header(query_params, "v") != "v2":
+        return None
+    nonce, timestamp, signature = (route_header(query_params, name) for name in ("n", "t", "s"))
+    if not (nonce and timestamp and signature):
+        return None
+    return signature, f":{nonce}:{timestamp}", hashes.SHA384()
+
+
 def _verified_report(
-    ctx: ServerContext, params: dict[str, list[str]], did: str
+    ctx: ServerContext, query_params: dict[str, list[str]], params: dict[str, list[str]], did: str
 ) -> tuple[dict[str, str] | None, str]:
     # Duplicates and extra fields would make reconstructing the signed message
     # ambiguous. Unsupported forms retain the acknowledgement but cannot write.
-    if set(params) != {*_FIELDS, "signature"} or any(len(v) != 1 for v in params.values()):
+    contract = _signature_contract(query_params, params)
+    if contract is None or any(len(v) != 1 for v in params.values()):
         return None, "malformed_fields"
+    signature_b64, suffix, algorithm = contract
     fields = {name: params[name][0] for name in _FIELDS}
     if fields["did"] != did:
         return None, "did_mismatch"
@@ -50,8 +73,8 @@ def _verified_report(
         return None, "missing_key"
     canonical = "&".join(f"{name}={fields[name]}" for name in _FIELDS)
     try:
-        signature = base64.b64decode(params["signature"][0], validate=True)
-        key.verify(signature, canonical.encode("ascii"), padding.PKCS1v15(), hashes.SHA256())
+        signature = base64.b64decode(signature_b64, validate=True)
+        key.verify(signature, (canonical + suffix).encode("ascii"), padding.PKCS1v15(), algorithm)
     except (InvalidSignature, ValueError, TypeError):
         return None, "invalid_signature"
     return fields, "verified"
@@ -59,14 +82,14 @@ def _verified_report(
 
 def build(
     ctx: ServerContext,
-    _query_params: dict[str, list[str]],
+    query_params: dict[str, list[str]],
     body_params: dict[str, list[str]],
     clean_path: str,
 ) -> dict[str, Any]:
     path_match = _PATH.fullmatch(clean_path)
     assert path_match is not None  # Route matcher already checked the path.
     did = path_match.group(1)
-    report, outcome = _verified_report(ctx, body_params, did)
+    report, outcome = _verified_report(ctx, query_params, body_params, did)
     updated_count = 0
     if report is not None:
         identities = {did}
@@ -106,7 +129,9 @@ def build(
                     outcome = "stored"
                 else:
                     outcome, updated_count = "write_failed", 0
-    _LOGGER.info("Device info did=%s outcome=%s updated=%d", did, outcome, updated_count)
+    # A module logger has no handler, so INFO would be dropped. The context
+    # loggers write to the server log files and stdout.
+    ctx.loggers.get("api", _LOGGER).info("Device info did=%s outcome=%s updated=%d", did, outcome, updated_count)
     # No response data is consumed by the verified firmware. Continue accepting
     # unsupported/unverifiable reports without allowing them to alter inventory.
-    return _build_catchall(ctx, _query_params, body_params, clean_path)
+    return _build_catchall(ctx, query_params, body_params, clean_path)

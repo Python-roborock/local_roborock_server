@@ -23,12 +23,27 @@ against the device public key recovered during onboarding and checks that the
 body DID matches the URL DID. Only unambiguous reports with one value per field
 are persisted. Query parameters do not supply or override metadata.
 
-This handler accepts exactly these six fields, nonempty metadata values of
-1–128 ASCII letters, digits, dots, underscores or hyphens, decimal `featureset`,
-and hexadecimal `newfeatureset`. These conservative limits match the observed
-reports; authentic firmware variants outside them are acknowledged and logged as
-unsupported without writing. They require further evidence before expanding the
-accepted contract.
+The Saros 20 Flow (`roborock.vacuum.a307`) uses a V2 form instead. It sends the
+five metadata fields as `multipart/form-data` parts, without a `signature` part.
+Four headers carry the signature: `v` is `v2`, `n` is a nonce, `t` is a Unix
+timestamp and `s` is the base64 signature. The device signs the form above,
+followed by the nonce and the timestamp, with PKCS#1 v1.5 and SHA-384:
+
+```text
+did=<numeric DID>&featureset=<decimal flags>&newfeatureset=<hex flags>&pid=<model>&sn=<serial>:<n>:<t>
+```
+
+The server rebuilds this text in the field order above, whatever the order of
+the parts. It verifies the signature with the same device public key and applies
+the same checks. An upload of the five fields counts as malformed if a header is
+missing or `v` is not `v2`.
+
+This handler accepts exactly the fields of either form, nonempty metadata
+values of 1–128 ASCII letters, digits, dots, underscores or hyphens, decimal
+`featureset`, and hexadecimal `newfeatureset`. These conservative limits match
+the observed reports; authentic firmware variants outside them are acknowledged
+and logged as unsupported without writing. They require further evidence before
+expanding the accepted contract.
 
 For an existing inventory device matched by DID, or by its runtime DID-to-DUID
 link, verified reports update `sn`, `featureSet`, and `newFeatureSet` in
@@ -45,8 +60,10 @@ acknowledgement behavior. Responses retain the previous fallback body, including
 The inspected G10S firmware ignores that body; preserving it avoids changing the
 response contract for other models whose callback has not been audited.
 
-There is no nonce or timestamp in this form. A valid recorded report can be
-replayed; signature verification establishes its origin, not its freshness.
+The form with a `signature` field has no nonce or timestamp. The V2 form has
+both, but the server does not check them for freshness or reuse. A valid
+recorded report of either form can be replayed; signature verification
+establishes its origin, not its freshness.
 No replayed report can change identity or credentials through this handler.
 
 The server logs the DID, an outcome (`stored`, `unchanged`, `unmatched`,
@@ -90,3 +107,7 @@ acknowledgement for other contracts and refuses metadata writes when verificatio
 fails. A cloud response capture is unnecessary
 for the inspected G10S callback, but would be needed to describe the cloud's exact
 response body or another model's response parser.
+
+One a307 upload was verified with its recovered RSA public key against the V2
+form and its PKCS#1 v1.5/SHA-384 contract. No raw signatures, serial numbers,
+nonces or keys are included here.
