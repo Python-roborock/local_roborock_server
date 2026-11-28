@@ -49,7 +49,10 @@ def build_put_name(
     clean_path: str,
 ) -> dict[str, Any]:
     scene_id = _scene_id_from_path(clean_path)
-    return wrap_response(update_scene_name(ctx, scene_id, body_params))
+    # The app types this endpoint as ApiReturn<Void>; its React Native routine screen
+    # renders a non-null data field as text and crashes on a scene object.
+    update_scene_name(ctx, scene_id, body_params)
+    return wrap_response(None)
 
 
 def match_put_param(path: str, method: str = "GET") -> bool:
@@ -64,7 +67,10 @@ def build_put_param(
     clean_path: str,
 ) -> dict[str, Any]:
     scene_id = _scene_id_from_path(clean_path)
-    return wrap_response(update_scene_param(ctx, scene_id, body_params))
+    # The app types this endpoint as ApiReturn<Void>; its React Native routine screen
+    # renders a non-null data field as text and crashes on a scene object.
+    update_scene_param(ctx, scene_id, body_params)
+    return wrap_response(None)
 
 
 

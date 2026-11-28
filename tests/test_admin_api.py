@@ -1281,7 +1281,7 @@ def test_scene_update_routes_persist_name_and_zone_ranges(tmp_path: Path) -> Non
         ),
     )
     assert rename_response.status_code == 200
-    assert rename_response.json()["data"]["name"] == "After dinner"
+    assert rename_response.json()["data"] is None
 
     update_payload = _after_dinner_param_payload(device_id, include_ranges=False)
     update_body = json.dumps(update_payload, separators=(",", ":"))
@@ -1298,6 +1298,7 @@ def test_scene_update_routes_persist_name_and_zone_ranges(tmp_path: Path) -> Non
         },
     )
     assert update_response.status_code == 200
+    assert update_response.json()["data"] is None
 
     stored_inventory = json.loads(paths.inventory_path.read_text(encoding="utf-8"))
     scene = next(scene for scene in stored_inventory["scenes"] if scene["id"] == 4491073)
