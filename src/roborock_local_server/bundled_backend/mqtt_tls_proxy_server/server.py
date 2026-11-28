@@ -85,6 +85,7 @@ class MqttTlsProxy:
         self._on_onboarding_credentials_learned = on_onboarding_credentials_learned
         self._on_device_firmware_reported = on_device_firmware_reported
         self._server_socket: socket.socket | None = None
+        self._tls_ctx: ssl.SSLContext | None = None
         self._running = False
         self._counter = 0
         self._lock = threading.Lock()
@@ -1008,13 +1009,42 @@ class MqttTlsProxy:
             self.logger.info("[conn %s] closed", conn_id)
 
     def start(self) -> threading.Thread:
+        """Bind the listener, then serve it on a background thread.
+
+        TLS context and bind errors are raised here, in the caller's thread, rather than
+        lost inside the accept thread.
+        """
+        self._tls_ctx = self._build_tls_context() if self.tls_enabled else None
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_socket.bind((self.listen_host, self.listen_port))
+            server_socket.listen(10)
+        except OSError:
+            server_socket.close()
+            raise
+        self._server_socket = server_socket
+        self._running = True
         self._ensure_trace_worker()
         thread = threading.Thread(target=self._run, daemon=True, name="mqtt-tls-proxy")
         thread.start()
         return thread
 
-    def _build_tls_context(self) -> ssl.SSLContext:
-        if self.cert_file is None or self.key_file is None:
+    def reload_certificate(self, cert_file: Path, key_file: Path) -> None:
+        """Serve a new certificate to new connections; established connections are kept.
+
+        The new context is built completely before it replaces the old one, so a failure
+        leaves the current certificate in place.
+        """
+        if not self.tls_enabled:
+            return
+        self._tls_ctx = self._build_tls_context(cert_file=cert_file, key_file=key_file)
+        self.logger.info("MQTT TLS certificate reloaded")
+
+    def _build_tls_context(self, *, cert_file: Path | None = None, key_file: Path | None = None) -> ssl.SSLContext:
+        cert_file = cert_file or self.cert_file
+        key_file = key_file or self.key_file
+        if cert_file is None or key_file is None:
             raise RuntimeError("TLS-enabled MQTT proxy requires cert_file and key_file")
         tls_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls_ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
@@ -1028,7 +1058,7 @@ class MqttTlsProxy:
             opt_value = getattr(ssl, opt_name, None)
             if opt_value is not None:
                 tls_ctx.options &= ~opt_value
-        tls_ctx.load_cert_chain(str(self.cert_file), str(self.key_file))
+        tls_ctx.load_cert_chain(str(cert_file), str(key_file))
         tls_ctx.check_hostname = False
         tls_ctx.verify_mode = ssl.CERT_NONE
         return tls_ctx
@@ -1070,13 +1100,9 @@ class MqttTlsProxy:
         self._handle_client(client_conn, addr)
 
     def _run(self) -> None:
-        tls_ctx = self._build_tls_context() if self.tls_enabled else None
-
-        self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._server_socket.bind((self.listen_host, self.listen_port))
-        self._server_socket.listen(10)
-        self._running = True
+        server_socket = self._server_socket
+        if server_socket is None:
+            raise RuntimeError("MQTT proxy listener was not bound; call start()")
         self.logger.info(
             "%s MQTT proxy listening on %s:%d -> %s:%d",
             "TLS" if self.tls_enabled else "Plain",
@@ -1088,10 +1114,11 @@ class MqttTlsProxy:
 
         while self._running:
             try:
-                raw_conn, addr = self._server_socket.accept()
+                raw_conn, addr = server_socket.accept()
                 threading.Thread(
                     target=self._accept_and_handle_client,
-                    args=(raw_conn, addr, tls_ctx),
+                    # Read per connection so a reloaded certificate applies to new handshakes.
+                    args=(raw_conn, addr, self._tls_ctx),
                     daemon=True,
                 ).start()
             except OSError as exc:
@@ -1104,6 +1131,11 @@ class MqttTlsProxy:
     def stop(self) -> None:
         self._running = False
         if self._server_socket:
+            # close() alone does not wake a thread blocked in accept() on Linux.
+            try:
+                self._server_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             try:
                 self._server_socket.close()
             except OSError:

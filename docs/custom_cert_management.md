@@ -39,6 +39,17 @@ If you manage certificates externally on the host (for example via `acme.sh` or 
 1. Configure your host tool's deploy/copy hook to write certificates to `./data/certs/`, or
 2. Add an additional volume mount to `compose.yaml` (e.g. `- /etc/letsencrypt:/etc/letsencrypt:ro`) and set `cert_file` to the corresponding container path.
 
+### Certificate renewal
+
+When your certificate tool renews the certificate, the server picks it up on its own; no restart needed. Connected vacuums stay connected.
+
+- It can take up to 12 hours for the new certificate to be used. Restart the container if you need it sooner, or check more often by setting the interval in seconds in `config.toml` (lowest allowed is 1 hour):
+  ```toml
+  [tls]
+  renew_check_seconds = 3600
+  ```
+- If you mount certificate files from elsewhere on the host, mount the folder, not the individual files. Otherwise the container may never see the renewed files.
+
 ## Related Docs
 
 - [Installation](installation.md)

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
 import os
 from pathlib import Path
+import ssl
 import subprocess
-from typing import Iterable
+import tempfile
+from typing import Iterable, Iterator
 
 from cryptography import x509
 
@@ -26,12 +29,28 @@ class CertificatePaths:
     key_file: Path
 
 
+# (st_ino, st_mtime_ns, st_size) for the cert file and the key file.
+_FilesSignature = tuple[tuple[int, int, int], tuple[int, int, int]]
+
+
+def validate_certificate_pair(cert_file: Path, key_file: Path) -> None:
+    """Raise if the key does not belong to the certificate or either file cannot be parsed."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    # Same security level as the listeners, so a cert they accept is not rejected here.
+    ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+    ctx.load_cert_chain(str(cert_file), str(key_file))
+
+
 class CertificateManager:
     """Owns certificate provisioning for the release stack."""
 
     def __init__(self, *, config: AppConfig, paths: AppPaths) -> None:
         self.config = config
         self.paths = paths
+        # Signature of the provided cert/key the listeners are serving, and of a change
+        # reported by ensure_certificate() that has not been applied yet.
+        self._applied_signature: _FilesSignature | None = None
+        self._pending_signature: _FilesSignature | None = None
 
     @property
     def certificate_paths(self) -> CertificatePaths:
@@ -43,11 +62,60 @@ class CertificateManager:
                 raise FileNotFoundError(f"Provided TLS cert not found: {self.paths.cert_file}")
             if not self.paths.key_file.exists():
                 raise FileNotFoundError(f"Provided TLS key not found: {self.paths.key_file}")
-            return False
+            return self._provided_files_changed()
         if not self._needs_refresh():
             return False
         self._provision_or_renew()
         return True
+
+    def _provided_files_signature(self) -> _FilesSignature:
+        cert_stat = self.paths.cert_file.stat()
+        key_stat = self.paths.key_file.stat()
+        return (
+            (cert_stat.st_ino, cert_stat.st_mtime_ns, cert_stat.st_size),
+            (key_stat.st_ino, key_stat.st_mtime_ns, key_stat.st_size),
+        )
+
+    def _provided_files_changed(self) -> bool:
+        """Return True when externally managed cert/key files differ from the ones being served.
+
+        The first call only records a baseline, so startup never reports a change. A reported
+        change is only recorded as served once mark_certificate_applied() is called, so a
+        half-written or mismatched pair is reported again on the next check.
+        """
+        signature = self._provided_files_signature()
+        if self._applied_signature is None:
+            self._applied_signature = signature
+            return False
+        if signature == self._applied_signature:
+            self._pending_signature = None
+            return False
+        self._pending_signature = signature
+        return True
+
+    def mark_certificate_applied(self) -> None:
+        """Record the change last reported by ensure_certificate() as served by the listeners."""
+        if self._pending_signature is not None:
+            self._applied_signature = self._pending_signature
+            self._pending_signature = None
+
+    @contextmanager
+    def certificate_snapshot(self) -> Iterator[CertificatePaths]:
+        """Yield private copies of the current cert/key after checking that they form a valid pair.
+
+        Loading every listener from the same copies means a file replaced on disk mid-reload
+        cannot leave the listeners with different, or mismatched, certificates.
+        """
+        cert_bytes = self.paths.cert_file.read_bytes()
+        key_bytes = self.paths.key_file.read_bytes()
+        with tempfile.TemporaryDirectory(prefix="tls-reload-") as tmp:
+            snapshot = CertificatePaths(cert_file=Path(tmp) / "cert.pem", key_file=Path(tmp) / "key.pem")
+            snapshot.cert_file.write_bytes(cert_bytes)
+            fd = os.open(snapshot.key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(key_bytes)
+            validate_certificate_pair(snapshot.cert_file, snapshot.key_file)
+            yield snapshot
 
     def _needs_refresh(self) -> bool:
         if not self.paths.cert_file.exists() or not self.paths.key_file.exists():
