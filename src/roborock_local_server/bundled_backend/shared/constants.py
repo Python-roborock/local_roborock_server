@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 DEFAULT_HOME_NAME = "Local Home"
+# default_timezone falls back to it for a region without its own timezone.
 DEFAULT_TIMEZONE = "America/New_York"
 
 DEFAULT_PRODUCT_SCHEMA: list[dict[str, Any]] = [

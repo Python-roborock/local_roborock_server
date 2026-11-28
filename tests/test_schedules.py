@@ -59,8 +59,9 @@ def _hawk_headers(snapshot_path: Path, path: str) -> dict[str, str]:
     }
 
 
-def test_device_jobs_endpoint_returns_imported_schedules(tmp_path: Path) -> None:
-    config_file = write_release_config(tmp_path)
+@pytest.mark.parametrize(("region", "next_fire_utc"), [("us", "T18:03"), ("eu", "T12:03")])
+def test_device_jobs_endpoint_returns_imported_schedules(tmp_path: Path, region: str, next_fire_utc: str) -> None:
+    config_file = write_release_config(tmp_path, region=region)
     config = load_config(config_file)
     paths = resolve_paths(config_file, config)
 
@@ -110,10 +111,10 @@ def test_device_jobs_endpoint_returns_imported_schedules(tmp_path: Path) -> None
     assert payload["success"] is True
     assert payload["data"] == payload["result"]
     # nextFireTime is computed from the cron against "now", so check its shape, not its value.
-    # No timezone is configured, so the cron runs in the zone the robot is told (America/New_York):
-    # 13:03 local on Dec 15 is 18:03Z.
+    # No timezone is configured, so the cron runs in the region's zone, which the robot is told too.
+    # 13:03 local on Dec 15 is 18:03Z in America/New_York (us) and 12:03Z in Europe/Berlin (eu).
     next_fire_time = payload["result"][0].pop("nextFireTime")
-    assert next_fire_time.endswith("T18:03:00.000+00:00")
+    assert next_fire_time.endswith(f"{next_fire_utc}:00.000+00:00")
     assert payload["result"] == [
         {
             **schedule,

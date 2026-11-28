@@ -4,6 +4,8 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
 
+from .constants import DEFAULT_TIMEZONE
+
 if TYPE_CHECKING:
     from .context import ServerContext
 
@@ -59,6 +61,23 @@ def model_product_ids(cloud_products: Any) -> dict[str, int]:
 
 def default_home_id(ctx: ServerContext) -> int:
     return stable_int(f"{ctx.duid}:home")
+
+
+REGION_TIMEZONES: dict[str, str] = {
+    "eu": "Europe/Berlin",
+    "us": "America/New_York",
+    "cn": "Asia/Shanghai",
+    "ru": "Europe/Moscow",
+}
+
+
+def default_timezone(ctx: ServerContext) -> str:
+    """Return network.timezone if set, else the timezone of the region."""
+    if ctx.timezone and ctx.timezone.strip():
+        return ctx.timezone.strip()
+
+    region = (ctx.region or "").strip().lower()
+    return REGION_TIMEZONES.get(region, DEFAULT_TIMEZONE)
 
 
 def default_product_name(model: str) -> str:

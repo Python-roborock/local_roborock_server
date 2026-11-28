@@ -242,6 +242,85 @@ def test_home_data_response_does_not_emit_empty_snake_case_received_devices(tmp_
     assert "6HL2zfniaoYYV01CkVuhkO" in parsed_home.device_products
 
 
+@pytest.mark.parametrize(
+    ("region", "timezone", "device_timezone", "expected"),
+    [
+        ("eu", "", None, "Europe/Berlin"),
+        ("us", "", None, "America/New_York"),
+        ("eu", "Europe/Vienna", None, "Europe/Vienna"),
+        ("eu", "", "Asia/Tokyo", "Asia/Tokyo"),
+    ],
+)
+def test_device_time_zone_defaults_to_the_server_time_zone(
+    tmp_path: Path,
+    region: str,
+    timezone: str,
+    device_timezone: str | None,
+    expected: str,
+) -> None:
+    config_file = write_release_config(tmp_path, region=region, timezone=timezone)
+    config = load_config(config_file)
+    paths = resolve_paths(config_file, config)
+
+    duid = "6HL2zfniaoYYV01CkVuhkO"
+    device: dict[str, object] = {
+        "duid": duid,
+        "name": "Roborock Qrevo MaxV",
+        "model": "roborock.vacuum.a87",
+        "product_id": "5gUei3OIJIXVD3eD85Balg",
+        "local_key": "xPd5Dr8CGGqtdDlH",
+    }
+    if device_timezone is not None:
+        device["timezone"] = device_timezone
+
+    paths.runtime_dir.mkdir(parents=True, exist_ok=True)
+    paths.state_dir.mkdir(parents=True, exist_ok=True)
+    paths.inventory_path.write_text(
+        json.dumps({"home": {"id": 1316433, "name": "My Home"}, "devices": [device]}) + "\n",
+        encoding="utf-8",
+    )
+    _seed_cloud_snapshot(paths.cloud_snapshot_path, {"id": 1316433, "name": "My Home"})
+    paths.runtime_credentials_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "devices": [
+                    {
+                        "did": "1103821560705",
+                        "duid": duid,
+                        "name": "Roborock Qrevo MaxV",
+                        "model": "roborock.vacuum.a87",
+                        "product_id": "5gUei3OIJIXVD3eD85Balg",
+                        "localkey": "xPd5Dr8CGGqtdDlH",
+                        "local_key_source": "inventory_cloud",
+                        "device_mqtt_usr": "c25b14ceac358d2a",
+                        "updated_at": "2026-03-17T22:50:00+00:00",
+                        "last_nc_at": "",
+                        "last_mqtt_seen_at": "",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    supervisor = ReleaseSupervisor(config=config, paths=paths)
+    supervisor.refresh_inventory_state()
+    client = TestClient(supervisor.app)
+
+    home_path = "/v3/user/homes/1316433"
+    home_response = client.get(home_path, headers=_hawk_headers(paths.cloud_snapshot_path, home_path))
+    assert home_response.status_code == 200
+    home_devices = home_response.json()["result"]["devices"]
+    assert [item["timeZoneId"] for item in home_devices] == [expected]
+
+    detail_path = f"/user/devices/{duid}"
+    detail_response = client.get(detail_path, headers=_hawk_headers(paths.cloud_snapshot_path, detail_path))
+    assert detail_response.status_code == 200
+    assert detail_response.json()["data"]["timeZoneId"] == expected
+
+
 def test_device_detail_uses_runtime_connection_and_preserves_inventory_fields(tmp_path: Path) -> None:
     config_file = write_release_config(tmp_path)
     config = load_config(config_file)

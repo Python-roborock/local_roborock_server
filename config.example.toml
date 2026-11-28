@@ -14,9 +14,10 @@ mqtt_tls_port = 8881
 # traffic to the server; the proxy must present a valid cert to clients. See docs/reverse_proxy.md.
 # listener_mode = "local_tls"
 region = "us"
-# Optional timezone returned by the bootstrap location route.
+# Optional timezone returned by the bootstrap location route, and for devices without their own timezone.
 # Defaults to the region default if unset ("Europe/Berlin" for "eu", "America/New_York" for "us",
-# "Asia/Shanghai" for "cn", "Europe/Moscow" for "ru").
+# "Asia/Shanghai" for "cn", "Europe/Moscow" for "ru"). Set it if your timezone differs from that
+# default, for example "Europe/London" in the "eu" region.
 # timezone = "Europe/Berlin"
 
 [broker]
