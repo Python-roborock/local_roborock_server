@@ -1304,6 +1304,8 @@ class ReleaseSupervisor:
                 clean_path=clean_path,
                 query_params=query_params,
                 runtime_dir=self.paths.runtime_dir,
+                context=self.context,
+                headers=request_headers,
             )
         except PluginZipDispatchError as exc:
             route_name = exc.route_name
@@ -1311,7 +1313,7 @@ class ReleaseSupervisor:
             error_payload = {
                 "success": False,
                 "code": 502,
-                "msg": "plugin_proxy_failed",
+                "msg": "voice_pkg_proxy_failed" if route_name == "voice_pkg_proxy" else "plugin_proxy_failed",
                 "data": {"source": plugin_source, "error": str(exc)},
             }
             entry["route"] = route_name
