@@ -29,6 +29,7 @@ from .backend import (
     _fetch_cloud_home_data_with_api,
     _fetch_plugin_catalogs,
     _flatten_device_scenes,
+    _hawk_get_result,
     _load_existing_inventory_for_merge,
     _merge_existing_inventory_mutations,
     _normalize_dict_list,
@@ -205,6 +206,69 @@ class CloudImportManager:
             return {}
         return parsed if isinstance(parsed, dict) else {}
 
+    def _stored_cloud_login(self) -> tuple[dict[str, Any], dict[str, Any], UserData, str]:
+        """The snapshot, its meta, and the login the last sign-in stored."""
+        snapshot = self._read_snapshot()
+        meta = snapshot.get("meta") if isinstance(snapshot.get("meta"), dict) else {}
+        try:
+            user_data = UserData.from_dict(snapshot.get("user_data"))
+        except (TypeError, ValueError, KeyError):
+            user_data = None
+        email = str(meta.get("username") or "")
+        if user_data is None or not user_data.token or not email:
+            raise ValueError("No cloud login is stored. Request a code and sign in first.")
+        return snapshot, meta, user_data, email
+
+    @staticmethod
+    def _cloud_client(session: aiohttp.ClientSession, meta: dict[str, Any], email: str) -> RoborockApiClient:
+        api = RoborockApiClient(username=email, base_url=str(meta.get("base_url") or "") or None, session=session)
+        if meta.get("device_identifier"):
+            setattr(api, "_device_identifier", str(meta["device_identifier"]))
+        return api
+
+    async def iot_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        """A signed read of Roborock's IoT API with the stored login; returns the reply's `result`."""
+        _, meta, user_data, email = self._stored_cloud_login()
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            api = self._cloud_client(session, meta, email)
+            return await _hawk_get_result(api, user_data, path, params=params)
+
+    async def firmware_update_info(self, duid: str, *, lang: str = "en") -> Any:
+        """What the cloud says about a robot's firmware update, read with the stored login."""
+        return await self.iot_get(f"/ota/firmware/{duid}/updatev2", {"lang": lang})
+
+    def firmware_devices(self) -> list[dict[str, Any]]:
+        """Every robot on the signed-in account, from the home data the sign-in stored."""
+        home = self._read_snapshot().get("home_data")
+        home = home if isinstance(home, dict) else {}
+        models = {
+            str(product.get("id")): product.get("model")
+            for product in home.get("products") or [] if isinstance(product, dict)
+        }
+        rows: list[dict[str, Any]] = []
+        for device in [*(home.get("devices") or []), *(home.get("received_devices") or [])]:
+            if isinstance(device, dict) and device.get("duid"):
+                rows.append({
+                    "duid": device["duid"], "name": device.get("name"),
+                    "model": models.get(str(device.get("product_id"))),
+                    "cloud_firmware": device.get("fv"), "online": device.get("online"),
+                })
+        return rows
+
+    async def firmware_status(self, *, lang: str = "en") -> list[dict[str, Any]]:
+        """Each account robot with the cloud's firmware update answer; one failure does not hide the rest."""
+        self._stored_cloud_login()
+        rows = self.firmware_devices()
+        if not rows:
+            raise ValueError("No devices are stored. Sign in with an email code to import them.")
+        for row in rows:
+            try:
+                row["update"] = await self.iot_get("/ota/firmware/updatev2", {"duids": row["duid"], "lang": lang})
+            except Exception as exc:  # noqa: BLE001
+                row["error"] = str(exc)
+        return rows
+
     def plugin_catalogs(self) -> dict[str, Any]:
         """The stored plugin catalogs, summarized, without any cloud request."""
         web_cache = self._read_snapshot().get("web_api_cache")
@@ -217,21 +281,11 @@ class CloudImportManager:
         Only the plugin catalogs in the snapshot change; the inventory is left alone. A rejected
         login needs the email-code sign-in again, which stores a fresh one.
         """
-        snapshot = self._read_snapshot()
-        meta = snapshot.get("meta") if isinstance(snapshot.get("meta"), dict) else {}
-        try:
-            user_data = UserData.from_dict(snapshot.get("user_data"))
-        except (TypeError, ValueError, KeyError):
-            user_data = None
-        email = str(meta.get("username") or "")
-        if user_data is None or not user_data.token or not email:
-            raise ValueError("No cloud login is stored. Request a code and sign in first.")
+        snapshot, meta, user_data, email = self._stored_cloud_login()
 
         timeout = aiohttp.ClientTimeout(total=120)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            api = RoborockApiClient(username=email, base_url=str(meta.get("base_url") or "") or None, session=session)
-            if meta.get("device_identifier"):
-                setattr(api, "_device_identifier", str(meta["device_identifier"]))
+            api = self._cloud_client(session, meta, email)
             try:
                 home_data = await _fetch_cloud_home_data_with_api(api, user_data)
                 catalogs = await _fetch_plugin_catalogs(api, user_data, home_data)

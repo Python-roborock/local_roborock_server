@@ -75,6 +75,7 @@ def _extract_inventory_vacuums(context: "ServerContext", inventory: dict[str, An
                     "local_key": local_key,
                     "model": str(raw.get("model") or "").strip(),
                     "product_id": str(raw.get("product_id") or raw.get("productId") or "").strip(),
+                    "pv": str(raw.get("pv") or "").strip(),
                     "source": source_key,
                 }
             )
@@ -180,6 +181,7 @@ def _merge_vacuum_state(
         merged["local_key"] = merged.get("local_key") or inv.get("local_key") or ""
         merged["model"] = inv.get("model") or runtime_model_hint or ""
         merged["product_id"] = inv.get("product_id") or ""
+        merged["pv"] = inv.get("pv") or ""
         merged["inventory_source"] = inv.get("source") or merged.get("source") or ""
         if inventory_duid:
             merged["duid"] = inventory_duid
@@ -215,6 +217,7 @@ def _merge_vacuum_state(
                 "local_key": inv.get("local_key") or "",
                 "model": inv.get("model") or "",
                 "product_id": inv.get("product_id") or "",
+                "pv": inv.get("pv") or "",
                 "inventory_source": inv.get("source") or "",
                 "connected": False,
                 "last_message_at": "",

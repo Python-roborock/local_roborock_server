@@ -658,6 +658,8 @@ class MqttTlsProxy:
                 return
             if proto_value == 301:
                 self.snapshot_store.record_map(duid, payload_bytes)
+            elif proto_value == 203:
+                self.snapshot_store.record_firmware_version(duid, payload_utf8)
             elif proto_value == 102:
                 response_to = decoded_entry.get("response_to")
                 if isinstance(response_to, dict):

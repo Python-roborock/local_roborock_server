@@ -1,6 +1,8 @@
 from pathlib import Path
 import sys
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 root_str = str(ROOT)
@@ -70,3 +72,12 @@ protocol_login_pin_hash = "{hash_password(protocol_login_pin, iterations=10_000)
         encoding="utf-8",
     )
     return config_file
+
+
+@pytest.fixture(autouse=True)
+def _no_pinned_packages():
+    from roborock_local_server import ota_dry_run
+
+    ota_dry_run._PINNED.clear()
+    yield
+    ota_dry_run._PINNED.clear()

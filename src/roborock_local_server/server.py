@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import re
 from pathlib import Path
 import secrets
 import signal
@@ -29,8 +30,11 @@ from .bundled_backend.shared.data_helpers import utcnow_iso
 from .product_registry import resolve_product_metadata
 from .bundled_backend.shared.runtime_state import ONBOARDING_STEP_LABELS, REQUIRED_ONBOARDING_STEPS
 from .cloud import CloudImportManager
+from . import firmware_versions
 from .config import AppConfig, AppPaths, load_config, resolve_paths
 from .log_retention import configure_jsonl_logging
+from .ota_dry_run import OtaDryRun
+from .ota_install import OtaInstaller
 from .turn_relay import EmbeddedTurnRelay
 from .standalone_admin import register_standalone_admin_routes
 from .backend import (
@@ -374,6 +378,8 @@ class ReleaseSupervisor:
             inventory_path=self.paths.inventory_path,
             snapshot_path=self.paths.cloud_snapshot_path,
         )
+        self.ota_dry_run = OtaDryRun()
+        self.ota_installer = OtaInstaller(self)
         self.protocol_auth = ProtocolAuthStore(
             self.paths.cloud_snapshot_path,
             session_store_path=self.paths.protocol_auth_sessions_path,
@@ -651,6 +657,109 @@ class ReleaseSupervisor:
                 return patched_user_data
         return self._local_protocol_identity()
 
+    # The app asks with the duid as a query value; older clients put it in the path.
+    _OTA_CHECK = re.compile(r"^/ota/firmware/([^/]+)/updatev2/?$")
+    _OTA_CHECK_QUERY = re.compile(r"^/ota/firmware/updatev2/?$")
+    _OTA_STATUS = re.compile(r"^/ota/firmware/upgrade/status/?$")
+    _OTA_STATUS_PATH = re.compile(r"^/ota/firmware/([^/]+)/upgrade/status/?$")
+    _OTA_UPGRADE = re.compile(r"^/ota/device/([^/]+)/upgrade(/latest-stable)?/?$")
+    # LocalRock's install of another catalog version (?version=, else the previous one); not a cloud route.
+    _OTA_UPGRADE_VERSION = re.compile(r"^/ota/device/([^/]+)/upgrade/version/?$")
+
+    def _is_firmware_read(self, clean_path: str) -> bool:
+        return bool(
+            self._OTA_CHECK.match(clean_path)
+            or self._OTA_CHECK_QUERY.match(clean_path)
+            or self._OTA_STATUS.match(clean_path)
+            or self._OTA_STATUS_PATH.match(clean_path)
+        )
+
+    def _local_ota_status(self, clean_path: str, duids: str) -> Any:
+        """The status of an install this server is running, in the shape the app reads, or None to ask the cloud."""
+        by_path = self._OTA_STATUS_PATH.match(clean_path)
+        if by_path is not None:
+            return self.ota_installer.live_status(by_path.group(1))
+        if self._OTA_STATUS.match(clean_path):
+            rows = []
+            for duid in [part for part in duids.split(",") if part]:
+                status = self.ota_installer.live_status(duid)
+                if status is not None:
+                    rows.append({"duid": duid, **status})
+            return rows or None
+        return None
+
+    async def _firmware_ota_response(
+        self, clean_path: str, method: str, query_params: dict[str, list[str]], body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Answers the app's firmware calls: the check and its progress are read from the cloud, the upgrade is refused."""
+        def first(name: str, default: str = "") -> str:
+            return ((query_params.get(name) or [default])[0] or default).strip()
+
+        route_name = "ota_firmware_check"
+        read: tuple[str, dict[str, str]] | None = None
+        if method == "GET":
+            local = self._local_ota_status(clean_path, first("duids"))
+            if local is not None:
+                return "ota_firmware_status_local", {"success": True, "code": 200, "msg": "success", "data": local, "result": local}
+            if (check := self._OTA_CHECK.match(clean_path)) is not None:
+                read = (f"/ota/firmware/{check.group(1)}/updatev2", {"lang": first("lang", "en")})
+            elif self._OTA_CHECK_QUERY.match(clean_path):
+                read = ("/ota/firmware/updatev2", {"duids": first("duids"), "lang": first("lang", "en")})
+            elif self._OTA_STATUS.match(clean_path):
+                route_name = "ota_firmware_status"
+                read = ("/ota/firmware/upgrade/status", {"duids": first("duids")})
+            elif (by_path := self._OTA_STATUS_PATH.match(clean_path)) is not None:
+                route_name = "ota_firmware_status"
+                read = (f"/ota/firmware/{by_path.group(1)}/upgrade/status", {})
+        if read is not None:
+            try:
+                result = await self.cloud_manager.iot_get(read[0], read[1])
+                if route_name == "ota_firmware_check":
+                    path_duid = check.group(1) if (check := self._OTA_CHECK.match(clean_path)) else ""
+                    self.ota_installer.learn_offers(result, path_duid)
+                    result = firmware_versions.reconcile_result(result, path_duid, self.context.snapshot_store)
+                    if path_duid and isinstance(result, dict):
+                        # Extra fields for LocalRock's firmware screen; the cloud's own fields stay as they were.
+                        result = {**result, **self.ota_installer.version_info(path_duid)}
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("real_stack").warning("Firmware request %s failed: %s", clean_path, exc)
+                return route_name, {
+                    "success": False, "code": 502, "msg": "firmware_check_unavailable", "data": {"error": str(exc)},
+                }
+            return route_name, {"success": True, "code": 200, "msg": "success", "data": result, "result": result}
+        other = self._OTA_UPGRADE_VERSION.match(clean_path)
+        if other and method == "POST":
+            if not self.ota_installer.owns(other.group(1)):
+                return "ota_upgrade_version_unknown", self._unknown_device_response(other.group(1))
+            body = body or {}
+            named = str(body.get("version") or "").strip()
+            started = await self.ota_installer.start_version(
+                other.group(1), named or first("version"), body.get("confirm_downgrade") is True, named,
+            )
+            if started["started"]:
+                return "ota_upgrade_version_started", {"success": True, "code": 200, "msg": "success", "data": started, "result": started}
+            return "ota_upgrade_version_refused", {"success": False, "code": 409, "msg": "firmware_upgrade_refused", "data": started}
+        upgrade = self._OTA_UPGRADE.match(clean_path)
+        if upgrade and method == "POST" and not upgrade.group(2) and self.config.ota.enable_install:
+            if not self.ota_installer.owns(upgrade.group(1)):
+                return "ota_upgrade_unknown", self._unknown_device_response(upgrade.group(1))
+            started = await self.ota_installer.start(upgrade.group(1))
+            if started["started"]:
+                return "ota_upgrade_started", {"success": True, "code": 200, "msg": "success", "data": started, "result": started}
+            return "ota_upgrade_refused", {"success": False, "code": 409, "msg": "firmware_upgrade_refused", "data": started}
+        if upgrade and method == "POST":
+            return "ota_upgrade_unsupported", {
+                "success": False,
+                "code": 501,
+                "msg": "firmware_upgrade_not_supported",
+                "data": {"error": "Installing firmware is not supported by the local server yet."},
+            }
+        return None
+
+    @staticmethod
+    def _unknown_device_response(duid: str) -> dict[str, Any]:
+        return {"success": False, "code": 404, "msg": "firmware_device_unknown", "data": {"started": False, "reason": f"Unknown device {duid!r}"}}
+
     @staticmethod
     def _normalized_path(path: str) -> str:
         normalized = str(path or "").rstrip("/")
@@ -816,6 +925,9 @@ class ReleaseSupervisor:
         if cls._is_public_protocol_path(normalized):
             return None
         if normalized.startswith(("/user/", "/v2/user/", "/v3/user/", "/v4/user/")):
+            return "hawk"
+        # The firmware routes answer from the stored cloud login, so they are app-only like /user/.
+        if normalized.startswith(("/ota/firmware/", "/ota/device/")):
             return "hawk"
         if normalized.startswith("/api/"):
             return "token"
@@ -1261,6 +1373,8 @@ class ReleaseSupervisor:
                     body_params=body_params,
                     headers=request.headers,
                     raw_body=raw_body,
+                    # Only the four read-only firmware GETs: the app resends them with one signature within milliseconds.
+                    allow_replay=request.method == "GET" and self._is_firmware_read(clean_path),
                 )
             if not authenticated:
                 route_name = f"{required_auth}_auth_failed"
@@ -1297,6 +1411,16 @@ class ReleaseSupervisor:
                     body_sha256[:16],
                 )
                 return JSONResponse(response_payload, status_code=status_code)
+
+        dry_run_file = self.ota_dry_run.file_response(
+            clean_path, request.method, request.headers, str(entry["remote"]),
+        )
+        if dry_run_file is not None:
+            entry["route"] = "ota_dry_run_file"
+            entry["response_meta"] = {"status_code": dry_run_file.status_code}
+            append_jsonl(self.context.http_jsonl, entry)
+            logger.info("%s %s host=%s route=ota_dry_run_file status=%d", request.method, clean_path, host or "-", dry_run_file.status_code)
+            return dry_run_file
 
         try:
             plugin_dispatch = await dispatch_plugin_zip_request(
@@ -1379,7 +1503,12 @@ class ReleaseSupervisor:
             )
             return response
 
-        if schedule_jobs.match_update(clean_path, request.method):
+        ota_response = await self._firmware_ota_response(
+            clean_path, request.method, query_params, _request_json_object(body_params),
+        )
+        if ota_response is not None:
+            route_name, response_payload = ota_response
+        elif schedule_jobs.match_update(clean_path, request.method):
             route_name = "update_schedule"
             response_payload = await schedule_jobs.build_update_synced(
                 self.context, query_params, body_params, clean_path, self.schedule_sync,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from textwrap import dedent
 from typing import Any
@@ -9,6 +10,9 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from . import firmware_versions
+from .firmware_catalog import SOURCE_PROBE
+from .ota_dry_run import package_address, package_headers, package_md5
 from .security import verify_password
 
 
@@ -497,6 +501,102 @@ def register_standalone_admin_routes(
     async def admin_cloud_plugins(request: Request) -> JSONResponse:
         supervisor._require_admin(request)
         return JSONResponse({"success": True, **supervisor.cloud_manager.plugin_catalogs()})
+
+    @app.get("/admin/api/cloud/firmware")
+    async def admin_cloud_firmware(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            devices = await supervisor.cloud_manager.firmware_status()
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"success": False, "step": "firmware_status_failed", "error": str(exc)}, status_code=400)
+        for row in devices:
+            supervisor.ota_installer.learn_offers(row.get("update"), str(row.get("duid") or ""))
+        return JSONResponse({"success": True, "devices": devices})
+
+    @app.get("/admin/api/firmware/catalog")
+    async def admin_firmware_catalog(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        model = str(request.query_params.get("model") or "").strip()
+        return JSONResponse({"success": True, "models": supervisor.ota_installer.catalog.models(model)})
+
+    @app.get("/admin/api/firmware/{duid}/versions")
+    async def admin_firmware_versions(duid: str, request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        installer = supervisor.ota_installer
+        return JSONResponse({
+            "success": True, "duid": duid, "model": installer.model_of(duid),
+            "lastInstall": installer.catalog.robot(duid), **installer.version_info(duid),
+        })
+
+    @app.post("/admin/api/firmware/{duid}/install-version")
+    async def admin_firmware_install_version(duid: str, request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            body = {}
+        version = str((body or {}).get("version") or "").strip() if isinstance(body, dict) else ""
+        confirmed = isinstance(body, dict) and body.get("confirm_downgrade") is True
+        started = await supervisor.ota_installer.start_version(duid, version, confirmed, version)
+        return JSONResponse({"success": started["started"], **started}, status_code=200 if started["started"] else 409)
+
+    @app.post("/admin/api/firmware/{duid}/learn-versions")
+    async def admin_firmware_learn_versions(duid: str, request: Request) -> JSONResponse:
+        """Adds listed versions to the catalog when the cloud itself gives a package address for them; installs nothing."""
+        supervisor._require_admin(request)
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            body = {}
+        versions = (body or {}).get("versions")
+        if not isinstance(versions, list) or not 0 < len(versions) <= 100:
+            return JSONResponse({"error": "versions must be a list of 1 to 100"}, status_code=400)
+        installer = supervisor.ota_installer
+        model = installer.model_of(duid)
+        if not model:
+            return JSONResponse({"success": False, "error": f"Unknown device {duid!r}"}, status_code=404)
+        learned: list[str] = []
+        for version in (str(v).strip() for v in versions):
+            if firmware_versions.parse(version) is None:
+                continue
+            try:
+                url = await package_address(supervisor.cloud_manager, duid, version)
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse({"success": False, "stoppedAt": version, "error": str(exc), "learned": learned}, status_code=502)
+            if not url:
+                await asyncio.sleep(0.2)
+                continue
+            known = installer.catalog.entry(model, version) or {}
+            released, size = ("", None) if known.get("released") and known.get("size") else await package_headers(url)
+            if installer.catalog.add(model, version, source=SOURCE_PROBE, url=url, md5=package_md5(url), size=size, released=released):
+                learned.append(version)
+            await asyncio.sleep(0.2)
+        return JSONResponse({"success": True, "model": model, "checked": len(versions), "learned": learned})
+
+    @app.post("/admin/api/firmware/{duid}/scan-versions")
+    async def admin_firmware_scan_versions(duid: str, request: Request) -> JSONResponse:
+        """Starts a background scan that asks the cloud for released versions below the current one; installs nothing."""
+        supervisor._require_admin(request)
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            body = {}
+        raw = body.get("max_empty_minors", 8) if isinstance(body, dict) else 8
+        if isinstance(raw, bool) or not isinstance(raw, int) or not 1 <= raw <= 30:
+            return JSONResponse({"success": False, "error": "max_empty_minors must be an integer from 1 to 30"}, status_code=400)
+        status, payload = await supervisor.ota_installer.start_scan(duid, raw)
+        return JSONResponse(payload, status_code=status)
+
+    @app.get("/admin/api/firmware/scan")
+    async def admin_firmware_scan_state(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        return JSONResponse({"success": True, "scan": supervisor.ota_installer.scan.state()})
+
+    @app.post("/admin/api/firmware/scan/cancel")
+    async def admin_firmware_scan_cancel(request: Request) -> JSONResponse:
+        supervisor._require_admin(request)
+        cancelled = supervisor.ota_installer.scan.cancel()
+        return JSONResponse({"success": True, "cancelled": cancelled, "scan": supervisor.ota_installer.scan.state()})
 
     @app.post("/admin/api/cloud/refresh-plugins")
     async def admin_cloud_refresh_plugins(request: Request) -> JSONResponse:

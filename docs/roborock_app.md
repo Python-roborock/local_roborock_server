@@ -184,6 +184,10 @@ The refresh reuses the login stored by the email-code sign-in and only replaces 
 
 If the cloud rejects the stored login, or the snapshot predates this feature and has none, sign in again with the email code; that stores a login the refresh can use.
 
+## Firmware Status for Every Robot
+
+`GET /admin/api/cloud/firmware` (signed in as admin, for example in a browser tab) asks the cloud about each robot on the account, including ones that are not paired to this server, and lists its model, the firmware the cloud last saw, and the available update. It uses the same stored login.
+
 ---
 
 ## LocalRock (Third-Party App)
